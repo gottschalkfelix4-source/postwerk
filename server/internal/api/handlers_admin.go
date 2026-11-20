@@ -209,8 +209,10 @@ func (s *Server) dnsRecords(d *store.Domain) ([]dnsRecord, error) {
 			Purpose: "Optional: Mailprogramme finden die Versand-Einstellungen von selbst.", Priority: ip(0), Weight: ip(1), Port: ip(465), Target: sptr(host), Service: sptr("submissions"), Protocol: sptr("tcp")},
 		{Key: "srv-submission", Type: "SRV", Name: "_submission._tcp." + n + ".", Value: "0 1 587 " + host + ".", Title: "Automatische Einrichtung: Versand (Port 587)",
 			Purpose: "Optional: wie oben, für Port 587.", Priority: ip(0), Weight: ip(1), Port: ip(587), Target: sptr(host), Service: sptr("submission"), Protocol: sptr("tcp")},
+		{Key: "srv-imaps", Type: "SRV", Name: "_imaps._tcp." + n + ".", Value: "0 1 993 " + host + ".", Title: "Automatische Einrichtung: Abruf (IMAP)",
+			Purpose: "Optional: Mailprogramme finden die IMAP-Einstellungen von selbst.", Priority: ip(0), Weight: ip(1), Port: ip(993), Target: sptr(host), Service: sptr("imaps"), Protocol: sptr("tcp")},
 		{Key: "srv-pop3s", Type: "SRV", Name: "_pop3s._tcp." + n + ".", Value: "0 1 995 " + host + ".", Title: "Automatische Einrichtung: Abruf (POP3)",
-			Purpose: "Optional: Mailprogramme finden die Abruf-Einstellungen von selbst.", Priority: ip(0), Weight: ip(1), Port: ip(995), Target: sptr(host), Service: sptr("pop3s"), Protocol: sptr("tcp")},
+			Purpose: "Optional: wie oben, für POP3.", Priority: ip(0), Weight: ip(1), Port: ip(995), Target: sptr(host), Service: sptr("pop3s"), Protocol: sptr("tcp")},
 		{Key: "autoconfig", Type: "CNAME", Name: "autoconfig." + n + ".", Value: host + ".", Title: "Automatische Einrichtung: Thunderbird",
 			Purpose: "Optional: Thunderbird richtet Konten damit selbst ein."},
 	}

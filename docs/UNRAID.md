@@ -69,6 +69,7 @@ Die Ports sind schon passend vorbelegt:
 | SMTP eingehend | 25 | 2525 |
 | Versand STARTTLS | 587 | 5870 |
 | Versand TLS | 465 | 4650 |
+| IMAP / IMAPS | 143 / 993 | 1430 / 9930 |
 | POP3 / POP3S | 110 / 995 | 1100 / 9950 |
 
 Unraid selbst belegt 80 und 443, deshalb läuft die Weboberfläche auf 8880/8843.
@@ -106,7 +107,8 @@ Leite im Router diese Ports aus dem Internet an die IP deines Unraid-Servers wei
 |---|---|---|
 | 25 | 25 | Mails von anderen Servern empfangen (Pflicht) |
 | 465 und 587 | 465 und 587 | Versand mit Mailprogrammen unterwegs |
-| 995 | 995 | Abruf unterwegs |
+| 993 | 993 | Abruf per IMAP unterwegs (Handy, Outlook, Thunderbird) |
+| 995 | 995 | Abruf per POP3 (optional) |
 | 80 | 8880 | Let's-Encrypt-Prüfung, nur ohne Reverse-Proxy (mit Proxy zeigen 80/443 auf den Proxy, siehe 4a) |
 
 Die Weboberfläche solltest du **nicht** direkt ins Internet stellen, sondern über VPN (z. B. WireGuard
@@ -147,7 +149,7 @@ zusammen; der Setup-Assistent hat dafür den Schritt **Reverse-Proxy**:
 > oft nur für root lesbar. Zeigt die Zertifikatsauswahl „Zugriff verweigert“, im Postwerk-Template unter
 > „Erweiterte Ansicht“ **PUID auf 0** setzen.
 
-> **Die Mail-Ports laufen nie über den Proxy.** 25, 465, 587 und 995 werden im Router direkt an Postwerk
+> **Die Mail-Ports laufen nie über den Proxy.** 25, 465, 587, 993 und 995 werden im Router direkt an Postwerk
 > weitergeleitet (Schritt 4). Nur die Weboberfläche läuft über den Proxy.
 
 ## 4b. Dynamische IP-Adresse (DSL/Kabel zu Hause)
@@ -280,10 +282,11 @@ kopieren und im Template unter **Erweiterte Ansicht** zwei Variablen ergänzen:
 
 | | Server | Port | Sicherheit |
 |---|---|---|---|
-| Eingang (POP3) | `mail.deinedomain.de` | 995 | SSL/TLS |
+| Eingang (IMAP) | `mail.deinedomain.de` | 993 | SSL/TLS |
 | Ausgang (SMTP) | `mail.deinedomain.de` | 465 | SSL/TLS |
 
-Benutzername ist die volle E-Mail-Adresse. IMAP folgt in einer späteren Version (siehe Roadmap).
+Benutzername ist die volle E-Mail-Adresse. POP3 (Port 995) geht weiterhin, gleicht aber keine Ordner
+und keinen Gelesen-Status ab.
 
 ---
 

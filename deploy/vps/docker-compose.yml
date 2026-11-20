@@ -43,6 +43,8 @@ services:
       - "25:2525"     # SMTP eingehend (andere Mailserver)
       - "465:4650"    # Versand für Mailprogramme (TLS)
       - "587:5870"    # Versand für Mailprogramme (STARTTLS)
+      - "993:9930"    # IMAP mit TLS (Handy, Outlook, Thunderbird)
+      - "143:1430"    # IMAP mit STARTTLS (optional, kann entfernt werden)
       - "995:9950"    # POP3S Abruf
       - "110:1100"    # POP3 mit STARTTLS (optional, kann entfernt werden)
       - "80:8080"     # Let's-Encrypt-Prüfung (schließt sich nach dem Zertifikat, siehe Setup-Assistent → TLS)

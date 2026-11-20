@@ -3,7 +3,7 @@
 Ein selbst gehosteter Mailserver in einem einzigen Go-Binary – mit eigener Weboberfläche für
 Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 
-- **Protokolle:** SMTP, Submission (587/465), POP3, Weboberfläche + REST-API
+- **Protokolle:** SMTP, Submission (587/465), IMAP mit IDLE (993/143), POP3, Weboberfläche + REST-API
 - **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM/DMARC, Spamfilter mit Bayes, DNSBL und Greylisting,
   ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre
 - **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung und automatischem Eintragen der
@@ -51,7 +51,7 @@ Ohne Compose:
 ```bash
 docker run -d --name postwerk --restart unless-stopped \
   -e POSTWERK_HOSTNAME=mail.example.com -e POSTWERK_ADMIN_EMAIL=admin@example.com \
-  -p 25:2525 -p 587:5870 -p 465:4650 -p 995:9950 -p 80:8080 -p 443:8443 \
+  -p 25:2525 -p 587:5870 -p 465:4650 -p 993:9930 -p 995:9950 -p 80:8080 -p 443:8443 \
   -v postwerk-data:/data ghcr.io/gottschalkfelix4-source/postwerk:latest
 ```
 
@@ -72,6 +72,7 @@ In der Oberfläche dann unter **Einstellungen → Virenscan** ClamAV aktivieren 
 | 25 | 2525 | SMTP eingehend |
 | 587 | 5870 | Versand mit STARTTLS |
 | 465 | 4650 | Versand mit TLS |
+| 143 / 993 | 1430 / 9930 | IMAP / IMAPS |
 | 110 / 995 | 1100 / 9950 | POP3 / POP3S |
 | 80 / 443 | 8080 / 8443 | Weboberfläche, ACME (über `HTTP_PORT`/`HTTPS_PORT` in `.env` änderbar) |
 
@@ -88,7 +89,7 @@ Hostnamen und einen passenden Reverse-DNS-Eintrag (PTR) beim Provider.
 
 Hinter Nginx Proxy Manager, Traefik, Caddy oder SWAG führt der Setup-Assistent (Schritt
 „Reverse-Proxy“) durch die Einrichtung und liefert fertige Konfigurationen. Postwerk übernimmt dann
-das Zertifikat des Proxys für SMTP/POP3 (Ordner schreibgeschützt nach `/certs` einbinden) und lädt
+das Zertifikat des Proxys für SMTP/IMAP/POP3 (Ordner schreibgeschützt nach `/certs` einbinden) und lädt
 es bei Erneuerung automatisch neu. Die Mail-Ports laufen nicht über den Proxy.
 
 ### Let’s Encrypt
@@ -122,7 +123,7 @@ Voraussetzungen: Go ≥ 1.26, Node.js ≥ 20.
 # Oberfläche bauen (landet in server/internal/webui/dist und wird ins Binary eingebettet)
 cd web && npm install && npm run build && cd ..
 
-# Server starten (Standard-Ports für Entwicklung: HTTP 8080, SMTP 2525, Submission 5870, POP3 1110)
+# Server starten (Standard-Ports für Entwicklung: HTTP 8080, SMTP 2525, Submission 5870, IMAP 1143, POP3 1110)
 cd server
 POSTWERK_ALLOW_INSECURE_AUTH=true POSTWERK_ADMIN_EMAIL=admin@example.test POSTWERK_ADMIN_PASSWORD=admin-passwort go run ./cmd/postwerk
 ```
@@ -137,6 +138,7 @@ Tests: `cd server && go test ./...`
 server/
   cmd/postwerk/        Einstiegspunkt, verdrahtet alle Dienste
   internal/smtp/       SMTP-Server (eingehend + Submission)
+  internal/imapd/      IMAP-Server (IMAP4rev1/rev2, IDLE, MOVE, UIDPLUS, SPECIAL-USE)
   internal/pop3/       POP3-Server
   internal/delivery/   Mailfluss: Prüfungen, Filter, Zustellung, Versand, Abwesenheitsnotiz
   internal/queue/      Ausgehende Warteschlange, MX-Zustellung, Bounces
@@ -162,6 +164,7 @@ web/                   React-Oberfläche (Verwaltung + Webmail)
 | `POSTWERK_HTTP_ADDR` / `POSTWERK_HTTPS_ADDR` | `:8080` / – | Weboberfläche |
 | `POSTWERK_SMTP_ADDR` | `:2525` | SMTP eingehend |
 | `POSTWERK_SUBMISSION_ADDR` / `POSTWERK_SUBMISSIONS_ADDR` | `:5870` / – | Versand |
+| `POSTWERK_IMAP_ADDR` / `POSTWERK_IMAPS_ADDR` | `:1143` / – | IMAP (STARTTLS) / IMAPS |
 | `POSTWERK_POP3_ADDR` / `POSTWERK_POP3S_ADDR` | `:1110` / – | POP3 |
 | `POSTWERK_ADMIN_EMAIL` / `POSTWERK_ADMIN_PASSWORD` | – | Erstes Admin-Konto |
 | `POSTWERK_TLS_CERT` / `POSTWERK_TLS_KEY` | – | Eigenes Zertifikat (überschreibt die Einstellung) |

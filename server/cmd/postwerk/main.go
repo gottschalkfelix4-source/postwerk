@@ -1,4 +1,4 @@
-// Command postwerk runs the Postwerk mail server: SMTP, submission, POP3,
+// Command postwerk runs the Postwerk mail server: SMTP, submission, IMAP, POP3,
 // the HTTP API with the web interface, the outbound queue and AI workers.
 package main
 
@@ -29,6 +29,7 @@ import (
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
 	"postwerk/internal/migrate"
+	"postwerk/internal/imapd"
 	"postwerk/internal/pop3"
 	"postwerk/internal/queue"
 	"postwerk/internal/smtp"
@@ -143,6 +144,18 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	}
 	popAuth := func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
 		return authn.Protocol(ctx, ip, user, pass, "pop3")
+	}
+	imapAuth := func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
+		return authn.Protocol(ctx, ip, user, pass, "imap")
+	}
+	imapLog := log.With("component", "imap")
+	if cfg.IMAPAddr != "" {
+		srv := &imapd.Server{Addr: cfg.IMAPAddr, TLSConfig: tlsConfig, Store: st, Delivery: svc, Auth: imapAuth, Banned: guard.Banned, MaxSize: maxSize, Log: imapLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		listeners = append(listeners, srv.ListenAndServe)
+	}
+	if cfg.IMAPSAddr != "" {
+		srv := &imapd.Server{Addr: cfg.IMAPSAddr, ImplicitTLS: true, TLSConfig: tlsConfig, Store: st, Delivery: svc, Auth: imapAuth, Banned: guard.Banned, MaxSize: maxSize, Log: imapLog}
+		listeners = append(listeners, srv.ListenAndServe)
 	}
 	pop3Log := log.With("component", "pop3")
 	if cfg.POP3Addr != "" {

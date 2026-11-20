@@ -19,6 +19,8 @@ type Config struct {
 	SMTPAddr        string // inbound MTA (25)
 	SubmissionAddr  string // submission with STARTTLS (587)
 	SubmissionsAddr string // submission with implicit TLS (465)
+	IMAPAddr        string // 143
+	IMAPSAddr       string // 993
 	POP3Addr        string // 110
 	POP3SAddr       string // 995
 
@@ -60,6 +62,8 @@ func Load() *Config {
 		SMTPAddr:          env("POSTWERK_SMTP_ADDR", ":2525"),
 		SubmissionAddr:    env("POSTWERK_SUBMISSION_ADDR", ":5870"),
 		SubmissionsAddr:   env("POSTWERK_SUBMISSIONS_ADDR", ""),
+		IMAPAddr:          env("POSTWERK_IMAP_ADDR", ":1143"),
+		IMAPSAddr:         env("POSTWERK_IMAPS_ADDR", ""),
 		POP3Addr:          env("POSTWERK_POP3_ADDR", ":1110"),
 		POP3SAddr:         env("POSTWERK_POP3S_ADDR", ""),
 		TLSCertFile:       env("POSTWERK_TLS_CERT", ""),

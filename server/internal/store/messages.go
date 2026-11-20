@@ -230,7 +230,7 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 	if m.Priority == "" {
 		m.Priority = "normal"
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
+	if err := s.tx(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `UPDATE mailboxes SET uid_next = uid_next + 1 WHERE id = ? RETURNING uid_next - 1`, m.MailboxID).Scan(&m.UID); err != nil {
 			return err
 		}
@@ -264,7 +264,11 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 			_, err = tx.ExecContext(ctx, `UPDATE messages SET thread_id = ? WHERE id = ?`, m.ID, m.ID)
 		}
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	s.notify(m.AccountID)
+	return nil
 }
 
 func (s *Store) GetMessage(ctx context.Context, accountID, id int64) (*Message, error) {
@@ -415,7 +419,7 @@ func (s *Store) UpdateMessage(ctx context.Context, accountID, id int64, p Messag
 	if len(sets) == 0 {
 		return nil
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
+	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE messages SET `+strings.Join(sets, ", ")+` WHERE id = ? AND account_id = ?`, append(args, id, accountID)...)
 		if err != nil {
 			return err
@@ -428,6 +432,10 @@ func (s *Store) UpdateMessage(ctx context.Context, accountID, id int64, p Messag
 		}
 		return err
 	})
+	if err == nil {
+		s.notify(accountID)
+	}
+	return err
 }
 
 type AIResult struct {
@@ -494,6 +502,7 @@ func (s *Store) DeleteMessage(ctx context.Context, accountID, id int64) error {
 		return err
 	}
 	s.releaseBlob(ctx, m.BlobHash)
+	s.notify(accountID)
 	return nil
 }
 

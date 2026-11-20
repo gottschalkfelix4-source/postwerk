@@ -418,7 +418,7 @@ export function SecureCookiesRow({ checked, onChange }: { checked: boolean; onCh
 /** Mail ports never go through the web proxy. */
 export function MailPortsNotice() {
   return (
-    <Notice tone="warning" icon={MailWarning} title="Die Mail-Ports 25, 465, 587 und 995 gehen nicht über den Proxy">
+    <Notice tone="warning" icon={MailWarning} title="Die Mail-Ports 25, 465, 587, 993 und 995 gehen nicht über den Proxy">
       Nur die Weboberfläche läuft über den Reverse-Proxy. Leite die Mail-Ports im Router bzw. in Unraid direkt an Postwerk weiter (TCP) –
       Mail-Programme und andere Mailserver verbinden sich ohne Umweg mit Postwerk.
     </Notice>

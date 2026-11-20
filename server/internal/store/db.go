@@ -21,6 +21,8 @@ var ErrConflict = errors.New("conflict")
 type Store struct {
 	DB    *sql.DB
 	Blobs *BlobStore
+
+	changes changeHub
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -245,6 +247,11 @@ var migrations = []string{
 		started_at INTEGER,
 		finished_at INTEGER
 	);`,
+	// IMAP: \Deleted flag, custom keywords, subscriptions, UID lookups.
+	`ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE messages ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]';
+	ALTER TABLE mailboxes ADD COLUMN subscribed INTEGER NOT NULL DEFAULT 1;
+	CREATE INDEX messages_mailbox_uid ON messages(mailbox_id, uid);`,
 }
 
 func migrate(db *sql.DB) error {

@@ -86,6 +86,7 @@ func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string, op
 		Desired{Key: "tlsrpt", Record: Record{Name: "_smtp._tls." + domain, Type: "TXT", Value: "v=TLSRPTv1; rua=mailto:postmaster@" + domain}, Purpose: "TLS-Berichte", Match: "v=TLSRPTv1", CreateOnly: true},
 		Desired{Key: "srv-submissions", Record: Record{Name: "_submissions._tcp." + domain, Type: "SRV", Value: "1 465 " + hostDot}, Purpose: "Autokonfiguration: Versand (TLS)"},
 		Desired{Key: "srv-submission", Record: Record{Name: "_submission._tcp." + domain, Type: "SRV", Value: "1 587 " + hostDot}, Purpose: "Autokonfiguration: Versand (STARTTLS)"},
+		Desired{Key: "srv-imaps", Record: Record{Name: "_imaps._tcp." + domain, Type: "SRV", Value: "1 993 " + hostDot}, Purpose: "Autokonfiguration: IMAP (TLS)"},
 		Desired{Key: "srv-pop3s", Record: Record{Name: "_pop3s._tcp." + domain, Type: "SRV", Value: "1 995 " + hostDot}, Purpose: "Autokonfiguration: POP3 (TLS)"},
 		Desired{Key: "autoconfig", Record: Record{Name: "autoconfig." + domain, Type: "CNAME", Value: hostDot}, Purpose: "Thunderbird-Autokonfiguration"},
 	)

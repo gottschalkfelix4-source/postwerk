@@ -45,7 +45,7 @@ nano docker-compose.yml
 **4. Firewall öffnen** (Beispiel für `ufw`; bei Cloud-Anbietern zusätzlich die Firewall im Kundenmenü):
 
 ```bash
-ufw allow 25,80,443,465,587,995/tcp
+ufw allow 25,80,443,465,587,993,995/tcp
 ```
 
 **5. Starten:**
@@ -116,6 +116,27 @@ nicht beim DNS-Anbieter der Domain:
 | Contabo | Kundenpanel → Reverse DNS |
 
 Der Setup-Assistent zeigt im System-Check an, ob der Eintrag passt.
+
+## Handy und Mailprogramm einrichten
+
+iPhone, Android, Outlook und Thunderbird verbinden sich per **IMAP**. Ordner, Gelesen-Status und
+Gesendete Mails bleiben dabei mit dem Webmail abgeglichen, neue Mails kommen per IDLE sofort an.
+
+| | Server | Port | Sicherheit |
+|---|---|---|---|
+| Eingang (IMAP) | `mail.deinedomain.de` | 993 | SSL/TLS |
+| Ausgang (SMTP) | `mail.deinedomain.de` | 465 | SSL/TLS (alternativ 587 mit STARTTLS) |
+
+Benutzername ist die volle E-Mail-Adresse. Mit aktivierter Zwei-Faktor-Anmeldung brauchst du ein
+**App-Passwort** (Webmail → Einstellungen). Die Ordner Entwürfe, Gesendet, Spam, Papierkorb und Archiv
+werden automatisch zugeordnet.
+
+**iPhone/iPad:** Einstellungen → Apps → Mail → Mail-Accounts → Account hinzufügen → Andere →
+Mail-Account hinzufügen. Nach dem Klick auf „Weiter“ **IMAP** wählen und bei beiden Servern
+`mail.deinedomain.de` eintragen.
+
+Port 993 muss in der Firewall offen sein (Schritt 4) und in der `docker-compose.yml` stehen. Ältere
+Compose-Dateien ohne die Zeile `"993:9930"` ergänzen und `docker compose up -d` ausführen.
 
 ## Betrieb
 

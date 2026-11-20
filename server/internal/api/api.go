@@ -500,6 +500,13 @@ func (s *Server) autoconfig(w http.ResponseWriter, r *http.Request) {
     <domain>%[1]s</domain>
     <displayName>%[1]s (Postwerk)</displayName>
     <displayShortName>%[1]s</displayShortName>
+    <incomingServer type="imap">
+      <hostname>%[2]s</hostname>
+      <port>993</port>
+      <socketType>SSL</socketType>
+      <username>%%EMAILADDRESS%%</username>
+      <authentication>password-cleartext</authentication>
+    </incomingServer>
     <incomingServer type="pop3">
       <hostname>%[2]s</hostname>
       <port>995</port>

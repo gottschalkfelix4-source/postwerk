@@ -10,6 +10,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 |---|---|---|
 | Protokolle | SMTP eingehend (Port 25) mit STARTTLS, PIPELINING, SIZE, 8BITMIME | ✅ |
 | | Submission 587 (STARTTLS) und 465 (TLS) mit AUTH PLAIN/LOGIN | ✅ |
+| | IMAP4rev1/rev2 mit IDLE, MOVE, UIDPLUS, SPECIAL-USE, LIST-STATUS, ESEARCH | ✅ |
 | | POP3 / POP3S mit STLS, UIDL, TOP | ✅ |
 | | Ausgehende Warteschlange: MX-Auflösung, Wiederholungen, Bounces, optionaler Smarthost | ✅ |
 | TLS | Let’s Encrypt über ACME (HTTP-01/TLS-ALPN-01), eigene Zertifikate, selbstsigniert als Fallback | ✅ |
@@ -20,7 +21,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | Bayes-Filter mit Auto-Learn und Training über „Spam / kein Spam“ | ✅ |
 | | DNSBL, Greylisting | ✅ |
 | | Virenscan über ClamAV (INSTREAM) mit Ablehnen oder Quarantäne | ✅ |
-| Sicherheit | 2FA (TOTP), App-Passwörter, Brute-Force-Sperre für Web, SMTP und POP3 | ✅ |
+| Sicherheit | 2FA (TOTP), App-Passwörter, Brute-Force-Sperre für Web, SMTP, IMAP und POP3 | ✅ |
 | Betrieb | Web-Verwaltung, REST-API, Live-Logs, Prometheus-Metriken, Dashboard | ✅ |
 | | Backup-Befehl (konsistenter Snapshot im laufenden Betrieb), Notfall-Passwort-Reset | ✅ |
 | | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus „testing“) | ✅ |
@@ -43,7 +44,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 ## Meilenstein 2 – Clients und Filterregeln
 
-- ⏳ IMAP4rev2 (RFC 9051) inkl. IDLE, CONDSTORE, MOVE – damit Thunderbird, Apple Mail, K-9 vollständig funktionieren
+- ⏳ IMAP CONDSTORE/QRESYNC für schnelleren Abgleich großer Postfächer
 - ⏳ Sieve (RFC 5228) mit ManageSieve, Regel-Editor im Webmail; Abwesenheitsnotiz wandert auf Sieve `vacation`
 - ⏳ JMAP Core + Mail (RFC 8620/8621) als moderne API, Webmail auf JMAP umstellen
 - ⏳ Autoconfig/Autodiscover-Endpunkte für Mailclients

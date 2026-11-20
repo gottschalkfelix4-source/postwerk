@@ -98,6 +98,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		},
 	}
 	tlsConfig := tp.Config()
+	smtpTLS, imapTLS, pop3TLS := tp.MailConfig("smtp"), tp.MailConfig("imap"), tp.MailConfig("pop3")
 	log.Info("tls ready", "component", "tls", "status", tp.Status())
 
 	guard := auth.NewGuard(func() auth.Limits {
@@ -131,15 +132,15 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	smtpLog := log.With("component", "smtp")
 	listeners := []func(context.Context) error{}
 	if cfg.SMTPAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SMTPAddr, Mode: smtp.ModeInbound, TLSConfig: tlsConfig, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
+		srv := &smtp.Server{Addr: cfg.SMTPAddr, Mode: smtp.ModeInbound, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.SubmissionAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SubmissionAddr, Mode: smtp.ModeSubmission, TLSConfig: tlsConfig, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		srv := &smtp.Server{Addr: cfg.SubmissionAddr, Mode: smtp.ModeSubmission, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.SubmissionsAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SubmissionsAddr, Mode: smtp.ModeSubmission, ImplicitTLS: true, TLSConfig: tlsConfig, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
+		srv := &smtp.Server{Addr: cfg.SubmissionsAddr, Mode: smtp.ModeSubmission, ImplicitTLS: true, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	popAuth := func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
@@ -150,20 +151,20 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	}
 	imapLog := log.With("component", "imap")
 	if cfg.IMAPAddr != "" {
-		srv := &imapd.Server{Addr: cfg.IMAPAddr, TLSConfig: tlsConfig, Store: st, Delivery: svc, Auth: imapAuth, Banned: guard.Banned, MaxSize: maxSize, Log: imapLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		srv := &imapd.Server{Addr: cfg.IMAPAddr, TLSConfig: imapTLS, Store: st, Delivery: svc, Auth: imapAuth, Banned: guard.Banned, MaxSize: maxSize, Log: imapLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.IMAPSAddr != "" {
-		srv := &imapd.Server{Addr: cfg.IMAPSAddr, ImplicitTLS: true, TLSConfig: tlsConfig, Store: st, Delivery: svc, Auth: imapAuth, Banned: guard.Banned, MaxSize: maxSize, Log: imapLog}
+		srv := &imapd.Server{Addr: cfg.IMAPSAddr, ImplicitTLS: true, TLSConfig: imapTLS, Store: st, Delivery: svc, Auth: imapAuth, Banned: guard.Banned, MaxSize: maxSize, Log: imapLog}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	pop3Log := log.With("component", "pop3")
 	if cfg.POP3Addr != "" {
-		srv := &pop3.Server{Addr: cfg.POP3Addr, TLSConfig: tlsConfig, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		srv := &pop3.Server{Addr: cfg.POP3Addr, TLSConfig: pop3TLS, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log, AllowInsecureAuth: cfg.AllowInsecureAuth}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.POP3SAddr != "" {
-		srv := &pop3.Server{Addr: cfg.POP3SAddr, ImplicitTLS: true, TLSConfig: tlsConfig, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log}
+		srv := &pop3.Server{Addr: cfg.POP3SAddr, ImplicitTLS: true, TLSConfig: pop3TLS, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 

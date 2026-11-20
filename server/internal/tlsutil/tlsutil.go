@@ -56,6 +56,16 @@ func (d *Dynamic) Config() *tls.Config {
 	}
 }
 
+// MailConfig returns a tls.Config for a mail listener. Clients such as
+// Apple Mail offer the protocol name via ALPN ("imap", "pop3", "smtp"); if
+// the server announces only HTTP protocols, Go aborts the handshake with
+// "no application protocol", so each mail listener announces its own name.
+func (d *Dynamic) MailConfig(protos ...string) *tls.Config {
+	c := d.Config()
+	c.NextProtos = protos
+	return c
+}
+
 func (d *Dynamic) mode() (string, store.TLSSettings) {
 	s := d.Settings()
 	if d.EnvCert != "" && d.EnvKey != "" {

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,5 +123,33 @@ func TestDynamicFilesReloadAndFallback(t *testing.T) {
 	settings.Mode = "selfsigned"
 	if _, err := d.GetCertificate(&tls.ClientHelloInfo{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Apple Mail offers ALPN "imap" (or "smtp", "pop3"); the handshake must not
+// fail just because the server otherwise speaks HTTP protocols.
+func TestMailConfigAcceptsProtocolALPN(t *testing.T) {
+	d := &Dynamic{DataDir: t.TempDir(), Settings: func() store.TLSSettings { return store.TLSSettings{Mode: "selfsigned"} }, Hostname: func() string { return "mail.example.com" }}
+	handshake := func(server *tls.Config, offer string) (string, error) {
+		a, b := net.Pipe()
+		defer a.Close()
+		defer b.Close()
+		srvErr := make(chan error, 1)
+		go func() { srvErr <- tls.Server(a, server).Handshake() }()
+		c := tls.Client(b, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{offer}})
+		err := c.Handshake()
+		if e := <-srvErr; err == nil {
+			err = e
+		}
+		return c.ConnectionState().NegotiatedProtocol, err
+	}
+	for _, p := range []string{"imap", "pop3", "smtp"} {
+		got, err := handshake(d.MailConfig(p), p)
+		if err != nil || got != p {
+			t.Errorf("%s: negotiated %q, err %v", p, got, err)
+		}
+	}
+	if _, err := handshake(d.Config(), "imap"); err == nil {
+		t.Error("HTTP config unexpectedly accepted ALPN imap")
 	}
 }

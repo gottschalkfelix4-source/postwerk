@@ -1,0 +1,10 @@
+.env
+data/
+server/data/
+server/postwerk
+server/postwerk.exe
+server/internal/webui/dist/*
+!server/internal/webui/dist/.gitkeep
+web/node_modules/
+web/dist/
+*.log

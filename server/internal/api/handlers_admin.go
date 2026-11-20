@@ -1,0 +1,532 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"postwerk/internal/auth"
+	"postwerk/internal/logx"
+	"postwerk/internal/mailauth"
+	"postwerk/internal/store"
+)
+
+// ---- dashboard ----
+
+func (s *Server) dashboard(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	ctx := r.Context()
+	received, hours := s.Store.StatSeries(ctx, "received", 24)
+	sent, _ := s.Store.StatSeries(ctx, "sent", 24)
+	spamS, _ := s.Store.StatSeries(ctx, "spam", 24)
+	virus, _ := s.Store.StatSeries(ctx, "virus", 24)
+	rejected, _ := s.Store.StatSeries(ctx, "rejected", 24)
+	nAcc, _ := s.Store.CountAccounts(ctx)
+	domains, _ := s.Store.ListDomains(ctx)
+	msgs, bytes := s.Store.TotalMessages(ctx)
+	cats, _ := s.Store.CategoryCounts(ctx, time.Now().AddDate(0, 0, -7))
+	hourLabels := make([]string, len(hours))
+	for i, h := range hours {
+		hourLabels[i] = h.Format(time.RFC3339)
+	}
+	cfg := s.Settings.Get().AI
+	reachable := false
+	if cfg.Enabled {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err := s.AI.Models(c)
+		cancel()
+		reachable = err == nil
+	}
+	events := s.Logs.Query("warn", "", 10)
+	if len(events) < 10 {
+		events = s.Logs.Query("info", "", 10)
+	}
+	return map[string]any{
+		"stats": map[string]any{
+			"accounts": nAcc, "domains": len(domains), "messages": msgs, "storageBytes": bytes, "queueSize": s.Store.QueueSize(ctx),
+			"received24h": store.Sum(received), "sent24h": store.Sum(sent), "spam24h": store.Sum(spamS),
+			"virus24h": store.Sum(virus), "rejected24h": store.Sum(rejected),
+		},
+		"series":        map[string]any{"hours": hourLabels, "received": received, "sent": sent, "spam": spamS},
+		"categories":    cats,
+		"recentEvents":  events,
+		"version":       s.Version,
+		"uptimeSeconds": int64(time.Since(s.Started).Seconds()),
+		"ai":            map[string]any{"enabled": cfg.Enabled, "reachable": reachable, "model": cfg.ChatModel},
+	}, nil
+}
+
+// ---- domains ----
+
+var reDomain = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
+var reLocal = regexp.MustCompile(`^[a-z0-9._%+\-]+$`)
+
+func validEmail(e string) bool {
+	local, dom, ok := strings.Cut(e, "@")
+	return ok && reLocal.MatchString(local) && (reDomain.MatchString(dom) || dom == "localhost")
+}
+
+func (s *Server) listDomains(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	d, err := s.Store.ListDomains(r.Context())
+	if d == nil {
+		d = []store.Domain{}
+	}
+	return d, err
+}
+
+func (s *Server) createDomain(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	var req struct{ Name string }
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	name := store.Normalize(req.Name)
+	if !reDomain.MatchString(name) && name != "localhost" {
+		return nil, invalid("Ungültiger Domainname")
+	}
+	key, err := mailauth.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+	selector := "pw" + time.Now().Format("200601")
+	if err := s.Store.CreateDomain(r.Context(), name, selector, key); err != nil {
+		return nil, err
+	}
+	s.Log.Info("domain created", "component", "admin", "domain", name, "by", u.Email)
+	return s.Store.GetDomain(r.Context(), name)
+}
+
+func (s *Server) patchDomain(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	name := r.PathValue("name")
+	var req struct {
+		CatchAll *string `json:"catchAll"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if req.CatchAll != nil && *req.CatchAll != "" {
+		c := store.Normalize(*req.CatchAll)
+		if !validEmail(c) {
+			return nil, invalid("Ungültige Catch-all-Adresse")
+		}
+		req.CatchAll = &c
+	}
+	if err := s.Store.SetCatchAll(r.Context(), name, req.CatchAll); err != nil {
+		return nil, err
+	}
+	return s.Store.GetDomain(r.Context(), name)
+}
+
+func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	d, err := s.Store.GetDomain(r.Context(), r.PathValue("name"))
+	if err != nil {
+		return nil, err
+	}
+	if d.AccountCount > 0 || d.AliasCount > 0 {
+		return nil, errf(409, "conflict", "Domain hat noch Konten oder Aliase")
+	}
+	return ok(), s.Store.DeleteDomain(r.Context(), d.Name)
+}
+
+type dnsRecord struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Value   string `json:"value"`
+	Purpose string `json:"purpose"`
+}
+
+func (s *Server) domainDNS(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	d, err := s.Store.GetDomain(r.Context(), r.PathValue("name"))
+	if err != nil {
+		return nil, err
+	}
+	host := s.Settings.Get().Server.Hostname
+	dkim, err := mailauth.DNSValue(d.DKIMPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	n := d.Name
+	return []dnsRecord{
+		{"A", host + ".", "<öffentliche IPv4 des Servers>", "Hostname des Mailservers (dazu passender PTR/Reverse-DNS beim Provider)"},
+		{"MX", n + ".", "10 " + host + ".", "Eingehende Mails für " + n + " an diesen Server leiten"},
+		{"TXT", n + ".", "v=spf1 mx -all", "SPF: nur die MX-Server dürfen für " + n + " senden"},
+		{"TXT", d.DKIMSelector + "._domainkey." + n + ".", dkim, "DKIM: öffentlicher Schlüssel für Signaturen"},
+		{"TXT", "_dmarc." + n + ".", "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n, "DMARC-Richtlinie"},
+		{"TXT", "_mta-sts." + n + ".", "v=STSv1; id=" + time.Now().Format("20060102"), "MTA-STS aktivieren (Policy unter mta-sts." + n + ")"},
+		{"CNAME", "mta-sts." + n + ".", host + ".", "MTA-STS-Policy über HTTPS bereitstellen"},
+		{"TXT", "_smtp._tls." + n + ".", "v=TLSRPTv1; rua=mailto:postmaster@" + n, "TLS-Berichte (TLS-RPT)"},
+		{"SRV", "_submissions._tcp." + n + ".", "0 1 465 " + host + ".", "Autokonfiguration: SMTP-Versand (TLS)"},
+		{"SRV", "_submission._tcp." + n + ".", "0 1 587 " + host + ".", "Autokonfiguration: SMTP-Versand (STARTTLS)"},
+		{"SRV", "_pop3s._tcp." + n + ".", "0 1 995 " + host + ".", "Autokonfiguration: POP3 (TLS)"},
+		{"CNAME", "autoconfig." + n + ".", host + ".", "Thunderbird-Autokonfiguration"},
+	}, nil
+}
+
+// ---- accounts ----
+
+func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	items, total, err := s.Store.ListAccounts(r.Context(), r.URL.Query().Get("q"), queryInt(r, "limit", 50, 200), queryInt(r, "offset", 0, 0))
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []*store.Account{}
+	}
+	return map[string]any{"total": total, "items": items}, nil
+}
+
+func (s *Server) createAccount(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	var req struct {
+		Email      string `json:"email"`
+		Name       string `json:"name"`
+		Password   string `json:"password"`
+		Role       string `json:"role"`
+		QuotaBytes int64  `json:"quotaBytes"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	email := store.Normalize(req.Email)
+	if !validEmail(email) {
+		return nil, invalid("Ungültige E-Mail-Adresse")
+	}
+	if ok, _ := s.Store.DomainExists(r.Context(), store.DomainOf(email)); !ok {
+		return nil, invalid("Domain " + store.DomainOf(email) + " ist nicht angelegt")
+	}
+	if _, err := s.Store.GetAlias(r.Context(), email); err == nil {
+		return nil, errf(409, "conflict", "Es gibt bereits einen Alias mit dieser Adresse")
+	}
+	if err := validPassword(req.Password); err != nil {
+		return nil, err
+	}
+	if req.Role != "admin" {
+		req.Role = "user"
+	}
+	h, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return nil, err
+	}
+	a := &store.Account{Email: email, Name: strings.TrimSpace(req.Name), PasswordHash: h, Role: req.Role, QuotaBytes: req.QuotaBytes}
+	if err := s.Store.CreateAccount(r.Context(), a); err != nil {
+		return nil, err
+	}
+	s.Log.Info("account created", "component", "admin", "account", email, "by", u.Email)
+	return s.Store.GetAccount(r.Context(), a.ID)
+}
+
+func (s *Server) getAccount(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	return s.Store.GetAccount(r.Context(), id)
+}
+
+func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		Name       *string `json:"name"`
+		Password   *string `json:"password"`
+		Role       *string `json:"role"`
+		QuotaBytes *int64  `json:"quotaBytes"`
+		Disabled   *bool   `json:"disabled"`
+		ResetTOTP  bool    `json:"resetTotp"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	p := store.AccountPatch{Name: req.Name, QuotaBytes: req.QuotaBytes, Disabled: req.Disabled}
+	if req.Role != nil {
+		if *req.Role != "admin" && *req.Role != "user" {
+			return nil, invalid("Ungültige Rolle")
+		}
+		if id == u.ID && *req.Role != "admin" {
+			return nil, invalid("Du kannst dir selbst die Admin-Rolle nicht entziehen")
+		}
+		p.Role = req.Role
+	}
+	if req.Disabled != nil && *req.Disabled && id == u.ID {
+		return nil, invalid("Du kannst dein eigenes Konto nicht deaktivieren")
+	}
+	if req.Password != nil && *req.Password != "" {
+		if err := validPassword(*req.Password); err != nil {
+			return nil, err
+		}
+		h, err := auth.HashPassword(*req.Password)
+		if err != nil {
+			return nil, err
+		}
+		p.PasswordHash = &h
+	}
+	if req.ResetTOTP {
+		f, empty := false, ""
+		p.TOTPEnabled, p.TOTPSecret = &f, &empty
+	}
+	if err := s.Store.UpdateAccount(r.Context(), id, p); err != nil {
+		return nil, err
+	}
+	if p.PasswordHash != nil || (req.Disabled != nil && *req.Disabled) {
+		_ = s.Store.DeleteAccountSessions(r.Context(), id)
+	}
+	return s.Store.GetAccount(r.Context(), id)
+}
+
+func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	if id == u.ID {
+		return nil, invalid("Du kannst dein eigenes Konto nicht löschen")
+	}
+	s.Log.Info("account deleted", "component", "admin", "id", fmt.Sprint(id), "by", u.Email)
+	return ok(), s.Store.DeleteAccount(r.Context(), id)
+}
+
+// ---- aliases ----
+
+func (s *Server) listAliases(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	return s.Store.ListAliases(r.Context())
+}
+
+func (s *Server) validTargets(targets []string) error {
+	if len(targets) == 0 {
+		return invalid("Mindestens ein Ziel angeben")
+	}
+	for _, t := range targets {
+		if !validEmail(store.Normalize(t)) {
+			return invalid("Ungültiges Ziel: " + t)
+		}
+	}
+	return nil
+}
+
+func (s *Server) createAlias(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	var req struct {
+		Address string   `json:"address"`
+		Targets []string `json:"targets"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	addr := store.Normalize(req.Address)
+	if !validEmail(addr) {
+		return nil, invalid("Ungültige Alias-Adresse")
+	}
+	if ok, _ := s.Store.DomainExists(r.Context(), store.DomainOf(addr)); !ok {
+		return nil, invalid("Domain " + store.DomainOf(addr) + " ist nicht angelegt")
+	}
+	if _, err := s.Store.GetAccountByEmail(r.Context(), addr); err == nil {
+		return nil, errf(409, "conflict", "Es gibt bereits ein Konto mit dieser Adresse")
+	}
+	if err := s.validTargets(req.Targets); err != nil {
+		return nil, err
+	}
+	return s.Store.CreateAlias(r.Context(), addr, req.Targets)
+}
+
+func (s *Server) patchAlias(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		Targets []string `json:"targets"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := s.validTargets(req.Targets); err != nil {
+		return nil, err
+	}
+	if err := s.Store.UpdateAlias(r.Context(), id, req.Targets); err != nil {
+		return nil, err
+	}
+	all, err := s.Store.ListAliases(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range all {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return nil, errNotFound
+}
+
+func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	return ok(), s.Store.DeleteAlias(r.Context(), id)
+}
+
+// ---- queue, logs, security ----
+
+func (s *Server) listQueue(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	return s.Store.ListQueue(r.Context())
+}
+
+func (s *Server) retryQueue(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.RetryQueueItem(r.Context(), id); err != nil {
+		return nil, err
+	}
+	if s.Delivery.Queue != nil {
+		s.Delivery.Queue.Notify()
+	}
+	return ok(), nil
+}
+
+func (s *Server) deleteQueue(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return nil, err
+	}
+	return ok(), s.Store.DeleteQueueItem(r.Context(), id)
+}
+
+func (s *Server) logs(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	q := r.URL.Query()
+	out := s.Logs.Query(q.Get("level"), q.Get("q"), queryInt(r, "limit", 200, 1000))
+	if out == nil {
+		out = []logx.Entry{}
+	}
+	return out, nil
+}
+
+func (s *Server) bans(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	return s.Auth.Guard.List(), nil
+}
+
+func (s *Server) unban(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	s.Auth.Guard.Unban(r.PathValue("ip"))
+	s.Log.Info("ip unbanned", "component", "security", "ip", r.PathValue("ip"), "by", u.Email)
+	return ok(), nil
+}
+
+// ---- settings ----
+
+const mask = "••••"
+
+func (s *Server) maskedSettings() store.Settings {
+	cur := s.Settings.Get()
+	if cur.AI.APIKey != "" {
+		cur.AI.APIKey = mask
+	}
+	if cur.DMS.Paperless.Token != "" {
+		cur.DMS.Paperless.Token = mask
+	}
+	cur.TLS.Status = s.TLSStatus
+	return cur
+}
+
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	return s.maskedSettings(), nil
+}
+
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	var patch map[string]json.RawMessage
+	if err := decode(r, &patch); err != nil {
+		return nil, err
+	}
+	cur := s.Settings.Get()
+	oldKey, oldToken, oldACME := cur.AI.APIKey, cur.DMS.Paperless.Token, cur.TLS.ACME
+	sections := map[string]any{
+		"server": &cur.Server, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
+		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security,
+	}
+	for k, raw := range patch {
+		target, known := sections[k]
+		if !known {
+			return nil, invalid("Unbekannter Abschnitt: " + k)
+		}
+		if err := json.Unmarshal(raw, target); err != nil {
+			return nil, invalid("Abschnitt " + k + ": " + err.Error())
+		}
+	}
+	if cur.AI.APIKey == mask {
+		cur.AI.APIKey = oldKey
+	}
+	if cur.DMS.Paperless.Token == mask {
+		cur.DMS.Paperless.Token = oldToken
+	}
+	cur.TLS.Status = ""
+	if err := validateSettings(&cur); err != nil {
+		return nil, err
+	}
+	if err := s.Settings.Save(r.Context(), cur); err != nil {
+		return nil, err
+	}
+	keys := []string{}
+	for k := range patch {
+		keys = append(keys, k)
+	}
+	s.Log.Info("settings updated", "component", "admin", "sections", strings.Join(keys, ","), "by", u.Email)
+	if fmt.Sprint(oldACME) != fmt.Sprint(cur.TLS.ACME) {
+		s.Log.Warn("ACME settings changed: restart required", "component", "tls")
+	}
+	if s.AIWorker != nil {
+		s.AIWorker.Notify()
+	}
+	return s.maskedSettings(), nil
+}
+
+func validateSettings(c *store.Settings) error {
+	c.Server.Hostname = strings.TrimSpace(strings.ToLower(c.Server.Hostname))
+	if c.Server.Hostname == "" {
+		return invalid("Hostname darf nicht leer sein")
+	}
+	if c.Server.MaxMessageSize < 1<<20 {
+		return invalid("Maximale Nachrichtengröße muss mindestens 1 MB sein")
+	}
+	if c.Spam.JunkThreshold <= 0 {
+		return invalid("Spam-Schwelle muss größer als 0 sein")
+	}
+	if c.Spam.RejectThreshold != 0 && c.Spam.RejectThreshold <= c.Spam.JunkThreshold {
+		return invalid("Ablehnungs-Schwelle muss größer als die Spam-Schwelle sein")
+	}
+	if c.Antivirus.Action != "reject" && c.Antivirus.Action != "quarantine" {
+		c.Antivirus.Action = "reject"
+	}
+	if c.Security.BruteForce.MaxAttempts < 1 {
+		c.Security.BruteForce.MaxAttempts = 5
+	}
+	if c.Security.BruteForce.WindowSeconds < 10 {
+		c.Security.BruteForce.WindowSeconds = 600
+	}
+	if c.Security.BruteForce.BanSeconds < 10 {
+		c.Security.BruteForce.BanSeconds = 3600
+	}
+	if c.AI.TimeoutSeconds <= 0 {
+		c.AI.TimeoutSeconds = 120
+	}
+	clean := []string{}
+	for _, cat := range c.AI.Categories {
+		if cat = strings.TrimSpace(cat); cat != "" {
+			clean = append(clean, cat)
+		}
+	}
+	c.AI.Categories = clean
+	return nil
+}
+
+func (s *Server) testAI(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	models, err := s.AI.TestConnection(ctx)
+	if err != nil {
+		return map[string]any{"ok": false, "latencyMs": time.Since(start).Milliseconds(), "models": []string{}, "error": err.Error()}, nil
+	}
+	return map[string]any{"ok": true, "latencyMs": time.Since(start).Milliseconds(), "models": models}, nil
+}

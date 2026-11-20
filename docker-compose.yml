@@ -1,0 +1,78 @@
+# Postwerk – selbst gehosteter Mailserver
+#
+#   docker compose pull && docker compose up -d   # fertiges Image von GHCR
+#   docker compose up -d --build              # selbst aus dem Quellcode bauen
+#   docker compose --profile clamav up -d     # + Virenscanner ClamAV
+#   docker compose --profile ai up -d         # + lokales LLM mit Ollama
+#   docker compose --profile clamav --profile ai up -d
+#
+# Konfiguration über .env (Vorlage: .env.example).
+
+services:
+  postwerk:
+    image: ghcr.io/gottschalkfelix4-source/postwerk:latest
+    build: .
+    container_name: postwerk
+    restart: unless-stopped
+    hostname: ${POSTWERK_HOSTNAME:-mail.example.com}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTWERK_HOSTNAME: ${POSTWERK_HOSTNAME:-mail.example.com}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:25:2525"     # SMTP (eingehend)
+      - "${BIND_IP:-0.0.0.0}:587:5870"    # Submission (STARTTLS)
+      - "${BIND_IP:-0.0.0.0}:465:4650"    # Submission (TLS)
+      - "${BIND_IP:-0.0.0.0}:110:1100"    # POP3 (STARTTLS)
+      - "${BIND_IP:-0.0.0.0}:995:9950"    # POP3 (TLS)
+      - "${BIND_IP:-0.0.0.0}:${HTTP_PORT:-80}:8080"     # HTTP: Weboberfläche + ACME HTTP-01
+      - "${BIND_IP:-0.0.0.0}:${HTTPS_PORT:-443}:8443"   # HTTPS: Weboberfläche
+    volumes:
+      - postwerk-data:/data
+    networks: [mail]
+
+  clamav:
+    profiles: [clamav]
+    image: clamav/clamav:stable
+    container_name: postwerk-clamav
+    restart: unless-stopped
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks: [mail]
+
+  ollama:
+    profiles: [ai]
+    image: ollama/ollama:latest
+    container_name: postwerk-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [mail]
+    # Für NVIDIA-GPUs auskommentieren (benötigt nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Lädt einmalig die Standardmodelle in Ollama.
+  ollama-pull:
+    profiles: [ai]
+    image: ollama/ollama:latest
+    depends_on: [ollama]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${AI_CHAT_MODEL:-qwen2.5:7b} && ollama pull ${AI_EMBED_MODEL:-nomic-embed-text}"]
+    networks: [mail]
+    restart: "no"
+
+volumes:
+  postwerk-data:
+  clamav-db:
+  ollama-models:
+
+networks:
+  mail:

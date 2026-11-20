@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Postwerk-ClamAV</Name>
+  <Repository>clamav/clamav:stable</Repository>
+  <Registry>https://hub.docker.com/r/clamav/clamav</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/gottschalkfelix4-source/postwerk/issues</Support>
+  <Project>https://www.clamav.net</Project>
+  <Overview>Offizieller ClamAV-Virenscanner als Dienst für Postwerk. Postwerk schickt eingehende Mails per INSTREAM an clamd (Port 3310). Benötigt etwa 1,5 GB RAM. In Postwerk unter Einstellungen → Virenscan die Adresse [Unraid-IP]:3310 eintragen.</Overview>
+  <Category>Security: Tools:</Category>
+  <WebUI/>
+  <TemplateURL>https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/postwerk-clamav.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/clamav.png</Icon>
+  <ExtraParams>--restart unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="clamd" Target="3310" Default="3310" Mode="tcp" Description="clamd-Port für Postwerk." Type="Port" Display="always" Required="true" Mask="false">3310</Config>
+  <Config Name="Signaturen" Target="/var/lib/clamav" Default="/mnt/user/appdata/postwerk-clamav" Mode="rw" Description="Virensignaturen (werden automatisch aktualisiert)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/postwerk-clamav</Config>
+</Container>

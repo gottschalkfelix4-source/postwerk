@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Postwerk</Name>
+  <Repository>ghcr.io/gottschalkfelix4-source/postwerk:latest</Repository>
+  <Registry>https://github.com/gottschalkfelix4-source/postwerk/pkgs/container/postwerk</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/gottschalkfelix4-source/postwerk/issues</Support>
+  <Project>https://github.com/gottschalkfelix4-source/postwerk</Project>
+  <Overview>Postwerk ist ein selbst gehosteter Mailserver in einem Container: SMTP, Versand (587/465), POP3, Webmail und Verwaltungsoberfläche. Enthalten sind Let's Encrypt (ACME), SPF/DKIM/DMARC, mehrere Domains, Aliase und Catch-all, ein Spamfilter mit Bayes, DNSBL und Greylisting, ClamAV-Anbindung, 2FA, App-Passwörter und Brute-Force-Schutz sowie Prometheus-Metriken.&#xD;
+&#xD;
+KI-Funktionen über jeden OpenAI-kompatiblen Endpunkt, also auch lokal mit Ollama: Spam- und Phishing-Erkennung, Kategorien, Prioritäten, Zusammenfassungen, Antwortentwürfe, semantische Suche, Termine/Aufgaben aus Mails und Weitergabe von Anhängen an Paperless-ngx.&#xD;
+&#xD;
+Anleitung: https://github.com/gottschalkfelix4-source/postwerk/blob/main/docs/UNRAID.md</Overview>
+  <Category>Network:Messenger Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/postwerk.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/postwerk.png</Icon>
+  <ExtraParams>--restart unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Für den Empfang aus dem Internet müssen die Mail-Ports im Router weitergeleitet werden und die DNS-Einträge (MX, SPF, DKIM, DMARC) gesetzt sein. Die Weboberfläche zeigt alle Einträge pro Domain an.</Requires>
+  <Config Name="Weboberfläche (HTTP)" Target="8080" Default="8880" Mode="tcp" Description="Weboberfläche und ACME HTTP-01. Unraid belegt selbst Port 80, deshalb 8880. Für Let's Encrypt im Router extern 80 auf diesen Port weiterleiten." Type="Port" Display="always" Required="true" Mask="false">8880</Config>
+  <Config Name="Weboberfläche (HTTPS)" Target="8443" Default="8843" Mode="tcp" Description="Weboberfläche über HTTPS (selbstsigniert, bis ACME aktiviert ist)." Type="Port" Display="always" Required="false" Mask="false">8843</Config>
+  <Config Name="SMTP eingehend" Target="2525" Default="25" Mode="tcp" Description="Empfang von anderen Mailservern. Im Router Port 25 hierher weiterleiten." Type="Port" Display="always" Required="true" Mask="false">25</Config>
+  <Config Name="Versand (STARTTLS)" Target="5870" Default="587" Mode="tcp" Description="Versand für Mailprogramme mit STARTTLS." Type="Port" Display="always" Required="false" Mask="false">587</Config>
+  <Config Name="Versand (TLS)" Target="4650" Default="465" Mode="tcp" Description="Versand für Mailprogramme mit direktem TLS." Type="Port" Display="always" Required="false" Mask="false">465</Config>
+  <Config Name="POP3 (STARTTLS)" Target="1100" Default="110" Mode="tcp" Description="Abruf per POP3 mit STARTTLS." Type="Port" Display="advanced" Required="false" Mask="false">110</Config>
+  <Config Name="POP3S (TLS)" Target="9950" Default="995" Mode="tcp" Description="Abruf per POP3 mit direktem TLS." Type="Port" Display="always" Required="false" Mask="false">995</Config>
+  <Config Name="Daten" Target="/data" Default="/mnt/user/appdata/postwerk" Mode="rw" Description="Datenbank, Mails, DKIM-Schlüssel und Zertifikate." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/postwerk</Config>
+  <Config Name="Hostname" Target="POSTWERK_HOSTNAME" Default="mail.example.com" Mode="" Description="Vollständiger Hostname des Mailservers (A-Record und Reverse-DNS müssen darauf zeigen). Wird nur beim ersten Start übernommen, danach in den Einstellungen." Type="Variable" Display="always" Required="true" Mask="false">mail.example.com</Config>
+  <Config Name="Admin-E-Mail" Target="POSTWERK_ADMIN_EMAIL" Default="admin@example.com" Mode="" Description="Erstes Admin-Konto, nur beim allerersten Start. Die Domain wird automatisch angelegt." Type="Variable" Display="always" Required="true" Mask="false">admin@example.com</Config>
+  <Config Name="Admin-Passwort" Target="POSTWERK_ADMIN_PASSWORD" Default="" Mode="" Description="Mindestens 10 Zeichen. Leer lassen, dann erzeugt Postwerk eins und schreibt es ins Container-Log." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Benutzer-ID für die Dateien in appdata (Unraid: 99 = nobody)." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Gruppen-ID für die Dateien in appdata (Unraid: 100 = users)." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+  <Config Name="Zeitzone" Target="TZ" Default="Europe/Berlin" Mode="" Description="Zeitzone für Logs und Datumsangaben." Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Berlin</Config>
+  <Config Name="Sichere Cookies" Target="POSTWERK_SECURE_COOKIES" Default="false" Mode="" Description="true, sobald die Oberfläche nur noch über HTTPS (oder einen Reverse-Proxy mit HTTPS) erreichbar ist." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Hinter Reverse-Proxy" Target="POSTWERK_TRUST_PROXY" Default="false" Mode="" Description="true, wenn die Oberfläche über Nginx Proxy Manager, Traefik o. Ä. läuft (echte Client-IP für den Brute-Force-Schutz)." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Smarthost" Target="POSTWERK_RELAY_HOST" Default="" Mode="" Description="Optional, z. B. smtp.provider.de:587 – falls der Internetanbieter ausgehend Port 25 sperrt." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Smarthost-Benutzer" Target="POSTWERK_RELAY_USER" Default="" Mode="" Description="Benutzername für den Smarthost." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Smarthost-Passwort" Target="POSTWERK_RELAY_PASSWORD" Default="" Mode="" Description="Passwort für den Smarthost." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="Metrics-Token" Target="POSTWERK_METRICS_TOKEN" Default="" Mode="" Description="Optional: Bearer-Token für /metrics (Prometheus)." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+</Container>

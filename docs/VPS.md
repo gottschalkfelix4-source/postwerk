@@ -60,11 +60,15 @@ Mit Virenscanner und lokaler KI:
 docker compose --profile clamav --profile ai up -d
 ```
 
-**6. Setup-Token holen und Assistenten öffnen:**
+**6. Setup-Token anzeigen und Assistenten öffnen:**
 
 ```bash
-docker compose logs postwerk | grep -i setup_token
+docker compose exec postwerk postwerk setup-token
 ```
+
+Kommt „bereits eingerichtet“, wurde das Admin-Konto schon angelegt, entweder über `POSTWERK_ADMIN_EMAIL`
+oder bei einem früheren Start mit demselben Datenvolume. Dann einfach mit diesem Konto anmelden
+(Passwort vergessen: `docker compose exec postwerk postwerk reset-password <e-mail> '<passwort>'`).
 
 Dann `http://<IP-des-Servers>/` im Browser öffnen. Der Setup-Assistent führt durch:
 - Domain und Admin-Konto

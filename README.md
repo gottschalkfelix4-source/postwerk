@@ -38,7 +38,7 @@ git clone https://github.com/gottschalkfelix4-source/postwerk.git && cd postwerk
 cp .env.example .env        # Hostname und Admin-Adresse eintragen
 docker compose pull         # fertiges Image von ghcr.io (oder: docker compose up -d --build)
 docker compose up -d
-docker compose logs postwerk | grep -i setup_token   # Token für den Setup-Assistenten
+docker compose exec postwerk postwerk setup-token   # Token für den Setup-Assistenten
 ```
 
 Dann `http://<server>/` öffnen: Der Setup-Assistent legt Domain und Admin-Konto an, prüft die

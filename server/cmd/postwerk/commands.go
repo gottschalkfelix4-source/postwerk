@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"postwerk/internal/auth"
@@ -20,6 +21,7 @@ const usage = `Verwendung: postwerk [befehl]
   version                       Version ausgeben
   backup <zielordner>           Konsistente Sicherung von Datenbank und Mails anlegen
   reset-password <e-mail> <pw>  Passwort eines Kontos setzen (und 2FA zurücksetzen)
+  setup-token                   Setup-Token für die Ersteinrichtung anzeigen
 `
 
 func command(cfg *config.Config, args []string) error {
@@ -35,6 +37,8 @@ func command(cfg *config.Config, args []string) error {
 			return errors.New("E-Mail und Passwort angeben\n\n" + usage)
 		}
 		return resetPassword(ctx, cfg, args[1], args[2])
+	case "setup-token":
+		return showSetupToken(ctx, cfg)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil
@@ -128,4 +132,35 @@ func copyTree(src, dst string) (int, error) {
 		return f.Close()
 	})
 	return n, err
+}
+
+// showSetupToken prints the token for the setup assistant or explains why
+// none is needed.
+func showSetupToken(ctx context.Context, cfg *config.Config) error {
+	st, err := store.Open(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	n, err := st.CountAccounts(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		fmt.Println("Postwerk ist bereits eingerichtet – ein Setup-Token wird nicht mehr gebraucht.")
+		if admins := adminEmails(ctx, st); len(admins) > 0 {
+			fmt.Println("Anmelden mit:", strings.Join(admins, ", "))
+		}
+		fmt.Println("Passwort vergessen?  postwerk reset-password <e-mail> '<neues-passwort>'")
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.DataDir, "setup-token.txt"))
+	if err != nil {
+		fmt.Println("Noch kein Setup-Token vorhanden: Der Server hat noch nicht gestartet oder startet gerade.")
+		fmt.Println("Kurz warten und den Befehl erneut ausführen.")
+		return nil
+	}
+	fmt.Println("Setup-Token:", strings.TrimSpace(string(data)))
+	fmt.Println("Weboberfläche öffnen und den Token im Setup-Assistenten eingeben.")
+	return nil
 }

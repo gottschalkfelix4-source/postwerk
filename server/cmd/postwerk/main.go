@@ -230,15 +230,21 @@ func shutdown(srv *http.Server) {
 // one-time setup token for the web setup assistant.
 func bootstrap(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (string, error) {
 	n, err := st.CountAccounts(ctx)
-	if err != nil || n > 0 {
+	if err != nil {
 		return "", err
+	}
+	if n > 0 {
+		// Mention "setup_token" so `logs | grep setup_token` always explains itself.
+		log.Info("setup_token nicht nötig: Postwerk ist bereits eingerichtet – mit einem Admin-Konto anmelden (Passwort vergessen: postwerk reset-password)",
+			"component", "setup", "admins", strings.Join(adminEmails(ctx, st), ","))
+		return "", nil
 	}
 	email := store.Normalize(cfg.AdminEmail)
 	if email == "" {
 		token := auth.NewAppPassword()
 		path := filepath.Join(cfg.DataDir, "setup-token.txt")
 		_ = os.WriteFile(path, []byte(token+"\n"), 0o600)
-		log.Warn("no account yet – open the web interface and finish the setup assistant", "component", "setup", "setup_token", token, "file", path)
+		log.Warn("Noch kein Konto: Weboberfläche öffnen und den Setup-Assistenten mit diesem setup_token starten", "component", "setup", "setup_token", token, "file", path)
 		return token, nil
 	}
 	domain := store.DomainOf(email)
@@ -264,11 +270,26 @@ func bootstrap(ctx context.Context, cfg *config.Config, st *store.Store, log *sl
 		return "", err
 	}
 	if generated {
-		log.Warn("created initial admin account – change this password after the first login", "email", email, "password", pw)
+		log.Warn("setup_token nicht nötig: Admin-Konto aus POSTWERK_ADMIN_EMAIL angelegt – Passwort nach der ersten Anmeldung ändern", "component", "setup", "email", email, "password", pw)
 	} else {
-		log.Info("created initial admin account", "email", email)
+		log.Info("setup_token nicht nötig: Admin-Konto aus POSTWERK_ADMIN_EMAIL/POSTWERK_ADMIN_PASSWORD angelegt", "component", "setup", "email", email)
 	}
 	return "", nil
+}
+
+// adminEmails lists the addresses of all admin accounts.
+func adminEmails(ctx context.Context, st *store.Store) []string {
+	accts, _, err := st.ListAccounts(ctx, "", 200, 0)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range accts {
+		if a.Role == "admin" {
+			out = append(out, a.Email)
+		}
+	}
+	return out
 }
 
 func housekeeping(ctx context.Context, st *store.Store) {

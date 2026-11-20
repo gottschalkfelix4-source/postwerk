@@ -227,7 +227,7 @@ interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt:
 Postwerk kennt drei Setup-Zustände:
 
 - `initial` – es gibt noch kein Konto. Der Server hat beim Start einen **Setup-Token** ins Log
-  geschrieben (und nach `/data/setup-token.txt`). Nur damit lässt sich das erste Admin-Konto anlegen.
+  geschrieben (und nach `/data/setup-token.txt`; anzeigen mit `postwerk setup-token`). Nur damit lässt sich das erste Admin-Konto anlegen.
 - `configure` – Konten existieren, der Assistent wurde aber noch nicht abgeschlossen. Admins werden nach
   dem Login in den Assistenten geleitet (überspringbar).
 - `done` – fertig eingerichtet.

@@ -195,13 +195,14 @@ export function WelcomeStep({ onNext }: StepProps) {
               )}
             </Field>
             <div className="space-y-2 text-xs text-zinc-500 dark:text-zinc-400">
-              <p>So findest du den Token – im Container-Log:</p>
-              <CommandBox command="docker logs postwerk | grep -i setup" />
+              <p>So zeigst du den Token an (auf dem Server, im Ordner mit der Compose-Datei):</p>
+              <CommandBox command="docker compose exec postwerk postwerk setup-token" />
+              <p>Ohne Compose (z. B. Unraid – dort heißt der Container „Postwerk“):</p>
+              <CommandBox command="docker exec postwerk postwerk setup-token" />
               <p>
-                oder in der Datei <code className="font-mono text-zinc-700 dark:text-zinc-300">/data/setup-token.txt</code> im
-                Datenverzeichnis:
+                Der Token steht außerdem in der Datei{" "}
+                <code className="font-mono text-zinc-700 dark:text-zinc-300">setup-token.txt</code> im Datenverzeichnis.
               </p>
-              <CommandBox command="docker exec postwerk cat /data/setup-token.txt" />
             </div>
           </div>
         ) : (

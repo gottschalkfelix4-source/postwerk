@@ -6,7 +6,7 @@
 #      docker compose up -d                                 # nur Postwerk
 #      docker compose --profile clamav up -d                # + Virenscanner (braucht ~1,5 GB RAM)
 #      docker compose --profile clamav --profile ai up -d   # + lokale KI mit Ollama (braucht 8+ GB RAM)
-# 4. Setup-Token holen:   docker compose logs postwerk | grep -i setup_token
+# 4. Setup-Token anzeigen:   docker compose exec postwerk postwerk setup-token
 # 5. http://<IP-des-Servers>/ öffnen – der Setup-Assistent führt durch den Rest
 #    (Domain, Admin-Konto, DNS-Einträge, Let's Encrypt, Virenscan, KI).
 #

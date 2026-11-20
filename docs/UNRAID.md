@@ -81,9 +81,11 @@ Smarthost und Reverse-Proxy-Optionen.
 
 1. Den **Setup-Token** aus dem Log holen:
    ```bash
-   docker logs Postwerk 2>&1 | grep -i setup_token
+   docker exec Postwerk postwerk setup-token
    ```
-   Er steht auch in `/mnt/user/appdata/postwerk/setup-token.txt`.
+   Er steht auch in `/mnt/user/appdata/postwerk/setup-token.txt`. Ist Postwerk schon eingerichtet
+   (z. B. weil im Template eine Admin-E-Mail eingetragen war), sagt der Befehl das und nennt das
+   Admin-Konto, mit dem du dich anmeldest.
 2. `http://<Unraid-IP>:8880` öffnen (oder Postwerk-Icon → **WebUI**). Der Assistent startet automatisch.
 3. Er führt dich durch:
    - **Server & Admin:** Hostname, erste Domain, dein Admin-Konto

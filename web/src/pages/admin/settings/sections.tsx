@@ -43,6 +43,8 @@ import {
 } from "@/pages/admin/proxy/ProxyParts";
 import {
   AcmeNotice,
+  HttpPortPicker,
+  IssueCertificateButton,
   CertificateFilesPanel,
   SelfSignedNotice,
   TlsModePicker,
@@ -467,7 +469,8 @@ export function TlsSection({ settings, save, saving }: SectionProps) {
         if (acme.domains.length === 0 && settings.server.hostname) acme.domains = [settings.server.hostname];
         if (!acme.directoryUrl) acme.directoryUrl = ACME_PRESETS[0].url;
       }
-      return { ...d, mode, acme };
+      const httpPort = mode === "acme" && d.httpPort === "open" ? "auto-close" : d.httpPort;
+      return { ...d, mode, acme, httpPort };
     });
   const errors = tlsDraftErrors(draft);
   const behindProxy = !!settings.web?.behindProxy;
@@ -543,6 +546,10 @@ export function TlsSection({ settings, save, saving }: SectionProps) {
             {(id) => <ChipInput id={id} value={draft.acme.domains} onChange={(v) => setAcme({ domains: v })} placeholder="mail.beispiel.de" transform={(v) => v.toLowerCase()} />}
           </Field>
           <AcmeNotice behindProxy={behindProxy} />
+          <HttpPortPicker value={draft.httpPort} onChange={(v) => setDraft((d) => ({ ...d, httpPort: v }))} status={settings.tls.httpStatus} />
+          <IssueCertificateButton
+            disabledReason={dirty ? "Erst speichern, dann das Zertifikat holen." : settings.tls.mode !== "acme" ? "Erst „Let’s Encrypt direkt“ speichern." : null}
+          />
         </FormSection>
       )}
       {draft.mode === "selfsigned" && (

@@ -60,10 +60,15 @@ type WebSettings struct {
 
 type TLSSettings struct {
 	// Mode selects the certificate source: selfsigned, acme or files.
-	Mode   string           `json:"mode"`
-	ACME   ACMESettings     `json:"acme"`
-	Files  TLSFilesSettings `json:"files"`
-	Status string           `json:"status"`
+	Mode  string           `json:"mode"`
+	ACME  ACMESettings     `json:"acme"`
+	Files TLSFilesSettings `json:"files"`
+	// HTTPPort controls the plain HTTP listener (host port 80):
+	// "open" (full UI), "redirect" (ACME + redirect to HTTPS) or
+	// "auto-close" (closed while a valid certificate exists, reopened for renewal).
+	HTTPPort   string `json:"httpPort"`
+	Status     string `json:"status"`
+	HTTPStatus string `json:"httpStatus"`
 }
 
 type TLSFilesSettings struct {
@@ -151,6 +156,7 @@ func DefaultSettings(hostname string) Settings {
 	s.TLS.ACME.DirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 	s.TLS.ACME.Domains = []string{}
 	s.TLS.Mode = "selfsigned"
+	s.TLS.HTTPPort = "open"
 	s.Web.TrustedProxies = []string{}
 	s.Spam.Enabled = true
 	s.Spam.JunkThreshold = 5
@@ -214,6 +220,9 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	if cur.DynDNS.Hostnames == nil {
 		cur.DynDNS.Hostnames = []string{}
 	}
+	if cur.TLS.HTTPPort == "" {
+		cur.TLS.HTTPPort = "open"
+	}
 	if cur.Web.TrustedProxies == nil {
 		cur.Web.TrustedProxies = []string{}
 	}
@@ -234,6 +243,22 @@ func (c *SettingsCache) Get() Settings {
 	var out Settings
 	_ = json.Unmarshal(b, &out)
 	return out
+}
+
+// Reload re-reads the settings from the database (e.g. after a CLI change).
+func (c *SettingsCache) Reload(ctx context.Context) error {
+	var raw string
+	if err := c.st.DB.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'settings'`).Scan(&raw); err != nil {
+		return err
+	}
+	cur := c.Get()
+	if err := json.Unmarshal([]byte(raw), &cur); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.cur = cur
+	c.mu.Unlock()
+	return nil
 }
 
 func (c *SettingsCache) Save(ctx context.Context, s Settings) error {

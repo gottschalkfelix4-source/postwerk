@@ -67,8 +67,7 @@ import type {
   UpdateAccountRequest,
   UpdateMessageRequest,
   UpdateTaskRequest,
-  Vacation,
-} from "./types";
+  Vacation, TlsIssueResult } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -150,6 +149,7 @@ export const adminApi = {
     http.get<ProxyGuide>("/api/admin/proxy/guide", { query: { kind, upstream }, signal }),
   tlsCertificates: () => http.get<CertificateFile[]>("/api/admin/tls/certificates"),
   testTlsFiles: (body: TlsTestRequest) => http.post<TlsTestResult>("/api/admin/tls/test", body),
+  issueTls: () => http.post<TlsIssueResult>("/api/admin/tls/issue", {}),
 
   dyndnsPresets: () => http.get<DynDNSPreset[]>("/api/admin/dyndns/presets"),
   dyndnsStatus: () => http.get<DynDNSStatus>("/api/admin/dyndns/status"),

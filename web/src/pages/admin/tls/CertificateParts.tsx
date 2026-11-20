@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
 import { errorMessage } from "@/api/client";
-import type { CertificateFile, Settings, SettingsUpdate, TlsMode, TlsTestResult } from "@/api/types";
+import type { CertificateFile, HttpPortMode, Settings, SettingsUpdate, TlsIssueResult, TlsMode, TlsTestResult } from "@/api/types";
 import { formatDate } from "@/lib/format";
 import { cn, isEmail } from "@/lib/utils";
 import { Badge, Button, ErrorState, Field, Input, Notice, Skeleton } from "@/components/ui";
@@ -29,6 +29,7 @@ export interface TlsDraft {
   mode: TlsMode;
   acme: Settings["tls"]["acme"];
   files: Settings["tls"]["files"];
+  httpPort: HttpPortMode;
 }
 
 /** Editable part of the `tls` section with a fixed key order (drafts are compared via JSON). */
@@ -44,12 +45,13 @@ export function tlsDraftOf(tls: Settings["tls"]): TlsDraft {
     mode: tls.mode ?? (acme.enabled ? "acme" : "selfsigned"),
     acme,
     files: { certPath: tls.files?.certPath ?? "", keyPath: tls.files?.keyPath ?? "" },
+    httpPort: tls.httpPort ?? "open",
   };
 }
 
 /** Body for PUT /api/admin/settings (without the read-only status). */
 export function tlsUpdate(d: TlsDraft): SettingsUpdate {
-  return { tls: { mode: d.mode, acme: { ...d.acme, enabled: d.mode === "acme" }, files: d.files } };
+  return { tls: { mode: d.mode, acme: { ...d.acme, enabled: d.mode === "acme" }, files: d.files, httpPort: d.httpPort } };
 }
 
 /** A Traefik acme.json contains the key itself, so no key path is needed. */
@@ -208,7 +210,7 @@ export function AcmeNotice({ behindProxy }: { behindProxy: boolean }) {
   return (
     <Notice tone="warning" icon={TriangleAlert} title="Bitte beachten">
       <ul className="list-disc space-y-0.5 pl-4">
-        <li>Port 80 muss von außen direkt bei Postwerk ankommen, damit die Zertifizierungsstelle die Domain prüfen kann.</li>
+        <li>Port 80 oder 443 muss von außen direkt bei Postwerk ankommen, damit die Zertifizierungsstelle die Domain prüfen kann.</li>
         <li>Alle Namen müssen per DNS auf diesen Server zeigen.</li>
         <li>
           {behindProxy ? "Du nutzt einen Reverse-Proxy: " : "Hinter einem Reverse-Proxy "}
@@ -217,6 +219,134 @@ export function AcmeNotice({ behindProxy }: { behindProxy: boolean }) {
         </li>
       </ul>
     </Notice>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Port 80 policy and immediate issuance (ACME mode)
+// ---------------------------------------------------------------------------
+
+const HTTP_PORT_OPTIONS: { value: HttpPortMode; title: string; text: string; recommended?: boolean }[] = [
+  {
+    value: "auto-close",
+    title: "Nach dem Zertifikat schließen",
+    text: "Port 80 bleibt nur offen, bis das Zertifikat da ist. Etwa 32 Tage vor Ablauf öffnet Postwerk ihn automatisch zur Verlängerung und schließt ihn danach wieder.",
+    recommended: true,
+  },
+  {
+    value: "redirect",
+    title: "Nur Umleitung auf HTTPS",
+    text: "Port 80 bleibt offen, beantwortet aber nur die Let’s-Encrypt-Prüfung und leitet alles andere auf HTTPS um.",
+  },
+  {
+    value: "open",
+    title: "Offen lassen",
+    text: "Die Weboberfläche ist auch über unverschlüsseltes HTTP erreichbar. Nur für Tests.",
+  },
+];
+
+export function HttpPortPicker({
+  value,
+  onChange,
+  status,
+}: {
+  value: HttpPortMode;
+  onChange: (v: HttpPortMode) => void;
+  status?: string | null;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Port 80 (HTTP)</div>
+      <div role="radiogroup" className="space-y-2">
+        {HTTP_PORT_OPTIONS.map((o) => {
+          const active = value === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(o.value)}
+              className={cn(
+                "flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors",
+                active
+                  ? "border-indigo-500 bg-indigo-50/60 ring-1 ring-indigo-500 dark:border-indigo-400 dark:bg-indigo-500/10 dark:ring-indigo-400"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                  active ? "border-indigo-600 dark:border-indigo-400" : "border-zinc-300 dark:border-zinc-600",
+                )}
+              >
+                {active && <span className="h-2 w-2 rounded-full bg-indigo-600 dark:bg-indigo-400" />}
+              </span>
+              <span className="min-w-0">
+                <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {o.title}
+                  {o.recommended && <Badge tone="green">Empfohlen</Badge>}
+                </span>
+                <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">{o.text}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {status && (
+        <p className="flex items-start gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+          <Globe className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>
+            Aktuell: {status}
+          </span>
+        </p>
+      )}
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        Notfall, falls die Weboberfläche nicht mehr erreichbar ist:{" "}
+        <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono dark:bg-zinc-800">docker compose exec postwerk postwerk http-port open</code>
+      </p>
+    </div>
+  );
+}
+
+/** Fetches the certificate right now (ACME issuance) and shows the result. */
+export function IssueCertificateButton({ disabledReason }: { disabledReason?: string | null }) {
+  const issue = useMutation({ mutationFn: adminApi.issueTls });
+  const r: TlsIssueResult | undefined = issue.data;
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button icon={RotateCw} onClick={() => issue.mutate()} loading={issue.isPending} disabled={!!disabledReason}>
+          Zertifikat jetzt holen
+        </Button>
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+          {disabledReason ?? "Fragt Let’s Encrypt sofort an – das kann bis zu einer Minute dauern."}
+        </span>
+      </div>
+      {issue.isError && (
+        <Notice tone="error" icon={CircleX} title="Abruf fehlgeschlagen">
+          {errorMessage(issue.error)}
+        </Notice>
+      )}
+      {r && r.ok && (
+        <Notice tone="success" icon={CircleCheck} title="Zertifikat aktiv">
+          <span className="block">
+            {r.names.join(", ")} – ausgestellt von {r.issuer || "unbekannt"}
+            {r.notAfter ? `, gültig bis ${formatDate(r.notAfter)}` : ""}.
+          </span>
+          <span className="mt-1 block text-xs opacity-80">{r.httpStatus}</span>
+        </Notice>
+      )}
+      {r && !r.ok && (
+        <Notice tone="error" icon={CircleX} title="Noch kein gültiges Zertifikat">
+          <span className="block break-words">{r.error}</span>
+          <span className="mt-1 block text-xs opacity-80">
+            Häufige Ursachen: Der Hostname zeigt per DNS noch nicht auf diesen Server, oder Port 80/443 ist von außen nicht erreichbar
+            (Firewall beim VPS-Anbieter).
+          </span>
+        </Notice>
+      )}
+    </div>
   );
 }
 

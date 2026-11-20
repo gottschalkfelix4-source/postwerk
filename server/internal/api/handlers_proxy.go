@@ -322,3 +322,23 @@ func (s *Server) tlsTest(w http.ResponseWriter, r *http.Request, u *store.Accoun
 	info := tlsutil.Describe(c)
 	return map[string]any{"ok": true, "names": info.Names, "notAfter": info.NotAfter, "matchesHostname": tlsutil.Covers(*c, host)}, nil
 }
+
+// tlsIssue fetches (or re-checks) the certificate served for the mail
+// hostname right now; in ACME mode this triggers issuance.
+func (s *Server) tlsIssue(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	if s.HTTPPort == nil {
+		return nil, invalid("Nicht verfügbar")
+	}
+	cert, err := s.HTTPPort.Probe(r.Context(), true)
+	state, reason := s.HTTPPort.Refresh(r.Context())
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error(), "names": []string{}, "notAfter": nil, "issuer": "",
+			"httpPort": state, "httpStatus": reason}, nil
+	}
+	issuer := cert.Issuer.CommonName
+	if len(cert.Issuer.Organization) > 0 {
+		issuer = cert.Issuer.Organization[0] + " " + issuer
+	}
+	return map[string]any{"ok": true, "names": cert.DNSNames, "notAfter": cert.NotAfter, "issuer": strings.TrimSpace(issuer),
+		"httpPort": state, "httpStatus": reason}, nil
+}

@@ -65,6 +65,8 @@ import {
 } from "@/pages/admin/proxy/ProxyParts";
 import {
   AcmeNotice,
+  HttpPortPicker,
+  IssueCertificateButton,
   CertificateFilesPanel,
   SelfSignedNotice,
   TlsModePicker,
@@ -302,7 +304,8 @@ export function TlsStep({ onBack, onNext }: StepProps) {
         if (acme.domains.length === 0 && hostname) acme.domains = [hostname];
         if (!acme.directoryUrl) acme.directoryUrl = LETS_ENCRYPT;
       }
-      return { ...d, mode, acme };
+      const httpPort = mode === "acme" && d.httpPort === "open" ? "auto-close" : d.httpPort;
+      return { ...d, mode, acme, httpPort };
     });
 
   const persist = (after?: () => void) => {
@@ -402,6 +405,14 @@ export function TlsStep({ onBack, onNext }: StepProps) {
                     )}
                   </Field>
                   <AcmeNotice behindProxy={behindProxy} />
+                  <HttpPortPicker
+                    value={draft.httpPort}
+                    onChange={(v) => setDraft((d) => (d ? { ...d, httpPort: v } : d))}
+                    status={q.data?.tls.httpStatus}
+                  />
+                  <IssueCertificateButton
+                    disabledReason={dirty ? "Erst speichern, dann das Zertifikat holen." : q.data?.tls.mode !== "acme" ? "Erst „Let’s Encrypt direkt“ speichern." : null}
+                  />
                 </div>
               )}
 

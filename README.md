@@ -170,4 +170,5 @@ web/                   React-Oberfläche (Verwaltung + Webmail)
 | `POSTWERK_SECURE_COOKIES` | `false` | Cookie nur über HTTPS |
 | `POSTWERK_TRUST_PROXY` | `false` | Proxy-Auswertung erzwingen (sonst im Setup-Assistenten) |
 | `POSTWERK_ALLOW_INSECURE_AUTH` | `false` | Anmeldung ohne TLS (nur Entwicklung) |
+| `POSTWERK_HTTP_ALWAYS_OPEN` | `false` | Port 80 immer offen lassen (Notfall, überstimmt die Einstellung) |
 | `POSTWERK_DEBUG` | `false` | Ausführliche Logs |

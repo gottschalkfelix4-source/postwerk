@@ -69,6 +69,13 @@ export interface Dashboard {
   ai: { enabled: boolean; reachable: boolean; model: string };
 }
 
+export type HttpPortMode = "open" | "redirect" | "auto-close";
+
+export interface TlsIssueResult {
+  ok: boolean; names: string[]; notAfter: string | null; issuer: string; error?: string;
+  httpPort: "open" | "redirect" | "closed"; httpStatus: string;
+}
+
 export interface Settings {
   server: { hostname: string; maxMessageSize: number; };
   web: {
@@ -82,7 +89,10 @@ export interface Settings {
     mode: TlsMode;
     acme: { enabled: boolean; email: string; directoryUrl: string; domains: string[] };  // enabled is derived from mode
     files: { certPath: string; keyPath: string };   // paths inside the container; certPath may also be a Traefik acme.json
+    /** Port 80: "open" (UI over HTTP), "redirect" (only ACME + redirect), "auto-close" (closed while the certificate is valid). */
+    httpPort: HttpPortMode;
     status: string;               // read-only
+    httpStatus: string;           // read-only: current state of port 80
   };
   spam: {
     enabled: boolean; junkThreshold: number; rejectThreshold: number;

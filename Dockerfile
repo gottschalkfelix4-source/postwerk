@@ -45,5 +45,5 @@ ENV POSTWERK_DATA_DIR=/data \
 
 VOLUME /data
 EXPOSE 8080 8443 2525 5870 4650 1100 9950
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD wget -qO- http://127.0.0.1:8099/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

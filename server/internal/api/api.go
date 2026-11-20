@@ -25,6 +25,7 @@ import (
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
 	"postwerk/internal/dyndns"
+	"postwerk/internal/httpport"
 	"postwerk/internal/logx"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
@@ -54,6 +55,7 @@ type Server struct {
 	SetupToken string
 	Migrations *migrate.Manager
 	DynDNS     *dyndns.Updater
+	HTTPPort   *httpport.Controller
 
 	setupMu sync.Mutex
 }
@@ -353,6 +355,7 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/admin/proxy/guide", s.admin(s.proxyGuide))
 	m.HandleFunc("GET /api/admin/tls/certificates", s.admin(s.tlsCertificates))
 	m.HandleFunc("POST /api/admin/tls/test", s.admin(s.tlsTest))
+	m.HandleFunc("POST /api/admin/tls/issue", s.admin(s.tlsIssue))
 
 	// dynamic ip: dyndns & smarthost
 	m.HandleFunc("GET /api/admin/dyndns/presets", s.admin(s.dyndnsPresets))

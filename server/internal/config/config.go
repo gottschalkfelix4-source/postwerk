@@ -44,6 +44,10 @@ type Config struct {
 	// TrustProxy uses X-Forwarded-For / X-Real-IP for the client address
 	// (only enable behind a reverse proxy).
 	TrustProxy bool
+	// HTTPAlwaysOpen keeps port 80 open regardless of the setting (emergency).
+	HTTPAlwaysOpen bool
+	// HealthAddr serves /healthz for the container healthcheck.
+	HealthAddr string
 	Debug      bool
 }
 
@@ -70,6 +74,8 @@ func Load() *Config {
 		AllowInsecureAuth: envBool("POSTWERK_ALLOW_INSECURE_AUTH", false),
 		SecureCookies:     envBool("POSTWERK_SECURE_COOKIES", false),
 		TrustProxy:        envBool("POSTWERK_TRUST_PROXY", false),
+		HTTPAlwaysOpen:    envBool("POSTWERK_HTTP_ALWAYS_OPEN", false),
+		HealthAddr:        env("POSTWERK_HEALTH_ADDR", "127.0.0.1:8099"),
 		Debug:             envBool("POSTWERK_DEBUG", false),
 	}
 }

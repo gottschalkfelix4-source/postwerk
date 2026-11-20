@@ -22,6 +22,8 @@ const usage = `Verwendung: postwerk [befehl]
   backup <zielordner>           Konsistente Sicherung von Datenbank und Mails anlegen
   reset-password <e-mail> <pw>  Passwort eines Kontos setzen (und 2FA zurücksetzen)
   setup-token                   Setup-Token für die Ersteinrichtung anzeigen
+  http-port open|redirect|auto-close
+                                Verhalten von Port 80 setzen (Notfall: "open" öffnet ihn wieder)
 `
 
 func command(cfg *config.Config, args []string) error {
@@ -37,6 +39,11 @@ func command(cfg *config.Config, args []string) error {
 			return errors.New("E-Mail und Passwort angeben\n\n" + usage)
 		}
 		return resetPassword(ctx, cfg, args[1], args[2])
+	case "http-port":
+		if len(args) != 2 {
+			return errors.New("Verwendung: postwerk http-port open|redirect|auto-close")
+		}
+		return setHTTPPort(ctx, cfg, args[1])
 	case "setup-token":
 		return showSetupToken(ctx, cfg)
 	case "help", "-h", "--help":
@@ -162,5 +169,31 @@ func showSetupToken(ctx context.Context, cfg *config.Config) error {
 	}
 	fmt.Println("Setup-Token:", strings.TrimSpace(string(data)))
 	fmt.Println("Weboberfläche öffnen und den Token im Setup-Assistenten eingeben.")
+	return nil
+}
+
+// setHTTPPort changes the port-80 policy; the running server picks it up
+// within a minute.
+func setHTTPPort(ctx context.Context, cfg *config.Config, mode string) error {
+	switch mode {
+	case "open", "redirect", "auto-close":
+	default:
+		return errors.New("erlaubt: open, redirect, auto-close")
+	}
+	st, err := store.Open(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	settings, err := st.LoadSettings(ctx, cfg.Hostname)
+	if err != nil {
+		return err
+	}
+	cur := settings.Get()
+	cur.TLS.HTTPPort = mode
+	if err := settings.Save(ctx, cur); err != nil {
+		return err
+	}
+	fmt.Printf("Port 80 auf %q gesetzt – der Server übernimmt das innerhalb einer Minute.\n", mode)
 	return nil
 }

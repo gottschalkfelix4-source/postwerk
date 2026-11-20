@@ -24,6 +24,7 @@ import (
 	"postwerk/internal/delivery"
 	"postwerk/internal/dms"
 	"postwerk/internal/dyndns"
+	"postwerk/internal/httpport"
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
@@ -158,15 +159,20 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn,
 	}
 	handler := apiSrv.Handler()
-	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: tp.HTTPHandler(handler), ReadHeaderTimeout: 10 * time.Second}
-	listeners = append(listeners, func(ctx context.Context) error {
-		log.Info("listening", "component", "http", "proto", "http", "addr", cfg.HTTPAddr)
-		go func() { <-ctx.Done(); shutdown(httpSrv) }()
-		if err := httpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
-	})
+	httpCtl := &httpport.Controller{
+		Addr: cfg.HTTPAddr, HTTPSAddr: cfg.HTTPSAddr, Handler: handler, Settings: settings, TLS: tp,
+		ForceOpen: cfg.HTTPAlwaysOpen, Log: log,
+	}
+	apiSrv.HTTPPort = httpCtl
+	go httpCtl.Run(ctx)
+	// Internal health endpoint for the Docker healthcheck (never published),
+	// so closing port 80 does not mark the container unhealthy.
+	if cfg.HealthAddr != "" {
+		healthSrv := &http.Server{Addr: cfg.HealthAddr, ReadHeaderTimeout: 5 * time.Second,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })}
+		go func() { <-ctx.Done(); shutdown(healthSrv) }()
+		go func() { _ = healthSrv.ListenAndServe() }()
+	}
 	if cfg.HTTPSAddr != "" {
 		httpsSrv := &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second}
 		listeners = append(listeners, func(ctx context.Context) error {

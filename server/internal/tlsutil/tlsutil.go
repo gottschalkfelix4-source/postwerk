@@ -518,3 +518,46 @@ func readLeaf(path string) (*x509.Certificate, error) {
 	}
 	return x509.ParseCertificate(blk.Bytes)
 }
+
+// Probe performs a TLS handshake against addr (normally our own HTTPS
+// listener) for host and returns the certificate actually served. In ACME
+// mode this also triggers issuance if no certificate exists yet.
+func Probe(ctx context.Context, addr, host string) (*x509.Certificate, error) {
+	d := &tls.Dialer{Config: &tls.Config{ServerName: host, InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return nil, errors.New("kein Zertifikat erhalten")
+	}
+	return certs[0], nil
+}
+
+// IsPublicCA reports whether the certificate was issued by a public CA
+// (i.e. not our self-signed fallback) and is valid for host.
+func IsPublicCA(c *x509.Certificate, host string) bool {
+	if c == nil || c.VerifyHostname(host) != nil {
+		return false
+	}
+	for _, o := range c.Subject.Organization {
+		if o == "Postwerk" {
+			return false
+		}
+	}
+	return !bytesEqual(c.RawIssuer, c.RawSubject)
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

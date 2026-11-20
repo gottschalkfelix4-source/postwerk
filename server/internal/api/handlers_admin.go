@@ -505,6 +505,9 @@ func (s *Server) maskedSettings() store.Settings {
 		cur.Relay.Password = mask
 	}
 	cur.TLS.Status = s.TLS.Status()
+	if s.HTTPPort != nil {
+		_, cur.TLS.HTTPStatus = s.HTTPPort.Status()
+	}
 	return cur
 }
 
@@ -566,6 +569,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	if s.DynDNS != nil && patch["dyndns"] != nil {
 		s.DynDNS.Notify()
 	}
+	if s.HTTPPort != nil && (patch["tls"] != nil || patch["web"] != nil || patch["server"] != nil) {
+		s.HTTPPort.Notify()
+	}
 	return s.maskedSettings(), nil
 }
 
@@ -589,6 +595,14 @@ func validateSettings(c *store.Settings) error {
 		return invalid("Ungültige Zertifikatsquelle")
 	}
 	c.TLS.ACME.Enabled = c.TLS.Mode == "acme"
+	switch c.TLS.HTTPPort {
+	case "open", "redirect", "auto-close":
+	case "":
+		c.TLS.HTTPPort = "open"
+	default:
+		return invalid("Ungültige Einstellung für Port 80")
+	}
+	c.TLS.HTTPStatus = ""
 	if c.TLS.Mode == "files" && strings.TrimSpace(c.TLS.Files.CertPath) == "" {
 		return invalid("Bitte den Pfad zum Zertifikat angeben")
 	}

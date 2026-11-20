@@ -75,8 +75,32 @@ Dann `http://<IP-des-Servers>/` im Browser öffnen. Der Setup-Assistent führt d
 - DNS-Einträge: automatisch bei Hetzner, IONOS, Cloudflare, netcup, INWX, deSEC, STRATO, oder
   von Hand mit Feldern genau wie beim Anbieter
 - System-Check
-- Let's Encrypt: im Schritt TLS „Let's Encrypt direkt“ wählen
+- Let's Encrypt: im Schritt TLS „Let's Encrypt direkt“ wählen, Port 80 „Nach dem Zertifikat schließen“
+  und „Zertifikat jetzt holen“ (siehe unten)
 - Virenscanner (`clamav:3310`) und KI (`http://ollama:11434/v1`)
+
+## Zertifikat und Port 80
+
+Im Setup-Assistenten (Schritt **TLS**) „Let's Encrypt direkt“ wählen. Für Port 80 gibt es drei Stufen:
+
+| Einstellung | Verhalten |
+|---|---|
+| **Nach dem Zertifikat schließen** (empfohlen) | Port 80 ist nur offen, bis das Zertifikat da ist. Etwa 32 Tage vor Ablauf öffnet Postwerk ihn automatisch zur Verlängerung und schließt ihn danach wieder. |
+| Nur Umleitung auf HTTPS | Port 80 bleibt offen, beantwortet aber nur die Let's-Encrypt-Prüfung und leitet alles andere auf HTTPS um. |
+| Offen lassen | Weboberfläche auch über HTTP (nur für Tests). |
+
+Mit **„Zertifikat jetzt holen“** fragt Postwerk Let's Encrypt sofort an und zeigt das Ergebnis. Danach
+erreichst du die Weboberfläche unter `https://mail.deinedomain.de`. Port 80 schließt Postwerk nur, wenn
+ein gültiges Zertifikat vorliegt und HTTPS läuft, damit du dich nicht aussperrst. Die Verlängerung
+klappt bei geschlossenem Port 80 zusätzlich über Port 443.
+
+**Notfall** – Port 80 wieder öffnen, falls die Weboberfläche nicht erreichbar ist:
+
+```bash
+docker compose exec postwerk postwerk http-port open
+```
+
+Der Server übernimmt das innerhalb einer Minute.
 
 ## Reverse-DNS (PTR) setzen
 

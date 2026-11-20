@@ -560,3 +560,31 @@ interface DynDNSStatus {
 | POST | `/api/admin/dyndns/update` | – | `DynDNSStatus` (jetzt sofort prüfen und – nur bei Abweichung – melden; mit `{ force: true }` immer melden) |
 | GET | `/api/admin/relay/presets` | – | `{ presets: RelayPreset[]; envOverride: boolean }` |
 | POST | `/api/admin/relay/test` | – (prüft gespeicherte Einstellungen) | `{ ok: boolean; detail: string }` (Verbindung, TLS, Anmeldung) |
+
+## DNS-Einträge als Formularfelder
+
+`GET /api/admin/domains/{name}/dns` liefert jeden Eintrag zusätzlich in Einzelfelder zerlegt, so wie
+DNS-Anbieter sie in ihren Formularen abfragen. `GET …/dns/check` enthält dieselben `key`/`title`.
+
+```ts
+interface DnsRecord {
+  key: string;                 // "a" | "mx" | "spf" | "dkim" | "dmarc" | "mta-sts-txt" | "mta-sts-cname" | "tlsrpt" | "srv-submissions" | "srv-submission" | "srv-pop3s" | "autoconfig"
+  type: "A" | "MX" | "TXT" | "CNAME" | "SRV" | "AAAA" | "TLSA";
+  name: string;                // FQDN mit Punkt (Zonen-Ansicht)
+  value: string;               // Wert in Zonen-Schreibweise
+  title: string;               // verständlicher Titel, z. B. "Posteingang (MX)"
+  purpose: string;             // ein bis zwei Sätze in einfacher Sprache
+  required: boolean;
+  zone: string;                // die Domain
+  host: string;                // Name relativ zur Domain; "" = die Domain selbst (bei vielen Anbietern "@" oder leer lassen)
+  outsideZone: boolean;        // gehört zu einer anderen Domain (Hostname liegt woanders)
+  content: string;             // Wert ohne Punkt am Ende (A/TXT/CNAME); bei MX/SRV leer
+  priority: number | null;     // MX, SRV
+  weight: number | null;       // SRV
+  port: number | null;         // SRV
+  target: string | null;       // MX/SRV-Ziel ohne Punkt am Ende
+  service: string | null;      // SRV, ohne Unterstrich, z. B. "submissions"
+  protocol: string | null;     // SRV, z. B. "tcp"
+}
+// DnsCheck erhält zusätzlich: key: string; title: string;
+```

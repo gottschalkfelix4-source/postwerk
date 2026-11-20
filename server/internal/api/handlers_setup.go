@@ -134,6 +134,8 @@ func (s *Server) setupComplete(w http.ResponseWriter, r *http.Request, u *store.
 // ---- DNS check ----
 
 type dnsCheck struct {
+	Key      string   `json:"key"`
+	Title    string   `json:"title"`
 	Type     string   `json:"type"`
 	Name     string   `json:"name"`
 	Expected string   `json:"expected"`
@@ -168,7 +170,7 @@ func (s *Server) domainDNSCheck(w http.ResponseWriter, r *http.Request, u *store
 	hostIPs, _ := net.DefaultResolver.LookupHost(ctx, host)
 	out := []dnsCheck{}
 	for _, rec := range recs {
-		c := dnsCheck{Type: rec.Type, Name: rec.Name, Expected: rec.Value, Purpose: rec.Purpose, Found: []string{}, Required: rec.Required}
+		c := dnsCheck{Key: rec.Key, Title: rec.Title, Type: rec.Type, Name: rec.Name, Expected: rec.Value, Purpose: rec.Purpose, Found: []string{}, Required: rec.Required}
 		name := strings.TrimSuffix(rec.Name, ".")
 		fail := func() string {
 			if rec.Required {

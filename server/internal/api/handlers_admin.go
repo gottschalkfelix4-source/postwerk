@@ -132,12 +132,44 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, u *store.A
 	return ok(), s.Store.DeleteDomain(r.Context(), d.Name)
 }
 
+// dnsRecord is one recommended DNS entry. Besides the zone-file view
+// (name/value) it carries the value split into the fields that provider
+// forms ask for (host/prefix, priority, weight, port, target …).
 type dnsRecord struct {
+	Key      string `json:"key"`
 	Type     string `json:"type"`
 	Name     string `json:"name"`
 	Value    string `json:"value"`
 	Purpose  string `json:"purpose"`
-	Required bool   `json:"-"`
+	Title    string `json:"title"`
+	Required bool   `json:"required"`
+
+	Zone        string  `json:"zone"`        // the mail domain
+	Host        string  `json:"host"`        // name relative to the domain, "" = the domain itself
+	OutsideZone bool    `json:"outsideZone"` // record lives in another domain (e.g. hostname elsewhere)
+	Content     string  `json:"content"`     // value without trailing dot (A/TXT/CNAME)
+	Priority    *int    `json:"priority"`    // MX, SRV
+	Weight      *int    `json:"weight"`      // SRV
+	Port        *int    `json:"port"`        // SRV
+	Target      *string `json:"target"`      // MX/SRV target without trailing dot
+	Service     *string `json:"service"`     // SRV, e.g. "submissions" (without underscore)
+	Protocol    *string `json:"protocol"`    // SRV, e.g. "tcp"
+}
+
+func ip(i int) *int         { return &i }
+func sptr(s string) *string { return &s }
+
+// relHost returns the name relative to zone ("" for the zone itself).
+func relHost(fqdn, zone string) (string, bool) {
+	f := strings.TrimSuffix(strings.ToLower(fqdn), ".")
+	z := strings.ToLower(zone)
+	switch {
+	case f == z:
+		return "", false
+	case strings.HasSuffix(f, "."+z):
+		return strings.TrimSuffix(f, "."+z), false
+	}
+	return f, true
 }
 
 // dnsRecords lists the recommended DNS entries for a domain.
@@ -150,28 +182,50 @@ func (s *Server) dnsRecords(d *store.Domain) ([]dnsRecord, error) {
 	n := d.Name
 	opt := s.dnsOptions(s.Settings.Get())
 	spf := dnsprov.MergeSPF("", opt.SPFInclude)
-	spfPurpose := "SPF: nur die MX-Server dürfen für " + n + " senden"
+	spfPurpose := "Legt fest, welche Server Mails für " + n + " verschicken dürfen. Ohne diesen Eintrag landen deine Mails oft im Spam."
 	if opt.SPFInclude != "" {
-		spfPurpose = "SPF: MX-Server und Smarthost (" + strings.TrimPrefix(opt.SPFInclude, "include:") + ") dürfen für " + n + " senden"
+		spfPurpose = "Legt fest, wer Mails für " + n + " verschicken darf: dein Mailserver und der Smarthost (" + strings.TrimPrefix(opt.SPFInclude, "include:") + ")."
 	}
-	aValue, aPurpose := "<öffentliche IPv4 des Servers>", "Hostname des Mailservers (dazu passender PTR/Reverse-DNS beim Provider)"
+	aValue, aPurpose := "<öffentliche IPv4 des Servers>", "Die Adresse deines Mailservers im Internet. Trage hier deine öffentliche IP ein."
 	if opt.DynDNS {
-		aValue, aPurpose = "<wird per DynDNS gesetzt>", "Hostname des Mailservers – Postwerk hält ihn per DynDNS aktuell"
+		aValue, aPurpose = "<wird per DynDNS gesetzt>", "Die Adresse deines Mailservers. Postwerk hält sie per DynDNS automatisch aktuell – hier nichts eintragen."
 	}
-	return []dnsRecord{
-		{"A", host + ".", aValue, aPurpose, true},
-		{"MX", n + ".", "10 " + host + ".", "Eingehende Mails für " + n + " an diesen Server leiten", true},
-		{"TXT", n + ".", spf, spfPurpose, true},
-		{"TXT", d.DKIMSelector + "._domainkey." + n + ".", dkim, "DKIM: öffentlicher Schlüssel für Signaturen", true},
-		{"TXT", "_dmarc." + n + ".", "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n, "DMARC-Richtlinie", true},
-		{"TXT", "_mta-sts." + n + ".", "v=STSv1; id=" + time.Now().Format("20060102"), "MTA-STS aktivieren (Policy unter mta-sts." + n + ")", false},
-		{"CNAME", "mta-sts." + n + ".", host + ".", "MTA-STS-Policy über HTTPS bereitstellen", false},
-		{"TXT", "_smtp._tls." + n + ".", "v=TLSRPTv1; rua=mailto:postmaster@" + n, "TLS-Berichte (TLS-RPT)", false},
-		{"SRV", "_submissions._tcp." + n + ".", "0 1 465 " + host + ".", "Autokonfiguration: SMTP-Versand (TLS)", false},
-		{"SRV", "_submission._tcp." + n + ".", "0 1 587 " + host + ".", "Autokonfiguration: SMTP-Versand (STARTTLS)", false},
-		{"SRV", "_pop3s._tcp." + n + ".", "0 1 995 " + host + ".", "Autokonfiguration: POP3 (TLS)", false},
-		{"CNAME", "autoconfig." + n + ".", host + ".", "Thunderbird-Autokonfiguration", false},
-	}, nil
+	recs := []dnsRecord{
+		{Key: "a", Type: "A", Name: host + ".", Value: aValue, Title: "Mailserver-Adresse", Purpose: aPurpose, Required: true, Content: aValue},
+		{Key: "mx", Type: "MX", Name: n + ".", Value: "10 " + host + ".", Title: "Posteingang (MX)",
+			Purpose: "Sagt anderen Mailservern, wohin Mails für " + n + " geschickt werden. Ersetzt den bisherigen Mailanbieter.", Required: true,
+			Priority: ip(10), Target: sptr(host)},
+		{Key: "spf", Type: "TXT", Name: n + ".", Value: spf, Title: "Absender-Erlaubnis (SPF)", Purpose: spfPurpose, Required: true, Content: spf},
+		{Key: "dkim", Type: "TXT", Name: d.DKIMSelector + "._domainkey." + n + ".", Value: dkim, Title: "Digitale Signatur (DKIM)",
+			Purpose: "Öffentlicher Schlüssel, mit dem Empfänger prüfen, dass deine Mails echt sind.", Required: true, Content: dkim},
+		{Key: "dmarc", Type: "TXT", Name: "_dmarc." + n + ".", Value: "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n,
+			Title: "Schutz vor Fälschungen (DMARC)", Purpose: "Sagt Empfängern, was mit gefälschten Mails in deinem Namen passieren soll.", Required: true},
+		{Key: "mta-sts-txt", Type: "TXT", Name: "_mta-sts." + n + ".", Value: "v=STSv1; id=" + time.Now().Format("20060102"), Title: "Verschlüsselung erzwingen (MTA-STS)",
+			Purpose: "Optional: Andere Server liefern nur noch verschlüsselt an dich aus."},
+		{Key: "mta-sts-cname", Type: "CNAME", Name: "mta-sts." + n + ".", Value: host + ".", Title: "MTA-STS-Adresse", Purpose: "Optional: gehört zu MTA-STS."},
+		{Key: "tlsrpt", Type: "TXT", Name: "_smtp._tls." + n + ".", Value: "v=TLSRPTv1; rua=mailto:postmaster@" + n, Title: "TLS-Berichte",
+			Purpose: "Optional: Andere Server melden dir Probleme mit der Verschlüsselung."},
+		{Key: "srv-submissions", Type: "SRV", Name: "_submissions._tcp." + n + ".", Value: "0 1 465 " + host + ".", Title: "Automatische Einrichtung: Versand (Port 465)",
+			Purpose: "Optional: Mailprogramme finden die Versand-Einstellungen von selbst.", Priority: ip(0), Weight: ip(1), Port: ip(465), Target: sptr(host), Service: sptr("submissions"), Protocol: sptr("tcp")},
+		{Key: "srv-submission", Type: "SRV", Name: "_submission._tcp." + n + ".", Value: "0 1 587 " + host + ".", Title: "Automatische Einrichtung: Versand (Port 587)",
+			Purpose: "Optional: wie oben, für Port 587.", Priority: ip(0), Weight: ip(1), Port: ip(587), Target: sptr(host), Service: sptr("submission"), Protocol: sptr("tcp")},
+		{Key: "srv-pop3s", Type: "SRV", Name: "_pop3s._tcp." + n + ".", Value: "0 1 995 " + host + ".", Title: "Automatische Einrichtung: Abruf (POP3)",
+			Purpose: "Optional: Mailprogramme finden die Abruf-Einstellungen von selbst.", Priority: ip(0), Weight: ip(1), Port: ip(995), Target: sptr(host), Service: sptr("pop3s"), Protocol: sptr("tcp")},
+		{Key: "autoconfig", Type: "CNAME", Name: "autoconfig." + n + ".", Value: host + ".", Title: "Automatische Einrichtung: Thunderbird",
+			Purpose: "Optional: Thunderbird richtet Konten damit selbst ein."},
+	}
+	for i := range recs {
+		r := &recs[i]
+		r.Zone = n
+		r.Host, r.OutsideZone = relHost(r.Name, n)
+		switch r.Type {
+		case "TXT":
+			r.Content = r.Value
+		case "CNAME":
+			r.Content = strings.TrimSuffix(r.Value, ".")
+		}
+	}
+	return recs, nil
 }
 
 func (s *Server) domainDNS(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {

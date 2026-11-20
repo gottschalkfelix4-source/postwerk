@@ -3,46 +3,27 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, AtSign, Globe, Info, KeyRound, Trash2, Users, Wand2 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { DnsRecord, Domain, SystemCheck } from "@/api/types";
+import type { Domain, SystemCheck } from "@/api/types";
 import { formatDate } from "@/lib/format";
 import { isEmail } from "@/lib/utils";
 import {
-  Badge,
   Button,
   Card,
   CardBody,
   CardFooter,
   CardHeader,
-  CopyButton,
   EmptyState,
   ErrorState,
   Field,
   Input,
   Skeleton,
-  SkeletonRows,
   StatTile,
   SwitchRow,
-  TBody,
-  THead,
-  Table,
-  Td,
-  Th,
-  Tr,
   useConfirm,
   useToast,
-  type BadgeTone,
 } from "@/components/ui";
 import { DnsAutoSetup } from "./dns/DnsAutoSetup";
-
-const typeTones: Record<DnsRecord["type"], BadgeTone> = {
-  MX: "indigo",
-  TXT: "teal",
-  CNAME: "purple",
-  A: "blue",
-  AAAA: "blue",
-  TLSA: "amber",
-  SRV: "pink",
-};
+import { DnsRecordGuide } from "./dns/DnsRecordGuide";
 
 export default function DomainDetailPage() {
   const { name = "" } = useParams();
@@ -52,7 +33,6 @@ export default function DomainDetailPage() {
   const confirm = useConfirm();
 
   const domains = useQuery({ queryKey: ["admin", "domains"], queryFn: adminApi.domains });
-  const dns = useQuery({ queryKey: ["admin", "domain-dns", name], queryFn: () => adminApi.domainDns(name), enabled: !!name });
   const domain = domains.data?.find((d) => d.name === name);
   const [autoOpen, setAutoOpen] = useState(false);
   // Pre-fill the IPv4 from a cached system check (setup wizard), without fetching it here.
@@ -135,57 +115,16 @@ export default function DomainDetailPage() {
       <Card className="mt-6">
         <CardHeader
           title="Empfohlene DNS-Einträge"
-          description="Trage diese Einträge beim DNS-Anbieter der Domain ein, damit Zustellung, DKIM, SPF und DMARC funktionieren."
+          description="Damit Mails ankommen und nicht im Spam landen."
           actions={
             <Button size="sm" variant="primary" icon={Wand2} onClick={() => setAutoOpen(true)} disabled={!name}>
               Automatisch einrichten
             </Button>
           }
         />
-        {dns.isLoading ? (
-          <SkeletonRows rows={5} cols={3} />
-        ) : dns.error ? (
-          <ErrorState error={dns.error} onRetry={() => void dns.refetch()} />
-        ) : !dns.data || dns.data.length === 0 ? (
-          <EmptyState compact title="Keine Einträge" />
-        ) : (
-          <Table>
-            <THead>
-              <tr>
-                <Th className="w-20">Typ</Th>
-                <Th>Name</Th>
-                <Th>Wert</Th>
-                <Th>Zweck</Th>
-              </tr>
-            </THead>
-            <TBody>
-              {dns.data.map((r, i) => (
-                <Tr key={`${r.type}-${r.name}-${i}`}>
-                  <Td className="align-top">
-                    <Badge tone={typeTones[r.type] ?? "neutral"} className="font-mono">
-                      {r.type}
-                    </Badge>
-                  </Td>
-                  <Td className="align-top">
-                    <div className="flex items-start gap-1">
-                      <code className="break-all font-mono text-[13px] text-zinc-800 dark:text-zinc-200">{r.name}</code>
-                      <CopyButton value={r.name} />
-                    </div>
-                  </Td>
-                  <Td className="align-top">
-                    <div className="flex max-w-xl items-start gap-1">
-                      <code className="block max-h-24 flex-1 overflow-y-auto break-all rounded-md bg-zinc-50 px-2 py-1 font-mono text-xs leading-relaxed text-zinc-700 ring-1 ring-inset ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-300 dark:ring-zinc-800">
-                        {r.value}
-                      </code>
-                      <CopyButton value={r.value} />
-                    </div>
-                  </Td>
-                  <Td className="align-top text-xs text-zinc-500 dark:text-zinc-400">{r.purpose}</Td>
-                </Tr>
-              ))}
-            </TBody>
-          </Table>
-        )}
+        <CardBody>
+          <DnsRecordGuide domain={name} />
+        </CardBody>
         <CardFooter className="justify-start">
           <p className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
             <Info className="h-3.5 w-3.5 shrink-0" />

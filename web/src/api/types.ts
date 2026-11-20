@@ -18,7 +18,26 @@ export interface Domain {
   createdAt: string;
 }
 
-export interface DnsRecord { type: "MX" | "TXT" | "CNAME" | "A" | "AAAA" | "TLSA" | "SRV"; name: string; value: string; purpose: string; }
+export interface DnsRecord {
+  key: string;                 // "a" | "mx" | "spf" | "dkim" | "dmarc" | "mta-sts-txt" | "mta-sts-cname" | "tlsrpt" | "srv-…" | "autoconfig"
+  type: "MX" | "TXT" | "CNAME" | "A" | "AAAA" | "TLSA" | "SRV";
+  name: string;                // FQDN with trailing dot (zone notation)
+  value: string;               // value in zone notation
+  title: string;               // plain-language title, e.g. "Posteingang (MX)"
+  purpose: string;             // one or two plain-language sentences
+  required: boolean;
+  // Split into the fields DNS providers ask for (docs/API.md, "DNS-Einträge als Formularfelder").
+  zone: string;                // the domain
+  host: string;                // name relative to the domain; "" = the domain itself
+  outsideZone: boolean;        // belongs to another domain (host name lives elsewhere)
+  content: string;             // value without trailing dot (A/TXT/CNAME); empty for MX/SRV
+  priority: number | null;     // MX, SRV
+  weight: number | null;       // SRV
+  port: number | null;         // SRV
+  target: string | null;       // MX/SRV target without trailing dot
+  service: string | null;      // SRV, without underscore, e.g. "submissions"
+  protocol: string | null;     // SRV, e.g. "tcp"
+}
 
 export interface Account {
   id: number; email: string; name: string; role: Role;
@@ -220,6 +239,7 @@ export interface SetupStatus { mode: "initial" | "configure" | "done"; hostname:
 export type CheckStatus = "ok" | "missing" | "mismatch" | "warning" | "error" | "info";
 
 export interface DnsCheck {
+  key: string; title: string;
   type: DnsRecord["type"]; name: string; expected: string; found: string[];
   status: CheckStatus; purpose: string; required: boolean;
 }

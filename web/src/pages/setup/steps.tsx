@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { adminApi, setupApi } from "@/api/endpoints";
 import { errorMessage, isApiError } from "@/api/client";
-import type { CheckStatus, DnsCheck, DnsRecord } from "@/api/types";
+import type { CheckStatus, DnsCheck } from "@/api/types";
 import { qk } from "@/lib/queries";
 import { domainFromHostname, passwordStrength } from "@/lib/setup";
 import { cn, isEmail } from "@/lib/utils";
@@ -42,18 +42,13 @@ import {
   Select,
   Skeleton,
   SkeletonRows,
-  TBody,
-  THead,
-  Table,
-  Td,
-  Th,
-  Tr,
   WizardNav,
   WizardStep,
   useToast,
   type BadgeTone,
 } from "@/components/ui";
 import { DnsAutoSetupCard } from "@/pages/admin/dns/DnsAutoSetup";
+import { DnsRecordGuide } from "@/pages/admin/dns/DnsRecordGuide";
 import { setupKeys, useSetup, type StepProps } from "./context";
 
 // ---------------------------------------------------------------------------
@@ -513,16 +508,6 @@ export function ServerStep({ onBack, onNext }: StepProps) {
 // 3. DNS
 // ---------------------------------------------------------------------------
 
-const typeTones: Record<DnsRecord["type"], BadgeTone> = {
-  MX: "indigo",
-  TXT: "teal",
-  CNAME: "purple",
-  A: "blue",
-  AAAA: "blue",
-  TLSA: "amber",
-  SRV: "pink",
-};
-
 export function dnsSummary(checks: DnsCheck[] | undefined): { ok: number; required: number; problems: number } {
   const list = checks ?? [];
   const required = list.filter((c) => c.required);
@@ -605,72 +590,13 @@ export function DnsStep({ onBack, onNext }: StepProps) {
 
           <DnsAutoSetupCard key={selected} domain={selected} defaultIpv4={defaultIpv4} onApplied={() => void check.refetch()} />
 
-          <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
-            {check.isLoading ? (
-              <SkeletonRows rows={5} cols={4} />
-            ) : check.error ? (
-              <ErrorState error={check.error} onRetry={() => void check.refetch()} />
-            ) : !check.data || check.data.length === 0 ? (
-              <EmptyState compact title="Keine Einträge" />
-            ) : (
-              <Table>
-                <THead>
-                  <tr>
-                    <Th className="w-28">Status</Th>
-                    <Th className="w-20">Typ</Th>
-                    <Th className="min-w-[12rem]">Name</Th>
-                    <Th className="min-w-[16rem]">Erwarteter Wert</Th>
-                    <Th className="min-w-[11rem]">Gefunden</Th>
-                  </tr>
-                </THead>
-                <TBody>
-                  {check.data.map((r, i) => (
-                    <Tr key={`${r.type}-${r.name}-${i}`}>
-                      <Td className="align-top">
-                        <CheckBadge status={r.status} required={r.required} />
-                      </Td>
-                      <Td className="align-top">
-                        <Badge tone={typeTones[r.type] ?? "neutral"} className="font-mono">
-                          {r.type}
-                        </Badge>
-                      </Td>
-                      <Td className="align-top">
-                        <div className="flex items-start gap-1">
-                          <code className="break-all font-mono text-[13px] text-zinc-800 dark:text-zinc-200">{r.name}</code>
-                          <CopyButton value={r.name} />
-                        </div>
-                        <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                          {r.purpose}
-                          {!r.required && " · optional"}
-                        </div>
-                      </Td>
-                      <Td className="align-top">
-                        <div className="flex max-w-md items-start gap-1">
-                          <code className="block max-h-24 min-w-[10rem] flex-1 overflow-y-auto break-all rounded-md bg-zinc-50 px-2 py-1 font-mono text-xs leading-relaxed text-zinc-700 ring-1 ring-inset ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-300 dark:ring-zinc-800">
-                            {r.expected}
-                          </code>
-                          <CopyButton value={r.expected} />
-                        </div>
-                      </Td>
-                      <Td className="max-w-xs align-top">
-                        {r.found.length === 0 ? (
-                          <span className="text-xs italic text-zinc-400 dark:text-zinc-500">nicht gefunden</span>
-                        ) : (
-                          <div className="space-y-1">
-                            {r.found.map((v, j) => (
-                              <code key={j} className="block break-all font-mono text-xs text-zinc-600 dark:text-zinc-400">
-                                {v}
-                              </code>
-                            ))}
-                          </div>
-                        )}
-                      </Td>
-                    </Tr>
-                  ))}
-                </TBody>
-              </Table>
-            )}
-          </div>
+          {check.error && (
+            <Notice tone="error" icon={CircleX} title="Prüfung fehlgeschlagen">
+              {errorMessage(check.error)}
+            </Notice>
+          )}
+
+          <DnsRecordGuide domain={selected} check={check.data ?? []} checking={check.isFetching} compact />
 
           <Notice tone="info" icon={Info}>
             DNS-Änderungen können je nach TTL einige Minuten bis Stunden brauchen, bis sie überall sichtbar sind. Du kannst

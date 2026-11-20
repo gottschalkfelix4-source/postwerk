@@ -146,18 +146,22 @@ Compose-Dateien ohne die Zeile `"993:9930"` ergänzen und `docker compose up -d`
 cd /opt/postwerk && docker compose pull && docker compose up -d
 ```
 
-**Backup** (konsistent im laufenden Betrieb):
+**Backup:** Unter **Verwaltung → Backup → Einstellungen** das Ziel wählen und den Zeitplan
+einschalten. Auf einem VPS empfiehlt sich ein Ziel außerhalb des Servers, z. B. eine
+Hetzner Storage Box oder Nextcloud per **WebDAV** oder ein NAS zu Hause per **SMB**, dazu
+**Archive verschlüsseln** mit einem Passwort, das du außerhalb des Servers aufbewahrst.
+„Speicherziel testen“ prüft Schreiben, Auflisten und Löschen.
+
+Von der Kommandozeile geht es auch (landet in `/data/backups`, also im Volume `postwerk_postwerk-data`):
 
 ```bash
-docker compose exec postwerk postwerk backup /data/backups
+docker compose exec postwerk postwerk backup
 ```
 
-Die Sicherungen liegen im Volume `postwerk_postwerk-data`. Täglich automatisch per Cron
-(`crontab -e`):
-
-```
-30 3 * * * cd /opt/postwerk && docker compose exec -T postwerk postwerk backup /data/backups
-```
+**Wiederherstellen:** Verwaltung → Backup → beim Archiv auf ↺ klicken. Der Server spielt das Archiv
+ein und startet neu (10–30 Sekunden). Der vorherige Stand bleibt einmalig unter
+`/data/pre-restore-<zeit>` erhalten. Auf einem neuen Server: Postwerk starten, Archiv unter
+Verwaltung → Backup hochladen und wiederherstellen.
 
 **Logs:**
 

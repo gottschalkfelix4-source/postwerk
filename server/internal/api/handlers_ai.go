@@ -190,7 +190,7 @@ func (s *Server) aiReclassify(w http.ResponseWriter, r *http.Request, u *store.A
 	}
 	p, _ := s.parsed(m)
 	start := time.Now()
-	a, err := s.AI.Analyze(r.Context(), m, p)
+	a, err := s.AI.Analyze(r.Context(), m, p, s.AIWorker.FolderChoices(r.Context(), m))
 	if err := aiErr("classify", err); err != nil {
 		return nil, err
 	}

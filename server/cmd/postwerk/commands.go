@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"postwerk/internal/auth"
+	"postwerk/internal/backup"
 	"postwerk/internal/config"
 	"postwerk/internal/store"
 )
@@ -19,7 +19,9 @@ const usage = `Verwendung: postwerk [befehl]
 
   serve                         Server starten (Standard)
   version                       Version ausgeben
-  backup <zielordner>           Konsistente Sicherung von Datenbank und Mails anlegen
+  backup [zielordner]           Archiv des gesamten Systems anlegen (Standard: <daten>/backups;
+                                verschlüsselt, wenn in der Oberfläche ein Backup-Passwort gesetzt ist)
+  restore <archiv> [passwort]   Archiv beim nächsten Start einspielen (danach Container neu starten)
   reset-password <e-mail> <pw>  Passwort eines Kontos setzen (und 2FA zurücksetzen)
   setup-token                   Setup-Token für die Ersteinrichtung anzeigen
   http-port open|redirect|auto-close
@@ -30,10 +32,23 @@ func command(cfg *config.Config, args []string) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "backup":
-		if len(args) != 2 {
-			return errors.New("Zielordner fehlt\n\n" + usage)
+		if len(args) > 2 {
+			return errors.New("zu viele Argumente\n\n" + usage)
 		}
-		return backup(ctx, cfg, args[1])
+		dir := filepath.Join(cfg.DataDir, "backups")
+		if len(args) == 2 {
+			dir = args[1]
+		}
+		return createBackup(ctx, cfg, dir)
+	case "restore":
+		if len(args) < 2 || len(args) > 3 {
+			return errors.New("Archiv angeben\n\n" + usage)
+		}
+		pw := ""
+		if len(args) == 3 {
+			pw = args[2]
+		}
+		return prepareRestore(ctx, cfg, args[1], pw)
 	case "reset-password":
 		if len(args) != 3 {
 			return errors.New("E-Mail und Passwort angeben\n\n" + usage)
@@ -79,66 +94,91 @@ func resetPassword(ctx context.Context, cfg *config.Config, email, pw string) er
 	return nil
 }
 
-// backup writes a consistent SQLite snapshot (VACUUM INTO) plus all blobs,
-// TLS material and DKIM keys (which live in the database) into dir/<timestamp>.
-func backup(ctx context.Context, cfg *config.Config, dir string) error {
+// createBackup writes an archive of the whole system (database snapshot,
+// mails, certificates) into dir. It runs safely next to a live server.
+func createBackup(ctx context.Context, cfg *config.Config, dir string) error {
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	target := filepath.Join(dir, "postwerk-"+time.Now().Format("20060102-150405"))
-	if err := os.MkdirAll(target, 0o750); err != nil {
+	settings, err := st.LoadSettings(ctx, cfg.Hostname)
+	if err != nil {
 		return err
 	}
-	dbPath := filepath.Join(target, "postwerk.db")
-	if _, err := st.DB.ExecContext(ctx, `VACUUM INTO ?`, dbPath); err != nil {
-		return fmt.Errorf("datenbank sichern: %w", err)
+	set := settings.Get()
+	password := ""
+	if set.Backup.Encrypt {
+		password = set.Backup.Password
 	}
-	n := 0
-	for _, sub := range []string{"blobs", "tls", "acme"} {
-		src := filepath.Join(cfg.DataDir, sub)
-		if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		c, err := copyTree(src, filepath.Join(target, sub))
-		if err != nil {
-			return fmt.Errorf("%s sichern: %w", sub, err)
-		}
-		n += c
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
 	}
-	fmt.Printf("Sicherung angelegt: %s (%d Dateien)\nWiederherstellen: Inhalt dieses Ordners als Datenverzeichnis verwenden.\n", target, n+1)
+	name := backup.NewName(time.Now(), password != "")
+	tmp := filepath.Join(dir, name+".part")
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return err
+	}
+	runID, runErr := st.StartBackupRun(ctx, "manual", dir)
+	finish := func(size int64, files int, err error) {
+		if runErr == nil {
+			_ = st.FinishBackupRun(ctx, runID, name, size, files, err)
+		}
+	}
+	man := backup.Manifest{Version: version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC()}
+	man.Domains, man.Accounts, man.Messages, _ = st.BackupCounts(ctx)
+	n, err := backup.Create(ctx, f, backup.Source{DataDir: cfg.DataDir, DB: st.DB, Manifest: man, Exclude: []string{dir}}, password)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	target := filepath.Join(dir, name)
+	if err == nil {
+		err = os.Rename(tmp, target)
+	}
+	if err != nil {
+		os.Remove(tmp)
+		finish(0, 0, err)
+		return err
+	}
+	chownLike(dir, cfg.DataDir)
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	finish(info.Size(), n, nil)
+	enc := "unverschlüsselt"
+	if password != "" {
+		enc = "verschlüsselt"
+	}
+	fmt.Printf("Sicherung angelegt: %s (%d Dateien, %.1f MB, %s)\n", target, n, float64(info.Size())/(1<<20), enc)
 	return nil
 }
 
-func copyTree(src, dst string) (int, error) {
-	n := 0
-	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+// prepareRestore unpacks an archive; it is swapped in on the next start.
+func prepareRestore(ctx context.Context, cfg *config.Config, archive, password string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if password == "" {
+		if st, err := store.Open(cfg.DataDir); err == nil {
+			if settings, err := st.LoadSettings(ctx, cfg.Hostname); err == nil {
+				password = settings.Get().Backup.Password
+			}
+			st.Close()
 		}
-		rel, _ := filepath.Rel(src, p)
-		out := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(out, 0o750)
-		}
-		in, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		f, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(f, in); err != nil {
-			f.Close()
-			return err
-		}
-		n++
-		return f.Close()
-	})
-	return n, err
+	}
+	man, err := backup.PrepareRestore(ctx, f, password, cfg.DataDir, filepath.Base(archive))
+	if err != nil {
+		return err
+	}
+	chownLike(backup.StagingDir(cfg.DataDir), cfg.DataDir)
+	chownLike(filepath.Join(cfg.DataDir, "restore-pending"), cfg.DataDir)
+	fmt.Printf("Archiv vom %s geprüft (%d Konten, %d Nachrichten).\nJetzt den Container neu starten: docker compose restart postwerk\nDie bisherigen Daten bleiben in %s/pre-restore-<zeit> erhalten.\n",
+		man.CreatedAt.Local().Format("02.01.2006 15:04"), man.Accounts, man.Messages, cfg.DataDir)
+	return nil
 }
 
 // showSetupToken prints the token for the setup assistant or explains why

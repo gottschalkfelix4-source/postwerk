@@ -509,6 +509,11 @@ func (s *Server) maskedSettings() store.Settings {
 	if cur.Relay.Password != "" {
 		cur.Relay.Password = mask
 	}
+	for _, p := range []*string{&cur.Backup.Password, &cur.Backup.Target.WebDAV.Password, &cur.Backup.Target.SMB.Password} {
+		if *p != "" {
+			*p = mask
+		}
+	}
 	cur.TLS.Status = s.TLS.Status()
 	if s.HTTPPort != nil {
 		_, cur.TLS.HTTPStatus = s.HTTPPort.Status()
@@ -529,9 +534,11 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	oldKey, oldToken, oldACME := cur.AI.APIKey, cur.DMS.Paperless.Token, cur.TLS.ACME
 	oldEmbedKey := cur.AI.EmbeddingAPIKey
 	oldDyn, oldRelay := cur.DynDNS.Password, cur.Relay.Password
+	oldBackup := cur.Backup
 	sections := map[string]any{
 		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
 		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security, "dyndns": &cur.DynDNS, "relay": &cur.Relay,
+		"backup": &cur.Backup,
 	}
 	for k, raw := range patch {
 		target, known := sections[k]
@@ -557,6 +564,18 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	if cur.DMS.Paperless.Token == mask {
 		cur.DMS.Paperless.Token = oldToken
 	}
+	for _, p := range []struct {
+		cur *string
+		old string
+	}{
+		{&cur.Backup.Password, oldBackup.Password},
+		{&cur.Backup.Target.WebDAV.Password, oldBackup.Target.WebDAV.Password},
+		{&cur.Backup.Target.SMB.Password, oldBackup.Target.SMB.Password},
+	} {
+		if *p.cur == mask {
+			*p.cur = p.old
+		}
+	}
 	cur.TLS.Status = ""
 	if err := validateSettings(&cur); err != nil {
 		return nil, err
@@ -575,6 +594,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	if s.AIWorker != nil {
 		s.AIWorker.Notify()
 	}
+	if s.Backups != nil && patch["backup"] != nil {
+		s.Backups.Notify()
+	}
 	if s.DynDNS != nil && patch["dyndns"] != nil {
 		s.DynDNS.Notify()
 	}
@@ -585,6 +607,26 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 }
 
 func validateSettings(c *store.Settings) error {
+	if err := validateBackup(&c.Backup); err != nil {
+		return err
+	}
+	switch c.AI.AutoFile.Mode {
+	case "", "categories":
+		c.AI.AutoFile.Mode = "categories"
+	case "folders":
+	default:
+		return invalid("Ungültiger Modus für das Einsortieren")
+	}
+	for k, v := range c.AI.AutoFile.CategoryFolders {
+		v = strings.Trim(strings.TrimSpace(v), "/")
+		if len(v) > 200 || strings.Contains(v, "//") {
+			return invalid("Ungültiger Ordnername für Kategorie " + k)
+		}
+		if strings.EqualFold(v, "INBOX") || strings.EqualFold(v, "Posteingang") {
+			v = ""
+		}
+		c.AI.AutoFile.CategoryFolders[k] = v
+	}
 	c.Server.Hostname = strings.TrimSpace(strings.ToLower(c.Server.Hostname))
 	if c.Server.Hostname == "" {
 		return invalid("Hostname darf nicht leer sein")

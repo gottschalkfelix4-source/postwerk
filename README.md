@@ -9,8 +9,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 - **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung und automatischem Eintragen der
   DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
-- **KI:** Spam-/Phishing-Erkennung, Kategorien, Prioritäten, Zusammenfassungen, Antwortentwürfe,
-  semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – **lokal mit Ollama**
+- **KI:** Spam-/Phishing-Erkennung, Kategorien, Prioritäten, automatisches Einsortieren in Ordner,
+  Zusammenfassungen, Antwortentwürfe, semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – **lokal mit Ollama**
   oder über externe Dienste mit **OpenAI-kompatibler** (OpenAI, OpenRouter, Mistral, vLLM …) oder
   **Anthropic-kompatibler** API (Claude)
 
@@ -107,9 +107,20 @@ ergänzt. Die Umgebungsvariablen `POSTWERK_RELAY_*` funktionieren weiterhin und 
 
 ### Backup und Notfall-Zugang
 
+Unter **Verwaltung → Backup** legst du Sicherungen des gesamten Systems an: Datenbank, alle Mails,
+Kalender, Einstellungen, DKIM-Schlüssel und Zertifikate in einem Archiv. Die Archive liegen lokal,
+auf einem **WebDAV**-Speicher (Nextcloud, Synology, Hetzner Storage Box …) oder auf einer
+**SMB-Freigabe** (NAS, Unraid, Windows). Dazu gibt es Zeitplan, Aufbewahrung, Verschlüsselung mit
+Passwort (AES-256), Herunterladen, Hochladen und Wiederherstellen per Klick. Bei einer Wiederherstellung
+startet der Server kurz neu, der vorherige Stand bleibt unter `/data/pre-restore-…` erhalten.
+
 ```bash
-# Konsistente Sicherung (Datenbank-Snapshot + Mails + Zertifikate), läuft auch im Betrieb
-docker compose exec postwerk postwerk backup /data/backups
+# Sicherung von der Kommandozeile (Standard: /data/backups), läuft auch im Betrieb
+docker compose exec postwerk postwerk backup
+
+# Archiv beim nächsten Start einspielen, danach neu starten
+docker compose exec postwerk postwerk restore /data/backups/postwerk-20261121-033000.tar.gz.enc
+docker compose restart postwerk
 
 # Passwort eines Kontos setzen und 2FA zurücksetzen
 docker compose exec postwerk postwerk reset-password admin@example.com 'neues-langes-passwort'
@@ -145,6 +156,7 @@ server/
   internal/mailauth/   SPF, DKIM, DMARC
   internal/spam/       Spam-Scoring, Bayes, DNSBL, Greylisting
   internal/av/         ClamAV-Client
+  internal/backup/     Archive, Verschlüsselung, Ziele (lokal, WebDAV, SMB), Zeitplan, Wiederherstellung
   internal/ai/         KI-Client (OpenAI-/Anthropic-kompatibel), Analyse-Worker, Embeddings
   internal/dms/        Paperless-ngx
   internal/migrate/    IMAP-Migration, mbox/eml/zip-Import

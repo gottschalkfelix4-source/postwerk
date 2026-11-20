@@ -19,6 +19,7 @@ const Logs = lazy(() => import("@/pages/admin/Logs"));
 const Security = lazy(() => import("@/pages/admin/Security"));
 const Metrics = lazy(() => import("@/pages/admin/Metrics"));
 const SettingsPage = lazy(() => import("@/pages/admin/settings/SettingsPage"));
+const BackupPage = lazy(() => import("@/pages/admin/backup/BackupPage"));
 const MigrationList = lazy(() => import("@/pages/admin/migration/MigrationList"));
 const MigrationNew = lazy(() => import("@/pages/admin/migration/MigrationNew"));
 const MigrationDetail = lazy(() => import("@/pages/admin/migration/MigrationDetail"));
@@ -86,6 +87,7 @@ export const router = createBrowserRouter([
                   },
                 ],
               },
+              { path: "backup", element: <BackupPage />, handle: h({ crumb: "Backup" }) },
               { path: "queue", element: <Queue />, handle: h({ crumb: "Warteschlange" }) },
               { path: "logs", element: <Logs />, handle: h({ crumb: "Logs" }) },
               { path: "security", element: <Security />, handle: h({ crumb: "Sicherheit" }) },

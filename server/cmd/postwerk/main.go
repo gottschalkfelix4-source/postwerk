@@ -20,16 +20,17 @@ import (
 	"postwerk/internal/ai"
 	"postwerk/internal/api"
 	"postwerk/internal/auth"
+	"postwerk/internal/backup"
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
 	"postwerk/internal/dms"
 	"postwerk/internal/dyndns"
 	"postwerk/internal/httpport"
+	"postwerk/internal/imapd"
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
 	"postwerk/internal/migrate"
-	"postwerk/internal/imapd"
 	"postwerk/internal/pop3"
 	"postwerk/internal/queue"
 	"postwerk/internal/smtp"
@@ -57,15 +58,37 @@ func main() {
 	ring := logx.NewRing(5000)
 	log := logx.New(ring, cfg.Debug)
 	slog.SetDefault(log)
-	if err := run(cfg, ring, log); err != nil {
+	err := run(cfg, ring, log)
+	if errors.Is(err, errRestart) {
+		log.Warn("restarting", "component", "backup")
+		if err := reexec(); err != nil {
+			log.Error("restart failed – please restart the container", "err", err)
+			os.Exit(1)
+		}
+	}
+	if err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
+// errRestart ends run so main can start the process again (after a restore).
+var errRestart = errors.New("restart requested")
+
 func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(sigCtx)
+	defer cancel()
+	restart := false
+
+	// A restore prepared in the web interface is swapped in before the
+	// database is opened.
+	if name, err := backup.ApplyPending(cfg.DataDir); err != nil {
+		log.Error("restore failed, keeping current data", "component", "backup", "err", err)
+	} else if name != "" {
+		log.Warn("backup restored", "component", "backup", "archive", name)
+	}
 
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -124,6 +147,10 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	dyn := dyndns.New(settings, log)
 	go dyn.Run(ctx)
 
+	backups := &backup.Manager{Store: st, Settings: settings, DataDir: cfg.DataDir, Version: version, Log: log,
+		Restart: func() { restart = true; cancel() }}
+	go backups.Run(ctx)
+
 	go q.Run(ctx)
 	go aiWorker.Run(ctx)
 	go housekeeping(ctx, st)
@@ -170,7 +197,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	apiSrv := &api.Server{
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
-		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn,
+		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn, Backups: backups,
 	}
 	handler := apiSrv.Handler()
 	httpCtl := &httpport.Controller{
@@ -207,6 +234,9 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	select {
 	case <-ctx.Done():
 		log.Info("shutting down")
+		if restart && sigCtx.Err() == nil {
+			return errRestart
+		}
 		return nil
 	case err := <-errc:
 		return err

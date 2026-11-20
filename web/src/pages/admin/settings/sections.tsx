@@ -114,7 +114,7 @@ function Shell({
   );
 }
 
-function NumberInput({
+export function NumberInput({
   id,
   value,
   onChange,
@@ -151,7 +151,7 @@ function NumberInput({
 }
 
 /** Password-style input for masked secrets: shows a hint when a value is stored. */
-function SecretInput({ id, value, onChange, placeholder }: { id?: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+export function SecretInput({ id, value, onChange, placeholder }: { id?: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
   const masked = value === MASK;
   return (
     <PasswordInput
@@ -704,7 +704,11 @@ export function AiSection({ settings, save, saving }: SectionProps) {
   const set = (patch: Partial<Settings["ai"]>) => setDraft((d) => ({ ...d, ...patch }));
 
   const onSave = () => {
-    const payload: SettingsUpdate["ai"] = { ...draft };
+    // Send every category explicitly ("" = not filed): saved maps are merged.
+    const categoryFolders: Record<string, string> = {};
+    for (const k of Object.keys(draft.autoFile.categoryFolders)) categoryFolders[k] = "";
+    for (const c of draft.categories) categoryFolders[c] = (draft.autoFile.categoryFolders[c] ?? "").trim();
+    const payload: SettingsUpdate["ai"] = { ...draft, autoFile: { ...draft.autoFile, categoryFolders } };
     if (draft.apiKey === settings.ai.apiKey) delete payload.apiKey;
     if (draft.embeddingApiKey === settings.ai.embeddingApiKey) delete payload.embeddingApiKey;
     save({ ai: payload });
@@ -768,7 +772,111 @@ export function AiSection({ settings, save, saving }: SectionProps) {
           )}
         </Field>
       </FormSection>
+      <AutoFileSection
+        value={draft.autoFile}
+        categories={draft.categories}
+        aiEnabled={draft.enabled}
+        classify={draft.features.classify}
+        onChange={(autoFile) => set({ autoFile })}
+      />
     </Shell>
+  );
+}
+
+function AutoFileSection({
+  value,
+  categories,
+  aiEnabled,
+  classify,
+  onChange,
+}: {
+  value: Settings["ai"]["autoFile"];
+  categories: string[];
+  aiEnabled: boolean;
+  classify: boolean;
+  onChange: (v: Settings["ai"]["autoFile"]) => void;
+}) {
+  const set = (patch: Partial<Settings["ai"]["autoFile"]>) => onChange({ ...value, ...patch });
+  const disabled = !aiEnabled || !value.enabled;
+  return (
+    <FormSection
+      title="In Ordner einsortieren"
+      description="Die KI verschiebt passende Nachrichten nach der Analyse aus dem Posteingang in einen Ordner – auch in Mail-Apps per IMAP sichtbar."
+    >
+      <SwitchRow
+        label="Automatisch einsortieren"
+        description="Nur Nachrichten, die noch im Posteingang liegen. Spam und Phishing landen weiterhin im Spam-Ordner."
+        checked={value.enabled}
+        disabled={!aiEnabled}
+        onChange={(v) => set({ enabled: v })}
+      />
+      <Field label="Zielordner">
+        {() => (
+          <div className={cn("grid gap-2.5 sm:grid-cols-2", disabled && "pointer-events-none opacity-50")} role="radiogroup" aria-label="Zielordner">
+            {(
+              [
+                { mode: "categories", title: "Nach Kategorie", text: "Jede Kategorie bekommt einen festen Ordner. Fehlende Ordner werden pro Konto angelegt." },
+                { mode: "folders", title: "Eigene Ordner der Benutzer", text: "Die KI wählt aus den Ordnern, die jeder Benutzer selbst angelegt hat. Es werden keine neuen Ordner erstellt." },
+              ] as const
+            ).map((o) => (
+              <button
+                key={o.mode}
+                type="button"
+                role="radio"
+                aria-checked={value.mode === o.mode}
+                onClick={() => set({ mode: o.mode })}
+                className={cn(
+                  "flex flex-col gap-1 rounded-xl border p-3 text-left transition",
+                  value.mode === o.mode
+                    ? "border-indigo-400 bg-indigo-50/60 ring-1 ring-indigo-400 dark:border-indigo-500/60 dark:bg-indigo-500/10 dark:ring-indigo-500/60"
+                    : "border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/50",
+                )}
+              >
+                <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{o.title}</span>
+                <span className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">{o.text}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
+      {value.mode === "categories" && (
+        <Field label="Ordner je Kategorie" help="Leer = bleibt im Posteingang. Unterordner mit „/“, z. B. Finanzen/Rechnungen.">
+          {() =>
+            categories.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Lege oben zuerst Kategorien an.</p>
+            ) : (
+              <div className="space-y-2">
+                {!classify && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
+                    <Info className="h-3.5 w-3.5" /> Dafür muss die Funktion „Kategorisierung“ eingeschaltet sein.
+                  </p>
+                )}
+                {categories.map((c) => (
+                  <div key={c} className="grid grid-cols-[8rem_auto_1fr] items-center gap-3 sm:grid-cols-[10rem_auto_1fr]">
+                    <Badge tone="indigo" className="justify-self-start">{c}</Badge>
+                    <ArrowRight className="h-4 w-4 text-zinc-400" />
+                    <Input
+                      value={value.categoryFolders[c] ?? ""}
+                      disabled={disabled}
+                      placeholder="bleibt im Posteingang"
+                      aria-label={`Ordner für ${c}`}
+                      onChange={(e) => set({ categoryFolders: { ...value.categoryFolders, [c]: e.target.value } })}
+                    />
+                  </div>
+                ))}
+              </div>
+            )
+          }
+        </Field>
+      )}
+      <SwitchRow
+        label="Wichtige Nachrichten im Posteingang lassen"
+        description="Als dringend erkannte Nachrichten (Fristen, Mahnungen, persönliche Bitten) werden nicht verschoben."
+        checked={value.keepImportant}
+        disabled={disabled}
+        onChange={(v) => set({ keepImportant: v })}
+      />
+    </FormSection>
   );
 }
 

@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRightLeft,
+  ArchiveRestore,
   AtSign,
   CalendarDays,
   Globe,
@@ -44,7 +45,10 @@ export const adminNav: NavGroup[] = [
   },
   {
     title: "Daten",
-    items: [{ to: "/admin/migration", label: "Migration", icon: ArrowRightLeft, keywords: "import umzug imap gmail outlook" }],
+    items: [
+      { to: "/admin/migration", label: "Migration", icon: ArrowRightLeft, keywords: "import umzug imap gmail outlook" },
+      { to: "/admin/backup", label: "Backup", icon: ArchiveRestore, keywords: "sicherung wiederherstellen archiv webdav smb nas" },
+    ],
   },
   {
     title: "Warteschlange",

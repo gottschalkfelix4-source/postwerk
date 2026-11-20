@@ -23,7 +23,8 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | Virenscan über ClamAV (INSTREAM) mit Ablehnen oder Quarantäne | ✅ |
 | Sicherheit | 2FA (TOTP), App-Passwörter, Brute-Force-Sperre für Web, SMTP, IMAP und POP3 | ✅ |
 | Betrieb | Web-Verwaltung, REST-API, Live-Logs, Prometheus-Metriken, Dashboard | ✅ |
-| | Backup-Befehl (konsistenter Snapshot im laufenden Betrieb), Notfall-Passwort-Reset | ✅ |
+| | Backup im Web-Interface: Archive lokal, per WebDAV oder SMB, Zeitplan, Aufbewahrung, AES-256-Verschlüsselung, Download/Upload, Wiederherstellung per Klick | ✅ |
+| | Backup-/Restore-Befehl, Notfall-Passwort-Reset | ✅ |
 | | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus „testing“) | ✅ |
 | Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen | ✅ |
 | | Abwesenheitsnotiz | ✅ |
@@ -36,6 +37,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | KI | OpenAI-kompatible Endpunkte (Ollama, vLLM, LocalAI, OpenAI …) und Anthropic-kompatible API, eigener Embedding-Endpunkt | ✅ |
 | | LLM-Spam- und Phishing-Erkennung | ✅ |
 | | Kategorien und Tags, Priorität / dringende Mails | ✅ |
+| | Automatisch in Ordner einsortieren (je Kategorie oder in die eigenen Ordner der Benutzer) | ✅ |
 | | Zusammenfassungen von Mails und Threads | ✅ |
 | | Antwortentwürfe mit Ton und eigener Anweisung | ✅ |
 | | Semantische Suche über Embeddings | ✅ |
@@ -62,7 +64,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 - ⏳ LDAP-Verzeichnis als Kontenquelle
 - ⏳ OIDC-SSO (z. B. Authentik, Keycloak) für die Weboberfläche, OAUTHBEARER für Clients
 - ⏳ Verschlüsselung im Ruhezustand: eingehende Mails mit dem S/MIME- oder OpenPGP-Schlüssel des Kontos verschlüsseln
-- ⏳ Backups: Zeitplan in der Oberfläche, Aufbewahrung, S3-Ziel, Export/Import einzelner Postfächer
+- ⏳ Backups: S3-Ziel, Wiederherstellen einzelner Postfächer aus einem Archiv
 - ⏳ Postgres als alternativer Metadatenspeicher, S3 für Blobs
 
 ## Meilenstein 5 – Feinschliff

@@ -113,6 +113,14 @@ export interface Settings {
     features: { spamCheck: boolean; classify: boolean; priority: boolean; summarize: boolean;
                 replyDraft: boolean; semanticSearch: boolean; extractEvents: boolean };
     categories: string[];          // e.g. ["Rechnung","Newsletter","Support","Privat"]
+    /** Move analyzed messages out of the inbox into folders. */
+    autoFile: {
+      enabled: boolean;
+      /** "categories": one folder per category (created on demand); "folders": AI picks one of the user's own folders. */
+      mode: "categories" | "folders";
+      categoryFolders: Record<string, string>;   // category → folder name ("" = stays in the inbox)
+      keepImportant: boolean;                    // high priority stays in the inbox
+    };
   };
   dms: { paperless: { enabled: boolean; url: string; token: string /* masked */; autoForward: boolean; categories: string[] } };
   security: { bruteForce: { maxAttempts: number; windowSeconds: number; banSeconds: number } };
@@ -136,7 +144,57 @@ export interface Settings {
     password: string;             // masked
     spfInclude: string;           // e.g. "include:_spf.strato.com" – added to the SPF suggestion
   };
+  backup: BackupSettings;
 }
+
+export type BackupTargetType = "local" | "webdav" | "smb";
+export type BackupFrequency = "hourly" | "daily" | "weekly";
+
+export interface BackupTarget {
+  type: BackupTargetType;
+  localPath: string;              // empty = <data>/backups
+  webdav: { url: string; username: string; password: string /* masked */; skipTlsVerify: boolean };
+  smb: { host: string; port: number; share: string; path: string; username: string; password: string /* masked */; domain: string };
+}
+
+export interface BackupSettings {
+  target: BackupTarget;
+  schedule: { enabled: boolean; frequency: BackupFrequency; time: string /* HH:MM */; weekday: number /* 0 = Sonntag */ };
+  keep: number;                   // archives kept on the target (0 = all)
+  encrypt: boolean;
+  password: string;               // masked
+}
+
+export interface BackupArchive { name: string; size: number; modified: string; encrypted: boolean; }
+
+export interface BackupJob {
+  kind: "backup" | "restore";
+  trigger: string;
+  archive: string;
+  phase: string;
+  done: number;
+  total: number;
+  startedAt: string;
+}
+
+export interface BackupResult { kind: "backup" | "restore"; archive: string; ok: boolean; error?: string; finishedAt: string; }
+
+export interface BackupStatus { job: BackupJob | null; last: BackupResult | null; target: string; nextRun: string | null; }
+
+export interface BackupRun {
+  id: number;
+  trigger: "manual" | "schedule" | "restore";
+  status: "running" | "success" | "failed";
+  archive: string;
+  target: string;
+  size: number;
+  files: number;
+  error: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface BackupTestResult { ok: boolean; target: string; archives: number; latencyMs: number; error?: string; }
 
 export interface Mailbox { id: number; name: string; role: "inbox" | "sent" | "drafts" | "trash" | "junk" | "archive" | null; total: number; unread: number; }
 

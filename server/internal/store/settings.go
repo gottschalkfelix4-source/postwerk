@@ -19,6 +19,45 @@ type Settings struct {
 	Security  SecuritySettings  `json:"security"`
 	DynDNS    DynDNSSettings    `json:"dyndns"`
 	Relay     RelaySettings     `json:"relay"`
+	Backup    BackupSettings    `json:"backup"`
+}
+
+// BackupSettings configure automatic archives of the whole system.
+type BackupSettings struct {
+	Target   BackupTarget   `json:"target"`
+	Schedule BackupSchedule `json:"schedule"`
+	// Keep is the number of archives kept on the target (0 = keep all).
+	Keep int `json:"keep"`
+	// Encrypt protects archives with Password (AES-256-GCM, key via scrypt).
+	Encrypt  bool   `json:"encrypt"`
+	Password string `json:"password"`
+}
+
+type BackupTarget struct {
+	Type      string `json:"type"` // local | webdav | smb
+	LocalPath string `json:"localPath"`
+	WebDAV    struct {
+		URL           string `json:"url"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		SkipTLSVerify bool   `json:"skipTlsVerify"`
+	} `json:"webdav"`
+	SMB struct {
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		Share    string `json:"share"`
+		Path     string `json:"path"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Domain   string `json:"domain"`
+	} `json:"smb"`
+}
+
+type BackupSchedule struct {
+	Enabled   bool   `json:"enabled"`
+	Frequency string `json:"frequency"` // hourly | daily | weekly
+	Time      string `json:"time"`      // HH:MM (daily, weekly)
+	Weekday   int    `json:"weekday"`   // 0 = Sonntag (weekly)
 }
 
 // DynDNSSettings keep the mail host's A record current on dynamic IPs.
@@ -136,6 +175,19 @@ type AISettings struct {
 	TimeoutSeconds   int        `json:"timeoutSeconds"`
 	Features         AIFeatures `json:"features"`
 	Categories       []string   `json:"categories"`
+	AutoFile         AIAutoFile `json:"autoFile"`
+}
+
+// AIAutoFile moves analyzed messages out of the inbox into folders.
+type AIAutoFile struct {
+	Enabled bool `json:"enabled"`
+	// Mode "categories": one folder per AI category (CategoryFolders, created
+	// on demand). Mode "folders": the AI picks one of the account's own
+	// existing folders.
+	Mode            string            `json:"mode"`
+	CategoryFolders map[string]string `json:"categoryFolders"`
+	// KeepImportant leaves high-priority messages in the inbox.
+	KeepImportant bool `json:"keepImportant"`
 }
 
 type DMSSettings struct {
@@ -189,11 +241,17 @@ func DefaultSettings(hostname string) Settings {
 	s.AI.TimeoutSeconds = 120
 	s.AI.Features = AIFeatures{SpamCheck: true, Classify: true, Priority: true, Summarize: true, ReplyDraft: true, SemanticSearch: true, ExtractEvents: true}
 	s.AI.Categories = []string{"Rechnung", "Newsletter", "Support", "Privat", "Arbeit", "Versand", "Termin"}
+	s.AI.AutoFile = AIAutoFile{Mode: "categories", KeepImportant: true,
+		CategoryFolders: map[string]string{"Rechnung": "Rechnungen", "Newsletter": "Newsletter", "Versand": "Versand"}}
 	s.DMS.Paperless.URL = "http://paperless:8000"
 	s.DMS.Paperless.Categories = []string{"Rechnung"}
 	s.DynDNS = DynDNSSettings{Preset: "strato", UpdateURL: "https://dyndns.strato.com/nic/update", Hostnames: []string{},
 		IPCheckURL: "https://api.ipify.org", IntervalMinutes: 5}
 	s.Relay = RelaySettings{Preset: "strato", Host: "smtp.strato.de", Port: 465, Security: "tls", SPFInclude: "include:_spf.strato.com"}
+	s.Backup.Target.Type = "local"
+	s.Backup.Target.SMB.Port = 445
+	s.Backup.Schedule = BackupSchedule{Frequency: "daily", Time: "03:30", Weekday: 0}
+	s.Backup.Keep = 7
 	s.Security.BruteForce.MaxAttempts = 5
 	s.Security.BruteForce.WindowSeconds = 600
 	s.Security.BruteForce.BanSeconds = 3600
@@ -233,6 +291,12 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	}
 	if cur.TLS.HTTPPort == "" {
 		cur.TLS.HTTPPort = "open"
+	}
+	if cur.AI.AutoFile.CategoryFolders == nil {
+		cur.AI.AutoFile.CategoryFolders = map[string]string{}
+	}
+	if cur.AI.AutoFile.Mode == "" {
+		cur.AI.AutoFile.Mode = "categories"
 	}
 	if cur.Web.TrustedProxies == nil {
 		cur.Web.TrustedProxies = []string{}

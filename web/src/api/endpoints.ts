@@ -5,6 +5,11 @@ import type {
   AiTestResult,
   Alias,
   AppPassword,
+  BackupArchive,
+  BackupRun,
+  BackupStatus,
+  BackupTarget,
+  BackupTestResult,
   Ban,
   BulkRequest,
   CalendarEvent,
@@ -159,6 +164,16 @@ export const adminApi = {
   /** Tests the stored smarthost settings (connection, TLS, login). */
   testRelay: () => http.post<RelayTestResult>("/api/admin/relay/test"),
 
+  backupStatus: () => http.get<{ status: BackupStatus; runs: BackupRun[] }>("/api/admin/backups/status"),
+  backupArchives: () => http.get<{ archives: BackupArchive[]; error?: string }>("/api/admin/backups"),
+  startBackup: () => http.post<BackupStatus>("/api/admin/backups"),
+  deleteBackup: (name: string) => http.delete<Ok>(`/api/admin/backups/${encodeURIComponent(name)}`),
+  restoreBackup: (name: string, password: string) =>
+    http.post<BackupStatus>(`/api/admin/backups/${encodeURIComponent(name)}/restore`, { password }),
+  testBackupTarget: (target: BackupTarget) => http.post<BackupTestResult>("/api/admin/backups/test", target),
+  uploadBackup: (file: File, opts: Omit<UploadOptions, "mailboxId"> = {}) =>
+    uploadMultipart<{ name: string }>("/api/admin/backups/upload", file, {}, opts),
+  backupDownloadUrl: (name: string) => `/api/admin/backups/${encodeURIComponent(name)}/download`,
   migrations: () => http.get<MigrationJob[]>("/api/admin/migrations"),
   migration: (id: number) => http.get<MigrationJob>(`/api/admin/migrations/${id}`),
   testMigration: (body: MigrationTestRequest) => http.post<MigrationTestResult>("/api/admin/migrations/test", body),
@@ -254,13 +269,19 @@ export interface UploadOptions {
  * Content-Type (with boundary) itself.
  */
 function uploadMailImport(file: File, opts: UploadOptions = {}): Promise<ImportResult> {
-  return new Promise<ImportResult>((resolve, reject) => {
+  const fields: Record<string, string> = {};
+  if (opts.mailboxId !== undefined) fields.mailboxId = String(opts.mailboxId);
+  return uploadMultipart<ImportResult>("/api/mail/import", file, fields, opts);
+}
+
+function uploadMultipart<T>(url: string, file: File, fields: Record<string, string>, opts: UploadOptions = {}): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
     form.append("file", file, file.name);
-    if (opts.mailboxId !== undefined) form.append("mailboxId", String(opts.mailboxId));
 
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/mail/import");
+    xhr.open("POST", url);
     xhr.withCredentials = true;
     xhr.setRequestHeader("X-Postwerk", "1");
     xhr.setRequestHeader("Accept", "application/json");
@@ -276,7 +297,7 @@ function uploadMailImport(file: File, opts: UploadOptions = {}): Promise<ImportR
         data = null;
       }
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(data as ImportResult);
+        resolve(data as T);
         return;
       }
       const body = (data ?? {}) as { error?: unknown; message?: unknown };
@@ -288,7 +309,7 @@ function uploadMailImport(file: File, opts: UploadOptions = {}): Promise<ImportR
             ? "Die Datei ist zu groß."
             : xhr.status === 401
               ? "Bitte melde dich an."
-              : `Import fehlgeschlagen (HTTP ${xhr.status}).`;
+              : `Hochladen fehlgeschlagen (HTTP ${xhr.status}).`;
       reject(new ApiError(xhr.status, code, message));
     };
     xhr.onerror = () => reject(new ApiError(0, "network", "Der Server ist nicht erreichbar."));

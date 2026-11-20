@@ -22,6 +22,7 @@ import (
 
 	"postwerk/internal/ai"
 	"postwerk/internal/auth"
+	"postwerk/internal/backup"
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
 	"postwerk/internal/dyndns"
@@ -56,6 +57,7 @@ type Server struct {
 	Migrations *migrate.Manager
 	DynDNS     *dyndns.Updater
 	HTTPPort   *httpport.Controller
+	Backups    *backup.Manager
 
 	setupMu sync.Mutex
 }
@@ -413,6 +415,14 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/admin/logs", s.admin(s.logs))
 	m.HandleFunc("GET /api/admin/security/bans", s.admin(s.bans))
 	m.HandleFunc("DELETE /api/admin/security/bans/{ip}", s.admin(s.unban))
+	m.HandleFunc("GET /api/admin/backups/status", s.admin(s.backupStatus))
+	m.HandleFunc("GET /api/admin/backups", s.admin(s.backupArchives))
+	m.HandleFunc("POST /api/admin/backups", s.admin(s.backupStart))
+	m.HandleFunc("POST /api/admin/backups/upload", s.admin(s.backupUpload))
+	m.HandleFunc("POST /api/admin/backups/test", s.admin(s.backupTest))
+	m.HandleFunc("GET /api/admin/backups/{name}/download", s.admin(s.backupDownload))
+	m.HandleFunc("POST /api/admin/backups/{name}/restore", s.admin(s.backupRestore))
+	m.HandleFunc("DELETE /api/admin/backups/{name}", s.admin(s.backupDelete))
 	m.HandleFunc("GET /api/admin/settings", s.admin(s.getSettings))
 	m.HandleFunc("PUT /api/admin/settings", s.admin(s.putSettings))
 	m.HandleFunc("POST /api/admin/settings/ai/test", s.admin(s.testAI))

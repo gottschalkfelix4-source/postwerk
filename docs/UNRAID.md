@@ -316,14 +316,20 @@ hochladen (`.mbox` aus Thunderbird oder Apple Mail, `.eml`, `.zip`).
 
 ## Backup, Update, Fehlersuche
 
-**Backup** – konsistente Sicherung im laufenden Betrieb:
+**Backup** – unter **Verwaltung → Backup** im laufenden Betrieb, mit Zeitplan, Aufbewahrung und
+optionaler Verschlüsselung. Als Ziel bietet sich eine SMB-Freigabe des Unraid-Servers selbst an
+(Server: IP des Unraid-Servers, Freigabe z. B. `backups`, Benutzer mit Schreibrecht) oder ein
+WebDAV-Speicher außer Haus. Mit dem Ziel „Lokal“ landen die Archive unter
+`/mnt/user/appdata/postwerk/backups/`.
+
+Von der Kommandozeile:
 
 ```bash
-docker exec Postwerk postwerk backup /data/backups
+docker exec Postwerk postwerk backup
 ```
 
-Die Sicherung liegt dann unter `/mnt/user/appdata/postwerk/backups/`. Alternativ den ganzen
-appdata-Ordner mit dem Plugin „Appdata Backup“ sichern (Container wird dabei kurz gestoppt).
+Alternativ den ganzen appdata-Ordner mit dem Plugin „Appdata Backup“ sichern (Container wird dabei
+kurz gestoppt).
 
 **Passwort vergessen:**
 

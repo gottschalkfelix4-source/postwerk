@@ -252,6 +252,18 @@ var migrations = []string{
 	ALTER TABLE messages ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]';
 	ALTER TABLE mailboxes ADD COLUMN subscribed INTEGER NOT NULL DEFAULT 1;
 	CREATE INDEX messages_mailbox_uid ON messages(mailbox_id, uid);`,
+	`CREATE TABLE backup_runs (
+		id INTEGER PRIMARY KEY,
+		trigger TEXT NOT NULL,
+		status TEXT NOT NULL,
+		archive TEXT NOT NULL DEFAULT '',
+		target TEXT NOT NULL DEFAULT '',
+		size INTEGER NOT NULL DEFAULT 0,
+		files INTEGER NOT NULL DEFAULT 0,
+		error TEXT NOT NULL DEFAULT '',
+		started_at INTEGER NOT NULL,
+		finished_at INTEGER
+	);`,
 }
 
 func migrate(db *sql.DB) error {

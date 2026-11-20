@@ -22,6 +22,7 @@ type Analysis struct {
 	Reasons         []string               `json:"reasons"`
 	Summary         string                 `json:"summary"`
 	Tags            []string               `json:"tags"`
+	Folder          string                 `json:"folder"`
 	Events          []store.ExtractedEvent `json:"events"`
 	Tasks           []store.ExtractedTask  `json:"tasks"`
 }
@@ -51,8 +52,10 @@ func mailForPrompt(m *store.Message, p *message.Parsed, maxChars int) string {
 	return b.String()
 }
 
-// Analyze classifies a message according to the enabled features.
-func (c *Client) Analyze(ctx context.Context, m *store.Message, p *message.Parsed) (*Analysis, error) {
+// Analyze classifies a message according to the enabled features. folders
+// are the account's own folders the AI may choose from (auto-filing in
+// "folders" mode); nil otherwise.
+func (c *Client) Analyze(ctx context.Context, m *store.Message, p *message.Parsed, folders []string) (*Analysis, error) {
 	cfg, err := c.cfg()
 	if err != nil {
 		return nil, err
@@ -62,6 +65,9 @@ func (c *Client) Analyze(ctx context.Context, m *store.Message, p *message.Parse
 	if f.Classify {
 		want = append(want, fmt.Sprintf(`"category": genau eine aus %s oder null, wenn keine passt`, jsonList(cfg.Categories)),
 			`"tags": bis zu 3 kurze deutsche Schlagwörter`)
+	}
+	if len(folders) > 0 {
+		want = append(want, fmt.Sprintf(`"folder": der Ordner aus %s, in den diese Mail thematisch eindeutig gehört, oder null, wenn keiner klar passt oder die Mail persönlich beantwortet werden muss`, jsonList(folders)))
 	}
 	if f.Priority {
 		want = append(want, `"priority": "high" (dringend, Frist, Mahnung, Ausfall, persönliche Bitte mit Zeitdruck), "low" (Werbung, Newsletter, automatische Benachrichtigung) oder "normal"`)
@@ -90,6 +96,7 @@ func (c *Client) Analyze(ctx context.Context, m *store.Message, p *message.Parse
 	if !contains(cfg.Categories, a.Category) {
 		a.Category = matchCategory(cfg.Categories, a.Category)
 	}
+	a.Folder = matchFolder(folders, a.Folder)
 	switch a.Priority {
 	case "high", "low", "normal":
 	default:
@@ -337,7 +344,7 @@ func (w *Worker) analyze(ctx context.Context, id int64) error {
 		return err
 	}
 	start := time.Now()
-	a, err := w.Client.Analyze(ctx, m, p)
+	a, err := w.Client.Analyze(ctx, m, p, w.FolderChoices(ctx, m))
 	if err != nil {
 		return err
 	}
@@ -381,8 +388,12 @@ func (w *Worker) Apply(ctx context.Context, m *store.Message, a *Analysis, start
 			}
 		}
 	}
+	filed := ""
+	if !moveToJunk {
+		filed = w.autoFile(ctx, cfg.AI.AutoFile, m, a)
+	}
 	w.Log.Info("message analyzed", "message", m.ID, "category", a.Category, "priority", a.Priority,
-		"spam", fmt.Sprintf("%.2f", a.SpamProbability), "ms", time.Since(start).Milliseconds())
+		"spam", fmt.Sprintf("%.2f", a.SpamProbability), "folder", filed, "ms", time.Since(start).Milliseconds())
 	if w.Hooks.OnAnalyzed != nil {
 		w.Hooks.OnAnalyzed(ctx, m, a)
 	}
@@ -440,4 +451,113 @@ func jsonList(l []string) string {
 		q[i] = `"` + s + `"`
 	}
 	return "[" + strings.Join(q, ", ") + "]"
+}
+
+// FolderChoices returns the account's own folders when auto-filing lets the
+// AI pick among them, otherwise nil.
+func (w *Worker) FolderChoices(ctx context.Context, m *store.Message) []string {
+	cfg := w.Client.Settings.Get().AI.AutoFile
+	if !cfg.Enabled || cfg.Mode != "folders" {
+		return nil
+	}
+	boxes, err := w.Store.ListMailboxes(ctx, m.AccountID)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, b := range boxes {
+		if b.Role == nil {
+			out = append(out, b.Name)
+		}
+	}
+	return out
+}
+
+// autoFile moves a message from the inbox into the folder chosen by the
+// analysis and returns the folder name ("" when it stays).
+func (w *Worker) autoFile(ctx context.Context, cfg store.AIAutoFile, m *store.Message, a *Analysis) string {
+	if !cfg.Enabled {
+		return ""
+	}
+	if cfg.KeepImportant && a.Priority == "high" {
+		return ""
+	}
+	target := ""
+	switch cfg.Mode {
+	case "folders":
+		target = a.Folder
+	default:
+		if a.Category != "" {
+			target = strings.TrimSpace(cfg.CategoryFolders[a.Category])
+		}
+	}
+	target = strings.Trim(target, "/ ")
+	if target == "" {
+		return ""
+	}
+	inbox, err := w.Store.MailboxByRole(ctx, m.AccountID, "inbox")
+	if err != nil {
+		return ""
+	}
+	// Only file messages that are still in the inbox (the user may have
+	// moved it meanwhile).
+	cur, err := w.Store.GetMessageAny(ctx, m.ID)
+	if err != nil || cur.MailboxID != inbox {
+		return ""
+	}
+	boxes, err := w.Store.ListMailboxes(ctx, m.AccountID)
+	if err != nil {
+		return ""
+	}
+	var dest int64
+	for _, b := range boxes {
+		if strings.EqualFold(b.Name, target) {
+			dest = b.ID
+			target = b.Name
+			break
+		}
+	}
+	if dest == 0 {
+		if cfg.Mode == "folders" {
+			return "" // never invent folders in this mode
+		}
+		mb, err := w.Store.CreateMailbox(ctx, m.AccountID, target)
+		if err != nil {
+			w.Log.Warn("auto-file: create folder failed", "folder", target, "err", err)
+			return ""
+		}
+		dest = mb.ID
+	}
+	if dest == inbox {
+		return ""
+	}
+	if err := w.Store.UpdateMessage(ctx, m.AccountID, m.ID, store.MessagePatch{MailboxID: &dest}); err != nil {
+		w.Log.Warn("auto-file: move failed", "message", m.ID, "folder", target, "err", err)
+		return ""
+	}
+	return target
+}
+
+// matchFolder maps the model's answer onto one of the offered folders.
+func matchFolder(folders []string, got string) string {
+	got = strings.TrimSpace(got)
+	if got == "" || strings.EqualFold(got, "null") {
+		return ""
+	}
+	for _, f := range folders {
+		if strings.EqualFold(f, got) {
+			return f
+		}
+	}
+	// Models sometimes answer only the last path segment.
+	var hit string
+	for _, f := range folders {
+		if i := strings.LastIndex(f, "/"); i >= 0 && strings.EqualFold(f[i+1:], got) {
+			if hit != "" {
+				return "" // ambiguous
+			}
+			hit = f
+		}
+	}
+	return hit
 }

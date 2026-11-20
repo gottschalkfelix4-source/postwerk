@@ -118,3 +118,72 @@ func TestPhishingMovesToJunk(t *testing.T) {
 		t.Errorf("tags = %v", got.Tags)
 	}
 }
+
+func TestAutoFileByCategory(t *testing.T) {
+	ctx := context.Background()
+	reply := `{"category":"Rechnung","priority":"normal","spam_probability":0.01,"phishing":false,"reasons":[],"summary":"x","tags":[],"events":[],"tasks":[]}`
+	srv := fakeEndpoint(t, reply)
+	defer srv.Close()
+	st, w, m := setup(t, srv.URL)
+	cfg := w.Client.Settings.Get()
+	cfg.AI.Categories = []string{"Rechnung"}
+	cfg.AI.AutoFile = store.AIAutoFile{Enabled: true, Mode: "categories", KeepImportant: true, CategoryFolders: map[string]string{"Rechnung": "Finanzen/Rechnungen"}}
+	w.Client.Settings.Save(ctx, cfg)
+	w.process(ctx)
+	got, _ := st.GetMessageAny(ctx, m.ID)
+	box, err := st.MailboxOwned(ctx, m.AccountID, got.MailboxID)
+	if err != nil || box.Name != "Finanzen/Rechnungen" {
+		t.Fatalf("message in %+v, %v; want Finanzen/Rechnungen (created)", box, err)
+	}
+}
+
+func TestAutoFileKeepsImportantAndUnmapped(t *testing.T) {
+	ctx := context.Background()
+	for _, reply := range []string{
+		`{"category":"Rechnung","priority":"high","spam_probability":0,"phishing":false,"reasons":[],"summary":"x","tags":[],"events":[],"tasks":[]}`,
+		`{"category":"Privat","priority":"normal","spam_probability":0,"phishing":false,"reasons":[],"summary":"x","tags":[],"events":[],"tasks":[]}`,
+	} {
+		srv := fakeEndpoint(t, reply)
+		st, w, m := setup(t, srv.URL)
+		cfg := w.Client.Settings.Get()
+		cfg.AI.Categories = []string{"Rechnung", "Privat"}
+		cfg.AI.AutoFile = store.AIAutoFile{Enabled: true, Mode: "categories", KeepImportant: true, CategoryFolders: map[string]string{"Rechnung": "Rechnungen", "Privat": ""}}
+		w.Client.Settings.Save(ctx, cfg)
+		w.process(ctx)
+		got, _ := st.GetMessageAny(ctx, m.ID)
+		if got.MailboxID != m.MailboxID {
+			t.Errorf("reply %s: message moved out of the inbox", reply[:30])
+		}
+		srv.Close()
+	}
+}
+
+func TestAutoFileExistingFolders(t *testing.T) {
+	ctx := context.Background()
+	var prompt string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct{ Content string } `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		prompt = req.Messages[0].Content
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant",
+			"content": `{"category":null,"priority":"normal","spam_probability":0,"phishing":false,"reasons":[],"summary":"x","tags":[],"folder":"nebenkosten","events":[],"tasks":[]}`}}}})
+	}))
+	defer srv.Close()
+	st, w, m := setup(t, srv.URL)
+	st.CreateMailbox(ctx, m.AccountID, "Haus/Nebenkosten")
+	st.CreateMailbox(ctx, m.AccountID, "Verein")
+	cfg := w.Client.Settings.Get()
+	cfg.AI.AutoFile = store.AIAutoFile{Enabled: true, Mode: "folders"}
+	w.Client.Settings.Save(ctx, cfg)
+	w.process(ctx)
+	if !strings.Contains(prompt, `"Haus/Nebenkosten"`) || !strings.Contains(prompt, `"Verein"`) || strings.Contains(prompt, `"Posteingang"`) {
+		t.Errorf("prompt does not offer exactly the own folders:\n%s", prompt)
+	}
+	got, _ := st.GetMessageAny(ctx, m.ID)
+	box, _ := st.MailboxOwned(ctx, m.AccountID, got.MailboxID)
+	if box == nil || box.Name != "Haus/Nebenkosten" {
+		t.Fatalf("message in %+v, want Haus/Nebenkosten", box)
+	}
+}

@@ -588,3 +588,56 @@ interface DnsRecord {
 }
 // DnsCheck erhält zusätzlich: key: string; title: string;
 ```
+
+## Backup
+
+Archive des gesamten Systems (`postwerk-JJJJMMTT-HHMMSS.tar.gz`, verschlüsselt mit Endung `.enc`).
+Inhalt: `manifest.json` und `data/` (Datenbank-Snapshot, Mails, Zertifikate). Verschlüsselte Archive
+beginnen mit `PWBACKUP1` und einem 16-Byte-Salt, danach folgen AES-256-GCM-Blöcke à 64 KiB
+(Schlüssel per scrypt).
+
+### Einstellungen (`GET/PUT /api/admin/settings`, Abschnitt `backup`)
+
+```ts
+interface BackupSettings {
+  target: {
+    type: "local" | "webdav" | "smb";
+    localPath: string;                 // leer = /data/backups
+    webdav: { url: string; username: string; password: string /* maskiert */; skipTlsVerify: boolean };
+    smb: { host: string; port: number; share: string; path: string; username: string; password: string /* maskiert */; domain: string };
+  };
+  schedule: { enabled: boolean; frequency: "hourly" | "daily" | "weekly"; time: string /* HH:MM */; weekday: number /* 0 = So */ };
+  keep: number;                        // Archive auf dem Ziel behalten, 0 = alle
+  encrypt: boolean;
+  password: string;                    // maskiert, mind. 8 Zeichen
+}
+```
+
+### Endpunkte
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/backups/status` | – | `{ status: { job, last, target, nextRun }; runs: BackupRun[] }` |
+| GET | `/api/admin/backups` | – | `{ archives: { name, size, modified, encrypted }[]; error?: string }` |
+| POST | `/api/admin/backups` | – | Sicherung starten (409, wenn schon eine läuft) |
+| POST | `/api/admin/backups/test` | `BackupSettings["target"]` | `{ ok, target, archives, latencyMs, error? }` |
+| POST | `/api/admin/backups/upload` | multipart, Feld `file` | `{ name }` |
+| GET | `/api/admin/backups/{name}/download` | – | Archiv als Datei |
+| POST | `/api/admin/backups/{name}/restore` | `{ password }` (leer = eingestelltes Passwort) | startet die Wiederherstellung, danach Neustart |
+| DELETE | `/api/admin/backups/{name}` | – | `Ok` |
+
+## KI: in Ordner einsortieren
+
+Abschnitt `ai.autoFile` in den Einstellungen:
+
+```ts
+interface AutoFile {
+  enabled: boolean;
+  mode: "categories" | "folders";          // je Kategorie fester Ordner | KI wählt aus den eigenen Ordnern des Kontos
+  categoryFolders: Record<string, string>; // Kategorie → Ordner ("" = bleibt im Posteingang), "/" für Unterordner
+  keepImportant: boolean;                  // Priorität "high" bleibt im Posteingang
+}
+```
+
+Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
+`categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.

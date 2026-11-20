@@ -13,6 +13,15 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
   semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – über jeden
   OpenAI-kompatiblen Endpunkt, also auch **lokal mit Ollama oder vLLM**
 
+**Linux-VPS:** fertige Compose-Datei zum Kopieren, siehe [docs/VPS.md](docs/VPS.md):
+
+```bash
+mkdir -p /opt/postwerk && cd /opt/postwerk
+curl -fsSL https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/deploy/vps/docker-compose.yml -o docker-compose.yml
+nano docker-compose.yml   # POSTWERK_HOSTNAME eintragen
+docker compose up -d
+```
+
 **Unraid:** Template-Installation mit einem Befehl, siehe [docs/UNRAID.md](docs/UNRAID.md):
 
 ```bash

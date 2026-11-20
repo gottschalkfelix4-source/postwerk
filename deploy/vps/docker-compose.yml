@@ -1,0 +1,105 @@
+# Postwerk auf einem Linux-VPS
+#
+# 1. Diese Datei auf den Server kopieren (z. B. nach /opt/postwerk/docker-compose.yml)
+# 2. Die drei mit ÄNDERN markierten Werte anpassen
+# 3. Starten:
+#      docker compose up -d                                 # nur Postwerk
+#      docker compose --profile clamav up -d                # + Virenscanner (braucht ~1,5 GB RAM)
+#      docker compose --profile clamav --profile ai up -d   # + lokale KI mit Ollama (braucht 8+ GB RAM)
+# 4. Setup-Token holen:   docker compose logs postwerk | grep -i setup_token
+# 5. http://<IP-des-Servers>/ öffnen – der Setup-Assistent führt durch den Rest
+#    (Domain, Admin-Konto, DNS-Einträge, Let's Encrypt, Virenscan, KI).
+#
+# Anleitung: https://github.com/gottschalkfelix4-source/postwerk/blob/main/docs/VPS.md
+
+name: postwerk
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postwerk:
+    image: ghcr.io/gottschalkfelix4-source/postwerk:latest
+    container_name: postwerk
+    restart: unless-stopped
+    environment:
+      # ÄNDERN: vollständiger Hostname des Mailservers (A-Record und Reverse-DNS zeigen darauf)
+      POSTWERK_HOSTNAME: mail.example.com
+      # ÄNDERN: Zeitzone
+      TZ: Europe/Berlin
+      # Optional: Token, mit dem Prometheus /metrics abfragen darf
+      # POSTWERK_METRICS_TOKEN: ein-langes-zufaelliges-token
+      # Erstes Admin-Konto: leer lassen = Einrichtung über den Setup-Assistenten (empfohlen)
+      POSTWERK_ADMIN_EMAIL: ""
+      POSTWERK_ADMIN_PASSWORD: ""
+      # Benutzer im Container, dem /data gehört
+      PUID: "1000"
+      PGID: "1000"
+    ports:
+      # ÄNDERN (optional): nur auf einer bestimmten IPv4 lauschen, z. B. "203.0.113.10:25:2525"
+      - "25:2525"     # SMTP eingehend (andere Mailserver)
+      - "465:4650"    # Versand für Mailprogramme (TLS)
+      - "587:5870"    # Versand für Mailprogramme (STARTTLS)
+      - "995:9950"    # POP3S Abruf
+      - "110:1100"    # POP3 mit STARTTLS (optional, kann entfernt werden)
+      - "80:8080"     # Weboberfläche + Let's-Encrypt-Prüfung
+      - "443:8443"    # Weboberfläche über HTTPS
+    volumes:
+      - postwerk-data:/data
+      # Liegt ein Reverse-Proxy davor, dessen Zertifikate schreibgeschützt einbinden:
+      # - /pfad/zu/letsencrypt:/certs:ro
+    stop_grace_period: 30s
+    logging: *logging
+    networks: [mail]
+
+  clamav:
+    profiles: [clamav]
+    image: clamav/clamav:stable
+    container_name: postwerk-clamav
+    restart: unless-stopped
+    volumes:
+      - clamav-db:/var/lib/clamav
+    logging: *logging
+    networks: [mail]
+    # Im Setup-Assistenten (Schutz & KI) als Adresse "clamav:3310" eintragen.
+
+  ollama:
+    profiles: [ai]
+    image: ollama/ollama:latest
+    container_name: postwerk-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    logging: *logging
+    networks: [mail]
+    # Im Setup-Assistenten (Schutz & KI) als Basis-URL "http://ollama:11434/v1" eintragen.
+    # Mit NVIDIA-GPU (nvidia-container-toolkit installiert) einkommentieren:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Lädt beim ersten Start die KI-Modelle. Auf einem VPS ohne GPU sind kleine Modelle sinnvoll.
+  ollama-pull:
+    profiles: [ai]
+    image: ollama/ollama:latest
+    depends_on: [ollama]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull qwen2.5:3b && ollama pull nomic-embed-text"]
+    restart: "no"
+    networks: [mail]
+
+volumes:
+  postwerk-data:
+  clamav-db:
+  ollama-models:
+
+networks:
+  mail:

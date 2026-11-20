@@ -1,6 +1,8 @@
-// Package ai talks to any OpenAI-compatible endpoint (Ollama, vLLM,
-// LocalAI, OpenAI, ...) for classification, summaries, drafts, extraction
-// and embeddings.
+// Package ai talks to a language model for classification, summaries,
+// drafts, extraction and embeddings. Two wire protocols are supported:
+// OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, OpenAI, OpenRouter,
+// Mistral, ...) and the Anthropic Messages API (plus compatible services).
+// Embeddings always use an OpenAI-compatible endpoint.
 package ai
 
 import (
@@ -19,6 +21,23 @@ import (
 
 var ErrDisabled = errors.New("ai disabled")
 
+const (
+	ProviderOpenAI    = "openai"
+	ProviderAnthropic = "anthropic"
+
+	anthropicVersion  = "2023-06-01"
+	defaultMaxTokens  = 16000
+	jsonOnlyAnthropic = "\n\nAntworte ausschließlich mit einem einzigen gültigen JSON-Objekt – ohne Markdown-Codeblock und ohne Text davor oder danach."
+)
+
+// Provider normalizes the configured provider ("" means OpenAI-compatible).
+func Provider(cfg store.AISettings) string {
+	if strings.EqualFold(strings.TrimSpace(cfg.Provider), ProviderAnthropic) {
+		return ProviderAnthropic
+	}
+	return ProviderOpenAI
+}
+
 type Client struct {
 	Settings *store.SettingsCache
 	HTTP     *http.Client
@@ -36,7 +55,15 @@ func (c *Client) cfg() (store.AISettings, error) {
 	return cfg, nil
 }
 
-func (c *Client) do(ctx context.Context, cfg store.AISettings, method, path string, body any, out any) error {
+// apiError keeps the HTTP status so callers can react to specific failures.
+type apiError struct {
+	Status int
+	Msg    string
+}
+
+func (e *apiError) Error() string { return e.Msg }
+
+func (c *Client) do(ctx context.Context, cfg store.AISettings, method, url string, headers map[string]string, body any, out any) error {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 120 * time.Second
@@ -51,13 +78,13 @@ func (c *Client) do(ctx context.Context, cfg store.AISettings, method, path stri
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(cfg.BaseURL, "/")+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -69,9 +96,51 @@ func (c *Client) do(ctx context.Context, cfg store.AISettings, method, path stri
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("ai endpoint %s: %s", resp.Status, truncate(string(data), 300))
+		return &apiError{Status: resp.StatusCode, Msg: fmt.Sprintf("ai endpoint %s: %s", resp.Status, truncate(errorText(data), 300))}
 	}
 	return json.Unmarshal(data, out)
+}
+
+// errorText extracts the message from OpenAI/Anthropic error bodies.
+func errorText(data []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &e) == nil && e.Error.Message != "" {
+		return e.Error.Message
+	}
+	return string(data)
+}
+
+// ---- endpoints and headers ----
+
+func openAIURL(base, path string) string { return strings.TrimRight(base, "/") + path }
+
+func openAIHeaders(key string) map[string]string {
+	if key == "" {
+		return nil
+	}
+	return map[string]string{"Authorization": "Bearer " + key}
+}
+
+// anthropicURL accepts the base with or without /v1
+// ("https://api.anthropic.com" and "https://api.anthropic.com/v1" both work).
+func anthropicURL(base, path string) string {
+	b := strings.TrimRight(base, "/")
+	if !strings.HasSuffix(b, "/v1") {
+		b += "/v1"
+	}
+	return b + path
+}
+
+func anthropicHeaders(key string) map[string]string {
+	h := map[string]string{"anthropic-version": anthropicVersion}
+	if key != "" {
+		h["x-api-key"] = key
+	}
+	return h
 }
 
 type chatMsg struct {
@@ -79,12 +148,25 @@ type chatMsg struct {
 	Content string `json:"content"`
 }
 
-// Chat sends a chat completion and returns the assistant text.
+// Chat sends one system + user turn and returns the assistant text.
 func (c *Client) Chat(ctx context.Context, system, user string, jsonMode bool) (string, error) {
 	cfg, err := c.cfg()
 	if err != nil {
 		return "", err
 	}
+	var text string
+	if Provider(cfg) == ProviderAnthropic {
+		text, err = c.chatAnthropic(ctx, cfg, system, user, jsonMode)
+	} else {
+		text, err = c.chatOpenAI(ctx, cfg, system, user, jsonMode)
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stripThinking(text)), nil
+}
+
+func (c *Client) chatOpenAI(ctx context.Context, cfg store.AISettings, system, user string, jsonMode bool) (string, error) {
 	req := map[string]any{
 		"model":       cfg.ChatModel,
 		"messages":    []chatMsg{{"system", system}, {"user", user}},
@@ -99,13 +181,71 @@ func (c *Client) Chat(ctx context.Context, system, user string, jsonMode bool) (
 			Message chatMsg `json:"message"`
 		} `json:"choices"`
 	}
-	if err := c.do(ctx, cfg, http.MethodPost, "/chat/completions", req, &resp); err != nil {
+	url, headers := openAIURL(cfg.BaseURL, "/chat/completions"), openAIHeaders(cfg.APIKey)
+	err := c.do(ctx, cfg, http.MethodPost, url, headers, req, &resp)
+	// Some hosted reasoning models only accept their default sampling
+	// settings or no response_format: retry once without them.
+	var ae *apiError
+	if errors.As(err, &ae) && ae.Status == http.StatusBadRequest {
+		msg := strings.ToLower(ae.Msg)
+		if strings.Contains(msg, "temperature") || strings.Contains(msg, "response_format") {
+			delete(req, "temperature")
+			if strings.Contains(msg, "response_format") {
+				delete(req, "response_format")
+			}
+			err = c.do(ctx, cfg, http.MethodPost, url, headers, req, &resp)
+		}
+	}
+	if err != nil {
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
 		return "", errors.New("ai endpoint returned no choices")
 	}
-	return strings.TrimSpace(stripThinking(resp.Choices[0].Message.Content)), nil
+	return resp.Choices[0].Message.Content, nil
+}
+
+func (c *Client) chatAnthropic(ctx context.Context, cfg store.AISettings, system, user string, jsonMode bool) (string, error) {
+	if jsonMode {
+		system += jsonOnlyAnthropic
+	}
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = defaultMaxTokens
+	}
+	// No sampling parameters and no assistant prefill: current models reject both.
+	req := map[string]any{
+		"model":      cfg.ChatModel,
+		"max_tokens": maxTokens,
+		"system":     system,
+		"messages":   []chatMsg{{"user", user}},
+	}
+	var resp struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+	}
+	if err := c.do(ctx, cfg, http.MethodPost, anthropicURL(cfg.BaseURL, "/messages"), anthropicHeaders(cfg.APIKey), req, &resp); err != nil {
+		return "", err
+	}
+	if resp.StopReason == "refusal" {
+		return "", errors.New("das Modell hat die Anfrage abgelehnt")
+	}
+	var b strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == "text" {
+			b.WriteString(blk.Text)
+		}
+	}
+	if b.Len() == 0 {
+		if resp.StopReason == "max_tokens" {
+			return "", fmt.Errorf("antwort abgeschnitten: max_tokens (%d) reicht nicht", maxTokens)
+		}
+		return "", errors.New("ai endpoint returned no text")
+	}
+	return b.String(), nil
 }
 
 // ChatJSON runs Chat in JSON mode and decodes the (possibly fenced) result.
@@ -117,12 +257,39 @@ func (c *Client) ChatJSON(ctx context.Context, system, user string, out any) err
 	return decodeLooseJSON(text, out)
 }
 
+// embeddingEndpoint returns the OpenAI-compatible endpoint used for
+// embeddings: the dedicated one if set, otherwise the chat endpoint when it
+// speaks the OpenAI protocol.
+func embeddingEndpoint(cfg store.AISettings) (base, key string, ok bool) {
+	if cfg.EmbeddingModel == "" {
+		return "", "", false
+	}
+	if strings.TrimSpace(cfg.EmbeddingBaseURL) != "" {
+		return cfg.EmbeddingBaseURL, cfg.EmbeddingAPIKey, true
+	}
+	if Provider(cfg) == ProviderOpenAI && cfg.BaseURL != "" {
+		return cfg.BaseURL, cfg.APIKey, true
+	}
+	return "", "", false
+}
+
+// CanEmbed reports whether embeddings (semantic search) are configured.
+func (c *Client) CanEmbed() bool {
+	cfg, err := c.cfg()
+	if err != nil {
+		return false
+	}
+	_, _, ok := embeddingEndpoint(cfg)
+	return ok
+}
+
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	cfg, err := c.cfg()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.EmbeddingModel == "" {
+	base, key, ok := embeddingEndpoint(cfg)
+	if !ok {
 		return nil, ErrDisabled
 	}
 	var resp struct {
@@ -130,7 +297,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, cfg, http.MethodPost, "/embeddings", map[string]any{"model": cfg.EmbeddingModel, "input": truncate(text, 6000)}, &resp); err != nil {
+	if err := c.do(ctx, cfg, http.MethodPost, openAIURL(base, "/embeddings"), openAIHeaders(key), map[string]any{"model": cfg.EmbeddingModel, "input": truncate(text, 6000)}, &resp); err != nil {
 		return nil, err
 	}
 	if len(resp.Data) == 0 || len(resp.Data[0].Embedding) == 0 {
@@ -147,13 +314,66 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 	return c.models(ctx, cfg)
 }
 
-// TestConnection lists models even while AI features are switched off.
-func (c *Client) TestConnection(ctx context.Context) ([]string, error) {
+// TestResult describes a connection test of the stored configuration.
+type TestResult struct {
+	Models         []string // available models (may be empty if the service has no model list)
+	ChatOK         bool     // a short test request with the chat model succeeded
+	ChatError      string
+	EmbeddingOK    bool
+	EmbeddingError string // empty when embeddings are not configured or worked
+}
+
+// TestConnection checks the stored configuration even while AI features are
+// switched off: it lists models and, if a chat model is set, sends a tiny
+// test request. Services without a model list still pass via the chat test.
+func (c *Client) TestConnection(ctx context.Context) (*TestResult, error) {
 	cfg := c.Settings.Get().AI
 	if cfg.BaseURL == "" {
 		return nil, errors.New("keine Basis-URL konfiguriert")
 	}
-	return c.models(ctx, cfg)
+	res := &TestResult{Models: []string{}}
+	models, listErr := c.models(ctx, cfg)
+	if listErr == nil {
+		res.Models = models
+	}
+	if cfg.ChatModel != "" {
+		if _, err := c.chatWith(ctx, cfg, "Antworte nur mit OK.", "Test"); err != nil {
+			res.ChatError = err.Error()
+		} else {
+			res.ChatOK = true
+		}
+	}
+	if base, key, ok := embeddingEndpoint(cfg); ok {
+		var resp struct {
+			Data []struct {
+				Embedding []float32 `json:"embedding"`
+			} `json:"data"`
+		}
+		err := c.do(ctx, cfg, http.MethodPost, openAIURL(base, "/embeddings"), openAIHeaders(key), map[string]any{"model": cfg.EmbeddingModel, "input": "Test"}, &resp)
+		if err == nil && (len(resp.Data) == 0 || len(resp.Data[0].Embedding) == 0) {
+			err = errors.New("empty embedding")
+		}
+		if err != nil {
+			res.EmbeddingError = err.Error()
+		} else {
+			res.EmbeddingOK = true
+		}
+	}
+	switch {
+	case listErr != nil && !res.ChatOK && res.ChatError != "":
+		return nil, errors.New(res.ChatError)
+	case listErr != nil && cfg.ChatModel == "":
+		return nil, listErr
+	}
+	return res, nil
+}
+
+// chatWith sends a plain (non-JSON) chat with an explicit configuration.
+func (c *Client) chatWith(ctx context.Context, cfg store.AISettings, system, user string) (string, error) {
+	if Provider(cfg) == ProviderAnthropic {
+		return c.chatAnthropic(ctx, cfg, system, user, false)
+	}
+	return c.chatOpenAI(ctx, cfg, system, user, false)
 }
 
 func (c *Client) models(ctx context.Context, cfg store.AISettings) ([]string, error) {
@@ -162,7 +382,13 @@ func (c *Client) models(ctx context.Context, cfg store.AISettings) ([]string, er
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, cfg, http.MethodGet, "/models", nil, &resp); err != nil {
+	var err error
+	if Provider(cfg) == ProviderAnthropic {
+		err = c.do(ctx, cfg, http.MethodGet, anthropicURL(cfg.BaseURL, "/models?limit=1000"), anthropicHeaders(cfg.APIKey), nil, &resp)
+	} else {
+		err = c.do(ctx, cfg, http.MethodGet, openAIURL(cfg.BaseURL, "/models"), openAIHeaders(cfg.APIKey), nil, &resp)
+	}
+	if err != nil {
 		return nil, err
 	}
 	out := []string{}

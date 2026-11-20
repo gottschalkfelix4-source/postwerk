@@ -32,7 +32,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | Dynamische IP: DynDNS (STRATO, INWX, deSEC, No-IP, dyndns2) nur bei IP-Wechsel, Smarthost mit Vorlagen und Verbindungstest, SPF-Include automatisch | ✅ |
 | Umzug | Migrationsassistent per IMAP (Ordnerzuordnung, Flags, Datum, Duplikaterkennung, CSV für viele Postfächer) | ✅ |
 | | Import von .mbox, .eml und .zip im Webmail | ✅ |
-| KI | OpenAI-kompatible Endpunkte (Ollama, vLLM, LocalAI, OpenAI …) | ✅ |
+| KI | OpenAI-kompatible Endpunkte (Ollama, vLLM, LocalAI, OpenAI …) und Anthropic-kompatible API, eigener Embedding-Endpunkt | ✅ |
 | | LLM-Spam- und Phishing-Erkennung | ✅ |
 | | Kategorien und Tags, Priorität / dringende Mails | ✅ |
 | | Zusammenfassungen von Mails und Threads | ✅ |

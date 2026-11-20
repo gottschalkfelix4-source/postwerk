@@ -102,8 +102,14 @@ export interface Settings {
   };
   antivirus: { enabled: boolean; clamdAddress: string; action: "reject" | "quarantine" };
   ai: {
-    enabled: boolean; baseUrl: string; apiKey: string /* masked "••••" when set */;
+    enabled: boolean;
+    /** Wire protocol of baseUrl: OpenAI-compatible (Ollama, OpenAI, …) or Anthropic Messages API. */
+    provider: AiProvider;
+    baseUrl: string; apiKey: string /* masked "••••" when set */;
     chatModel: string; embeddingModel: string; timeoutSeconds: number;
+    /** Optional separate OpenAI-compatible endpoint for embeddings (needed with "anthropic"). */
+    embeddingBaseUrl: string; embeddingApiKey: string /* masked */;
+    maxTokens: number;            // anthropic: max_tokens per request
     features: { spamCheck: boolean; classify: boolean; priority: boolean; summarize: boolean;
                 replyDraft: boolean; semanticSearch: boolean; extractEvents: boolean };
     categories: string[];          // e.g. ["Rechnung","Newsletter","Support","Privat"]
@@ -187,7 +193,12 @@ export interface UpdateAccountRequest {
   name?: string; password?: string; role?: Role; quotaBytes?: number; disabled?: boolean; resetTotp?: boolean;
 }
 
-export interface AiTestResult { ok: boolean; latencyMs: number; models: string[]; error?: string; }
+export type AiProvider = "openai" | "anthropic";
+
+export interface AiTestResult {
+  ok: boolean; latencyMs: number; models: string[]; error?: string;
+  chatOk?: boolean; embeddingOk?: boolean; embeddingError?: string;
+}
 
 /** Body of PUT /api/admin/settings: sections may be sent individually. */
 export type SettingsUpdate = { [K in keyof Settings]?: DeepPartial<Settings[K]> };

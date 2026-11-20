@@ -8,6 +8,7 @@ import { useDraft } from "@/lib/hooks";
 import { domainFromHostname } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/api/client";
+import { AiConnectionFields, AiProviderPicker, AiTestDetails } from "@/pages/admin/ai/AiProviderParts";
 import {
   Badge,
   Button,
@@ -705,13 +706,14 @@ export function AiSection({ settings, save, saving }: SectionProps) {
   const onSave = () => {
     const payload: SettingsUpdate["ai"] = { ...draft };
     if (draft.apiKey === settings.ai.apiKey) delete payload.apiKey;
+    if (draft.embeddingApiKey === settings.ai.embeddingApiKey) delete payload.embeddingApiKey;
     save({ ai: payload });
   };
 
   return (
     <Shell
       title="KI"
-      description="Anbindung an ein OpenAI-kompatibles Sprachmodell (z. B. Ollama, LM Studio, vLLM)."
+      description="Lokales Modell über Ollama oder ein externer Dienst mit OpenAI- oder Anthropic-kompatibler API."
       dirty={dirty}
       saving={saving}
       onReset={reset}
@@ -730,29 +732,11 @@ export function AiSection({ settings, save, saving }: SectionProps) {
       <FormSection title="Allgemein" description="Ist die KI deaktiviert, blendet das Webmail alle KI-Funktionen aus.">
         <SwitchRow label="KI-Funktionen aktivieren" checked={draft.enabled} onChange={(v) => set({ enabled: v })} />
       </FormSection>
-      <FormSection title="Endpunkt" description="Basis-URL der OpenAI-kompatiblen API inklusive /v1.">
-        <Field
-          label="Basis-URL"
-          help={
-            <>
-              Für Ollama im selben Docker-Netz z. B. <code className="font-mono">http://ollama:11434/v1</code>, lokal{" "}
-              <code className="font-mono">http://localhost:11434/v1</code>.
-            </>
-          }
-        >
-          {(id) => <Input id={id} value={draft.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })} placeholder="http://ollama:11434/v1" className="font-mono text-[13px]" />}
-        </Field>
-        <Field label="API-Schlüssel" help="Für Ollama nicht erforderlich. Gespeicherte Schlüssel werden nicht angezeigt.">
-          {(id) => <SecretInput id={id} value={draft.apiKey} onChange={(v) => set({ apiKey: v })} placeholder="sk-…" />}
-        </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Chat-Modell" help="z. B. llama3.1:8b, qwen2.5:7b">
-            {(id) => <Input id={id} value={draft.chatModel} onChange={(e) => set({ chatModel: e.target.value })} className="font-mono text-[13px]" />}
-          </Field>
-          <Field label="Embedding-Modell" help="Für die semantische Suche, z. B. nomic-embed-text">
-            {(id) => <Input id={id} value={draft.embeddingModel} onChange={(e) => set({ embeddingModel: e.target.value })} className="font-mono text-[13px]" />}
-          </Field>
-        </div>
+      <FormSection title="Anbieter" description="Wähle, wo das Sprachmodell läuft.">
+        <AiProviderPicker value={draft} onChange={set} />
+      </FormSection>
+      <FormSection title="Verbindung" description="Adresse, Schlüssel und Modelle des gewählten Anbieters.">
+        <AiConnectionFields value={draft} onChange={set} />
         <Field label="Zeitlimit" help="Anfragen, die länger dauern, werden abgebrochen.">
           {(id) => <NumberInput id={id} value={draft.timeoutSeconds} min={1} suffix="Sekunden" onChange={(v) => set({ timeoutSeconds: v })} />}
         </Field>
@@ -824,6 +808,7 @@ function TestResult({
         {result.ok && <Badge tone="green">{result.latencyMs} ms</Badge>}
       </div>
       {result.error && <p className="mt-2 break-words font-mono text-xs text-red-700 dark:text-red-300">{result.error}</p>}
+      <AiTestDetails result={result} />
       {result.models.length > 0 && (
         <div className="mt-3">
           <div className="mb-1.5 text-xs text-zinc-500 dark:text-zinc-400">Verfügbare Modelle (klicken, um als Chat-Modell zu übernehmen):</div>

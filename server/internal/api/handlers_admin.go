@@ -495,6 +495,9 @@ func (s *Server) maskedSettings() store.Settings {
 	if cur.AI.APIKey != "" {
 		cur.AI.APIKey = mask
 	}
+	if cur.AI.EmbeddingAPIKey != "" {
+		cur.AI.EmbeddingAPIKey = mask
+	}
 	if cur.DMS.Paperless.Token != "" {
 		cur.DMS.Paperless.Token = mask
 	}
@@ -522,6 +525,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	}
 	cur := s.Settings.Get()
 	oldKey, oldToken, oldACME := cur.AI.APIKey, cur.DMS.Paperless.Token, cur.TLS.ACME
+	oldEmbedKey := cur.AI.EmbeddingAPIKey
 	oldDyn, oldRelay := cur.DynDNS.Password, cur.Relay.Password
 	sections := map[string]any{
 		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
@@ -538,6 +542,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	}
 	if cur.AI.APIKey == mask {
 		cur.AI.APIKey = oldKey
+	}
+	if cur.AI.EmbeddingAPIKey == mask {
+		cur.AI.EmbeddingAPIKey = oldEmbedKey
 	}
 	if cur.DynDNS.Password == mask {
 		cur.DynDNS.Password = oldDyn
@@ -669,6 +676,27 @@ func validateSettings(c *store.Settings) error {
 	if c.AI.TimeoutSeconds <= 0 {
 		c.AI.TimeoutSeconds = 120
 	}
+	switch strings.ToLower(strings.TrimSpace(c.AI.Provider)) {
+	case "", "openai":
+		c.AI.Provider = "openai"
+	case "anthropic":
+		c.AI.Provider = "anthropic"
+	default:
+		return invalid("Unbekannter KI-Anbieter: " + c.AI.Provider)
+	}
+	c.AI.BaseURL = strings.TrimSpace(c.AI.BaseURL)
+	c.AI.EmbeddingBaseURL = strings.TrimSpace(c.AI.EmbeddingBaseURL)
+	for _, u := range []string{c.AI.BaseURL, c.AI.EmbeddingBaseURL} {
+		if u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			return invalid("KI-Adresse muss mit http:// oder https:// beginnen: " + u)
+		}
+	}
+	if c.AI.MaxTokens <= 0 {
+		c.AI.MaxTokens = 16000
+	}
+	if c.AI.MaxTokens > 128000 {
+		c.AI.MaxTokens = 128000
+	}
 	clean := []string{}
 	for _, cat := range c.AI.Categories {
 		if cat = strings.TrimSpace(cat); cat != "" {
@@ -683,9 +711,17 @@ func (s *Server) testAI(w http.ResponseWriter, r *http.Request, u *store.Account
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	models, err := s.AI.TestConnection(ctx)
+	res, err := s.AI.TestConnection(ctx)
 	if err != nil {
 		return map[string]any{"ok": false, "latencyMs": time.Since(start).Milliseconds(), "models": []string{}, "error": err.Error()}, nil
 	}
-	return map[string]any{"ok": true, "latencyMs": time.Since(start).Milliseconds(), "models": models}, nil
+	out := map[string]any{"ok": res.ChatError == "", "latencyMs": time.Since(start).Milliseconds(), "models": res.Models, "chatOk": res.ChatOK}
+	if res.ChatError != "" {
+		out["error"] = "Chat-Modell: " + res.ChatError
+	}
+	if res.EmbeddingError != "" {
+		out["embeddingError"] = res.EmbeddingError
+	}
+	out["embeddingOk"] = res.EmbeddingOK
+	return out, nil
 }

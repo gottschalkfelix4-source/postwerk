@@ -287,7 +287,7 @@ func (w *Worker) process(ctx context.Context) {
 			break
 		}
 	}
-	if !cfg.Features.SemanticSearch {
+	if !cfg.Features.SemanticSearch || !w.Client.CanEmbed() {
 		return
 	}
 	for {

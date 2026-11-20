@@ -37,7 +37,6 @@ import {
   Field,
   Input,
   Notice,
-  PasswordInput,
   Segmented,
   Skeleton,
   SwitchRow,
@@ -79,10 +78,10 @@ import {
   type TlsDraft,
 } from "@/pages/admin/tls/CertificateParts";
 import { dynIpKeys } from "@/pages/admin/dynip/DynIpParts";
+import { AiConnectionFields, AiProviderPicker, AiTestDetails } from "@/pages/admin/ai/AiProviderParts";
 import { setupKeys, useSetup, type StepProps } from "./context";
 import { dnsSummary, SectionTitle } from "./steps";
 
-const MASK = "••••";
 const LETS_ENCRYPT = "https://acme-v02.api.letsencrypt.org/directory";
 
 export function useSettings() {
@@ -466,6 +465,7 @@ export function ProtectionStep({ onBack, onNext }: StepProps) {
   const aiPayload = (d: ProtectionDraft): SettingsUpdate["ai"] => {
     const payload: SettingsUpdate["ai"] = { ...d.ai };
     if (q.data && d.ai.apiKey === q.data.ai.apiKey) delete payload.apiKey;
+    if (q.data && d.ai.embeddingApiKey === q.data.ai.embeddingApiKey) delete payload.embeddingApiKey;
     return payload;
   };
 
@@ -587,32 +587,12 @@ export function ProtectionStep({ onBack, onNext }: StepProps) {
         <div className="border-t border-zinc-100 dark:border-zinc-800" />
 
         <section className="space-y-4">
-          <SectionTitle icon={Bot} title="KI" text="Anbindung an ein OpenAI-kompatibles Modell, z. B. Ollama, LM Studio oder vLLM." />
+          <SectionTitle icon={Bot} title="KI" text="Lokal über Ollama oder ein externer Dienst mit OpenAI- oder Anthropic-kompatibler API." />
           <SwitchRow label="KI-Funktionen aktivieren" description="Zusammenfassungen, Kategorien, Antwortentwürfe und semantische Suche." checked={draft.ai.enabled} onChange={(v) => setAi({ enabled: v })} />
           {draft.ai.enabled && (
             <div className="animate-fade-in space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Basis-URL" help="Inklusive /v1, z. B. http://ollama:11434/v1">
-                  {(id) => <Input id={id} value={draft.ai.baseUrl} onChange={(e) => setAi({ baseUrl: e.target.value })} placeholder="http://ollama:11434/v1" className="font-mono text-[13px]" />}
-                </Field>
-                <Field label="API-Schlüssel" help="Für Ollama nicht erforderlich.">
-                  {(id) => (
-                    <PasswordInput
-                      id={id}
-                      value={draft.ai.apiKey === MASK ? "" : draft.ai.apiKey}
-                      placeholder={draft.ai.apiKey === MASK ? "•••••••• (gespeichert)" : "sk-…"}
-                      autoComplete="new-password"
-                      onChange={(e) => setAi({ apiKey: e.target.value === "" && s.ai.apiKey === MASK ? MASK : e.target.value })}
-                    />
-                  )}
-                </Field>
-                <Field label="Chat-Modell" help="z. B. llama3.1:8b oder qwen2.5:7b">
-                  {(id) => <Input id={id} value={draft.ai.chatModel} onChange={(e) => setAi({ chatModel: e.target.value })} className="font-mono text-[13px]" />}
-                </Field>
-                <Field label="Embedding-Modell" help="Für die semantische Suche, z. B. nomic-embed-text">
-                  {(id) => <Input id={id} value={draft.ai.embeddingModel} onChange={(e) => setAi({ embeddingModel: e.target.value })} className="font-mono text-[13px]" />}
-                </Field>
-              </div>
+              <AiProviderPicker value={draft.ai} onChange={setAi} />
+              <AiConnectionFields value={draft.ai} onChange={setAi} />
               <div className="flex flex-wrap items-center gap-3">
                 <Button icon={PlugZap} loading={aiTest.isPending} disabled={!draft.ai.baseUrl.trim()} onClick={() => aiTest.mutate()}>
                   Verbindung testen
@@ -660,6 +640,7 @@ function AiResult({
         {result.ok && <Badge tone="green">{result.latencyMs} ms</Badge>}
       </div>
       {result.error && <p className="mt-2 break-words font-mono text-xs text-red-700 dark:text-red-300">{result.error}</p>}
+      <AiTestDetails result={result} />
       {result.models.length > 0 && (
         <div className="mt-3">
           <div className="mb-1.5 text-xs text-zinc-500 dark:text-zinc-400">

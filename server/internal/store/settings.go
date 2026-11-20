@@ -119,14 +119,23 @@ type AIFeatures struct {
 }
 
 type AISettings struct {
-	Enabled        bool       `json:"enabled"`
-	BaseURL        string     `json:"baseUrl"`
-	APIKey         string     `json:"apiKey"`
-	ChatModel      string     `json:"chatModel"`
-	EmbeddingModel string     `json:"embeddingModel"`
-	TimeoutSeconds int        `json:"timeoutSeconds"`
-	Features       AIFeatures `json:"features"`
-	Categories     []string   `json:"categories"`
+	Enabled bool `json:"enabled"`
+	// Provider selects the wire protocol of BaseURL: "openai" (OpenAI-compatible:
+	// Ollama, LM Studio, vLLM, OpenAI, OpenRouter, ...) or "anthropic"
+	// (Anthropic Messages API and compatible services).
+	Provider       string `json:"provider"`
+	BaseURL        string `json:"baseUrl"`
+	APIKey         string `json:"apiKey"`
+	ChatModel      string `json:"chatModel"`
+	EmbeddingModel string `json:"embeddingModel"`
+	// Optional separate OpenAI-compatible endpoint for embeddings. Required
+	// for semantic search with the anthropic provider (it has no embeddings).
+	EmbeddingBaseURL string     `json:"embeddingBaseUrl"`
+	EmbeddingAPIKey  string     `json:"embeddingApiKey"`
+	MaxTokens        int        `json:"maxTokens"` // anthropic: max_tokens per request
+	TimeoutSeconds   int        `json:"timeoutSeconds"`
+	Features         AIFeatures `json:"features"`
+	Categories       []string   `json:"categories"`
 }
 
 type DMSSettings struct {
@@ -172,7 +181,9 @@ func DefaultSettings(hostname string) Settings {
 	s.Antivirus.ClamdAddress = "clamav:3310"
 	s.Antivirus.Action = "reject"
 	s.AI.Enabled = false
+	s.AI.Provider = "openai"
 	s.AI.BaseURL = "http://ollama:11434/v1"
+	s.AI.MaxTokens = 16000
 	s.AI.ChatModel = "qwen2.5:7b"
 	s.AI.EmbeddingModel = "nomic-embed-text"
 	s.AI.TimeoutSeconds = 120

@@ -10,8 +10,9 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
   DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
 - **KI:** Spam-/Phishing-Erkennung, Kategorien, Prioritäten, Zusammenfassungen, Antwortentwürfe,
-  semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – über jeden
-  OpenAI-kompatiblen Endpunkt, also auch **lokal mit Ollama oder vLLM**
+  semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – **lokal mit Ollama**
+  oder über externe Dienste mit **OpenAI-kompatibler** (OpenAI, OpenRouter, Mistral, vLLM …) oder
+  **Anthropic-kompatibler** API (Claude)
 
 **Linux-VPS:** fertige Compose-Datei zum Kopieren, siehe [docs/VPS.md](docs/VPS.md):
 
@@ -142,7 +143,7 @@ server/
   internal/mailauth/   SPF, DKIM, DMARC
   internal/spam/       Spam-Scoring, Bayes, DNSBL, Greylisting
   internal/av/         ClamAV-Client
-  internal/ai/         OpenAI-kompatibler Client, Analyse-Worker, Embeddings
+  internal/ai/         KI-Client (OpenAI-/Anthropic-kompatibel), Analyse-Worker, Embeddings
   internal/dms/        Paperless-ngx
   internal/migrate/    IMAP-Migration, mbox/eml/zip-Import
   internal/dnsprov/    DNS-Anbieter (IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX, deSEC)

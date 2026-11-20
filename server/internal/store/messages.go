@@ -251,10 +251,10 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO messages(account_id, mailbox_id, thread_id, uid, message_id, in_reply_to, subject, from_name, from_email,
 			to_json, cc_json, reply_to_json, preview, received_at, size, seen, flagged, answered, draft, has_attachments, tags_json, category, priority,
-			spam_score, auth_json, virus, search_text, blob_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			spam_score, auth_json, virus, search_text, blob_hash, ai_done) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			m.AccountID, m.MailboxID, m.ThreadID, m.UID, m.MessageID, m.InReplyTo, m.Subject, m.From.Name, m.From.Email,
 			js(m.To), js(m.Cc), js(m.ReplyTo), m.Preview, m.ReceivedAt.Unix(), m.Size, m.Seen, m.Flagged, m.Answered, m.Draft, m.HasAttachments,
-			js(m.Tags), toNull(m.Category), m.Priority, m.SpamScore, js(m.Auth), toNull(m.Virus), strings.ToLower(m.SearchText), m.BlobHash)
+			js(m.Tags), toNull(m.Category), m.Priority, m.SpamScore, js(m.Auth), toNull(m.Virus), strings.ToLower(m.SearchText), m.BlobHash, m.AIDone)
 		if err != nil {
 			return err
 		}
@@ -657,4 +657,43 @@ func (s *Store) MessagesWithoutEmbedding(ctx context.Context, limit int) ([]int6
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// MessageKeys returns the Message-IDs and blob hashes stored in a mailbox
+// (used to skip duplicates when importing).
+func (s *Store) MessageKeys(ctx context.Context, mailboxID int64) (map[string]bool, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT message_id, blob_hash FROM messages WHERE mailbox_id = ?`, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id, hash string
+		if err := rows.Scan(&id, &hash); err != nil {
+			return nil, err
+		}
+		if id != "" {
+			out["id:"+id] = true
+		}
+		out["h:"+hash] = true
+	}
+	return out, rows.Err()
+}
+
+// MailboxByName finds a mailbox by name, creating it if needed.
+func (s *Store) EnsureMailbox(ctx context.Context, accountID int64, name string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM mailboxes WHERE account_id = ? AND name = ?`, accountID, name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	mb, err := s.CreateMailbox(ctx, accountID, name)
+	if err != nil {
+		return 0, err
+	}
+	return mb.ID, nil
 }

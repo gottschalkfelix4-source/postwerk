@@ -17,3 +17,5 @@ export * from "./Table";
 export * from "./Tabs";
 export * from "./Toast";
 export * from "./CodeInput";
+export * from "./Stepper";
+export * from "./Wizard";

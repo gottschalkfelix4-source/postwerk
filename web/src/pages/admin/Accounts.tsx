@@ -326,7 +326,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
   const emailError = touched && !isEmail(form.email) ? "Bitte eine gültige E-Mail-Adresse eingeben." : null;
   const domainOfEmail = form.email.split("@")[1]?.toLowerCase();
   const knownDomain = !domainOfEmail || !domains.data || domains.data.some((d) => d.name.toLowerCase() === domainOfEmail);
-  const pwError = touched && form.password.length < 8 ? "Mindestens 8 Zeichen." : null;
+  const pwError = touched && form.password.length < 10 ? "Mindestens 10 Zeichen." : null;
 
   return (
     <Modal
@@ -350,7 +350,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
             loading={create.isPending}
             onClick={() => {
               setTouched(true);
-              if (isEmail(form.email) && form.password.length >= 8) create.mutate();
+              if (isEmail(form.email) && form.password.length >= 10) create.mutate();
             }}
           >
             Konto anlegen
@@ -363,7 +363,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
         onSubmit={(e) => {
           e.preventDefault();
           setTouched(true);
-          if (isEmail(form.email) && form.password.length >= 8) create.mutate();
+          if (isEmail(form.email) && form.password.length >= 10) create.mutate();
         }}
       >
         <Field label="Name">
@@ -386,7 +386,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
             />
           )}
         </Field>
-        <Field label="Passwort" required error={pwError} help="Mindestens 8 Zeichen. Der Benutzer kann es später selbst ändern.">
+        <Field label="Passwort" required error={pwError} help="Mindestens 10 Zeichen. Der Benutzer kann es später selbst ändern.">
           {(id) => (
             <div className="flex gap-2">
               <div className="flex-1">

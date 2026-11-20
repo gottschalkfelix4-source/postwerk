@@ -5,6 +5,7 @@ import { KeyRound, Lock, Palmtree, Plus, ShieldCheck, ShieldOff, Smartphone, Tra
 import { accountApi } from "@/api/endpoints";
 import type { CreatedAppPassword, TotpSetup, Vacation } from "@/api/types";
 import { useMe } from "@/lib/auth";
+import { ImportCard } from "./ImportCard";
 import { qk } from "@/lib/queries";
 import { formatBytes, formatDate, formatRelative, fromDateTimeInput, toDateInput } from "@/lib/format";
 import { useDraft } from "@/lib/hooks";
@@ -63,6 +64,7 @@ export default function MailSettingsPage() {
         <TotpCard />
         <AppPasswordsCard />
         <VacationCard />
+        <ImportCard />
       </div>
     </div>
   );
@@ -73,7 +75,7 @@ function PasswordCard() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [repeat, setRepeat] = useState("");
-  const tooShort = next.length > 0 && next.length < 8;
+  const tooShort = next.length > 0 && next.length < 10;
   const mismatch = repeat.length > 0 && next !== repeat;
 
   const save = useMutation({
@@ -87,7 +89,7 @@ function PasswordCard() {
     onError: (err) => toast.error(err, "Passwort konnte nicht geändert werden"),
   });
 
-  const valid = current && next.length >= 8 && next === repeat;
+  const valid = current && next.length >= 10 && next === repeat;
 
   return (
     <Card>
@@ -102,7 +104,7 @@ function PasswordCard() {
           <Field label="Aktuelles Passwort">
             {(id) => <PasswordInput id={id} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" />}
           </Field>
-          <Field label="Neues Passwort" error={tooShort ? "Mindestens 8 Zeichen." : null}>
+          <Field label="Neues Passwort" error={tooShort ? "Mindestens 10 Zeichen." : null}>
             {(id) => <PasswordInput id={id} value={next} invalid={tooShort} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" />}
           </Field>
           <Field label="Wiederholen" error={mismatch ? "Passwörter stimmen nicht überein." : null}>

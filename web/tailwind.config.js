@@ -49,6 +49,14 @@ export default {
           from: { opacity: "0", transform: "translateY(8px) scale(0.98)" },
           to: { opacity: "1", transform: "translateY(0) scale(1)" },
         },
+        "step-in": {
+          from: { opacity: "0", transform: "translateX(10px)" },
+          to: { opacity: "1", transform: "translateX(0)" },
+        },
+        "step-in-back": {
+          from: { opacity: "0", transform: "translateX(-10px)" },
+          to: { opacity: "1", transform: "translateX(0)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 150ms ease-out",
@@ -56,6 +64,8 @@ export default {
         "slide-in-right": "slide-in-right 220ms cubic-bezier(0.32, 0.72, 0, 1)",
         "slide-in-left": "slide-in-left 220ms cubic-bezier(0.32, 0.72, 0, 1)",
         "toast-in": "toast-in 180ms ease-out",
+        "step-in": "step-in 220ms ease-out",
+        "step-in-back": "step-in-back 220ms ease-out",
       },
     },
   },

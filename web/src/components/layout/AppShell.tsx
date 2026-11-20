@@ -8,6 +8,7 @@ import { qk } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { ErrorState, FullPageSpinner } from "@/components/ui";
 import { ComposerProvider } from "@/pages/mail/Composer";
+import { useSetupPrompt } from "./SetupGate";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import type { RouteHandle } from "./routeHandle";
@@ -16,8 +17,9 @@ import type { RouteHandle } from "./routeHandle";
 export function ProtectedLayout() {
   const location = useLocation();
   const me = useQuery({ queryKey: qk.me, queryFn: () => authApi.me(true), retry: false, staleTime: 60_000 });
+  const setupPrompt = useSetupPrompt(me.data);
 
-  if (me.isLoading) {
+  if (me.isLoading || setupPrompt) {
     return (
       <div className="flex min-h-screen bg-zinc-50 dark:bg-zinc-950">
         <FullPageSpinner />

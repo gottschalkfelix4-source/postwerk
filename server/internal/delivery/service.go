@@ -5,6 +5,8 @@ package delivery
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -499,4 +501,62 @@ func ClientIP(addr string) net.IP {
 		host = addr
 	}
 	return net.ParseIP(host)
+}
+
+// ImportOptions controls how an imported message is stored.
+type ImportOptions struct {
+	ReceivedAt time.Time
+	Seen       bool
+	Flagged    bool
+	Answered   bool
+	// SkipAI marks the message as already analyzed so the AI worker ignores it.
+	SkipAI bool
+}
+
+// ImportMessage stores a message from a migration or file import without
+// running spam filtering. It respects the account quota.
+func (s *Service) ImportMessage(ctx context.Context, acct *store.Account, mailboxID int64, raw []byte, opt ImportOptions) (*store.Message, error) {
+	if acct.QuotaBytes > 0 && s.Store.UsedBytes(ctx, acct.ID)+int64(len(raw)) > acct.QuotaBytes {
+		return nil, fmt.Errorf("Quota von %s überschritten", acct.Email)
+	}
+	parsed, err := message.Parse(raw, false)
+	if err != nil {
+		parsed = &message.Parsed{}
+	}
+	hash, err := s.Store.Blobs.Put(raw)
+	if err != nil {
+		return nil, err
+	}
+	received := opt.ReceivedAt
+	if received.IsZero() {
+		received = parsed.Date
+	}
+	if received.IsZero() {
+		received = time.Now()
+	}
+	m := &store.Message{
+		AccountID: acct.ID, MailboxID: mailboxID,
+		MessageID: parsed.MessageID, InReplyTo: parsed.InReplyTo, References: parsed.References,
+		From: parsed.From, To: parsed.To, Cc: parsed.Cc, ReplyTo: parsed.ReplyTo,
+		Subject: parsed.Subject, Preview: message.Preview(parsed.Text, 200),
+		ReceivedAt: received.UTC(), Size: int64(len(raw)), HasAttachments: len(parsed.Attachments) > 0,
+		Seen: opt.Seen, Flagged: opt.Flagged, Answered: opt.Answered, AIDone: opt.SkipAI,
+		Auth:       store.AuthResults{SPF: "none", DKIM: "none", DMARC: "none"},
+		BlobHash:   hash,
+		SearchText: parsed.Subject + " " + parsed.From.Name + " " + parsed.From.Email + " " + addrText(parsed.To) + " " + message.Preview(parsed.Text, 20000),
+	}
+	if err := s.Store.InsertMessage(ctx, m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// ImportKey returns the duplicate-detection keys for raw message bytes.
+func ImportKey(raw []byte) (idKey, hashKey string) {
+	sum := sha256.Sum256(raw)
+	hashKey = "h:" + hex.EncodeToString(sum[:])
+	if id := strings.Trim(message.HeaderValue(raw, "Message-ID"), "<> \t"); id != "" {
+		idKey = "id:" + id
+	}
+	return
 }

@@ -26,6 +26,9 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus „testing“) | ✅ |
 | Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen | ✅ |
 | | Abwesenheitsnotiz | ✅ |
+| Einrichtung | Setup-Assistent mit Setup-Token, Live-DNS-Prüfung und System-Check (PTR, Port 25, ClamAV, KI) | ✅ |
+| Umzug | Migrationsassistent per IMAP (Ordnerzuordnung, Flags, Datum, Duplikaterkennung, CSV für viele Postfächer) | ✅ |
+| | Import von .mbox, .eml und .zip im Webmail | ✅ |
 | KI | OpenAI-kompatible Endpunkte (Ollama, vLLM, LocalAI, OpenAI …) | ✅ |
 | | LLM-Spam- und Phishing-Erkennung | ✅ |
 | | Kategorien und Tags, Priorität / dringende Mails | ✅ |

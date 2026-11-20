@@ -405,3 +405,110 @@ func Sum(v []int) int {
 	}
 	return t
 }
+
+// ---- flags ----
+
+func (s *Store) Flag(ctx context.Context, key string) bool {
+	var v string
+	_ = s.DB.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, "flag:"+key).Scan(&v)
+	return v == "1"
+}
+
+func (s *Store) SetFlag(ctx context.Context, key string, on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, "flag:"+key, v)
+	return err
+}
+
+// ---- migrations ----
+
+type MigrationRow struct {
+	ID           int64
+	Name         string
+	SourceJSON   string
+	OptionsJSON  string
+	Status       string
+	AccountsJSON string
+	LogJSON      string
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+}
+
+const migrationCols = `id, name, source_json, options_json, status, accounts_json, log_json, created_at, started_at, finished_at`
+
+func scanMigration(sc interface{ Scan(...any) error }) (*MigrationRow, error) {
+	var m MigrationRow
+	var created int64
+	var started, finished sql.NullInt64
+	if err := sc.Scan(&m.ID, &m.Name, &m.SourceJSON, &m.OptionsJSON, &m.Status, &m.AccountsJSON, &m.LogJSON, &created, &started, &finished); err != nil {
+		return nil, err
+	}
+	m.CreatedAt = ts(created)
+	m.StartedAt = nullTime(started)
+	m.FinishedAt = nullTime(finished)
+	return &m, nil
+}
+
+func (s *Store) CreateMigration(ctx context.Context, m *MigrationRow) error {
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO migrations(name, source_json, options_json, status, accounts_json, log_json, created_at) VALUES (?,?,?,?,?,?,?)`,
+		m.Name, m.SourceJSON, m.OptionsJSON, m.Status, m.AccountsJSON, m.LogJSON, now())
+	if err != nil {
+		return err
+	}
+	m.ID, _ = res.LastInsertId()
+	m.CreatedAt = time.Now().UTC()
+	return nil
+}
+
+func (s *Store) SaveMigration(ctx context.Context, m *MigrationRow) error {
+	var started, finished any
+	if m.StartedAt != nil {
+		started = m.StartedAt.Unix()
+	}
+	if m.FinishedAt != nil {
+		finished = m.FinishedAt.Unix()
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE migrations SET status = ?, accounts_json = ?, log_json = ?, started_at = ?, finished_at = ? WHERE id = ?`,
+		m.Status, m.AccountsJSON, m.LogJSON, started, finished, m.ID)
+	return err
+}
+
+func (s *Store) GetMigration(ctx context.Context, id int64) (*MigrationRow, error) {
+	m, err := scanMigration(s.DB.QueryRowContext(ctx, `SELECT `+migrationCols+` FROM migrations WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return m, err
+}
+
+func (s *Store) ListMigrations(ctx context.Context) ([]*MigrationRow, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+migrationCols+` FROM migrations ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*MigrationRow
+	for rows.Next() {
+		m, err := scanMigration(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteMigration(ctx context.Context, id int64) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM migrations WHERE id = ?`, id)
+	return err
+}
+
+// MarkMigrationsInterrupted flags jobs that were running when the server stopped.
+func (s *Store) MarkMigrationsInterrupted(ctx context.Context) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE migrations SET status = 'interrupted', finished_at = ? WHERE status IN ('running','pending')`, now())
+	return err
+}

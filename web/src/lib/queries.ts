@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { aiApi, mailApi } from "@/api/endpoints";
+import { aiApi, mailApi, setupApi } from "@/api/endpoints";
 import type { AiStatus } from "@/api/types";
 
 export const qk = {
   me: ["me"] as const,
+  setupStatus: ["setup", "status"] as const,
   aiStatus: ["ai", "status"] as const,
   mailboxes: ["mail", "mailboxes"] as const,
   tags: ["mail", "tags"] as const,
@@ -53,4 +54,9 @@ export function useMailboxes() {
 
 export function useTags() {
   return useQuery({ queryKey: qk.tags, queryFn: mailApi.tags, staleTime: 60_000 });
+}
+
+/** Setup state of the server; requested without a session. */
+export function useSetupStatus() {
+  return useQuery({ queryKey: qk.setupStatus, queryFn: setupApi.status, staleTime: 30_000, retry: 1 });
 }

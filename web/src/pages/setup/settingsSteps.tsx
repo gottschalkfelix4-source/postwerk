@@ -1,0 +1,608 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowRight,
+  ArrowRightLeft,
+  Bot,
+  Bug,
+  CircleCheck,
+  CircleX,
+  Clock,
+  FileUp,
+  Info,
+  Lock,
+  PartyPopper,
+  PlugZap,
+  RotateCcw,
+  ShieldAlert,
+  ShieldCheck,
+  TriangleAlert,
+  Zap,
+} from "lucide-react";
+import { adminApi } from "@/api/endpoints";
+import { errorMessage } from "@/api/client";
+import type { AiTestResult, ClamavTestResult, DnsCheck, Settings, SettingsUpdate } from "@/api/types";
+import { qk } from "@/lib/queries";
+import { cn, deepEqual, isEmail } from "@/lib/utils";
+import {
+  Badge,
+  Button,
+  ChipInput,
+  ErrorState,
+  Field,
+  Input,
+  Notice,
+  PasswordInput,
+  Skeleton,
+  SwitchRow,
+  WizardNav,
+  WizardStep,
+  useToast,
+} from "@/components/ui";
+import { setupKeys, useSetup, type StepProps } from "./context";
+import { dnsSummary, SectionTitle } from "./steps";
+
+const MASK = "••••";
+const LETS_ENCRYPT = "https://acme-v02.api.letsencrypt.org/directory";
+
+function useSettings() {
+  return useQuery({ queryKey: setupKeys.settings, queryFn: adminApi.settings, staleTime: 60_000 });
+}
+
+function useSaveSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (update: SettingsUpdate) => adminApi.saveSettings(update),
+    onSuccess: (s) => {
+      qc.setQueryData(setupKeys.settings, s);
+      void qc.invalidateQueries({ queryKey: qk.aiStatus });
+      void qc.invalidateQueries({ queryKey: setupKeys.systemCheck });
+    },
+  });
+}
+
+function SettingsGate({ q, children }: { q: ReturnType<typeof useSettings>; children: (s: Settings) => ReactNode }) {
+  if (q.isLoading) return <Skeleton className="h-64 rounded-lg" />;
+  if (q.error || !q.data) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
+  return <>{children(q.data)}</>;
+}
+
+// ---------------------------------------------------------------------------
+// 5. TLS
+// ---------------------------------------------------------------------------
+
+export function TlsStep({ onBack, onNext }: StepProps) {
+  const ctx = useSetup();
+  const toast = useToast();
+  const q = useSettings();
+  const save = useSaveSettings();
+  const [draft, setDraft] = useState<Settings["tls"]["acme"] | null>(null);
+
+  useEffect(() => {
+    if (q.data && !draft) setDraft(q.data.tls.acme);
+  }, [q.data, draft]);
+
+  const dirty = !!q.data && !!draft && !deepEqual(draft, q.data.tls.acme);
+  const emailInvalid = !!draft?.enabled && !isEmail(draft.email);
+  const domainsInvalid = !!draft?.enabled && draft.domains.length === 0;
+
+  const set = (patch: Partial<Settings["tls"]["acme"]>) => setDraft((d) => (d ? { ...d, ...patch } : d));
+
+  const enable = (on: boolean) => {
+    if (!q.data || !draft) return;
+    const hostname = q.data.server.hostname;
+    set({
+      enabled: on,
+      ...(on && !draft.email && ctx.me ? { email: ctx.me.email } : {}),
+      ...(on && draft.domains.length === 0 && hostname ? { domains: [hostname] } : {}),
+      ...(on && !draft.directoryUrl ? { directoryUrl: LETS_ENCRYPT } : {}),
+    });
+  };
+
+  const next = () => {
+    if (!dirty || !draft) return onNext();
+    save.mutate(
+      { tls: { acme: draft } },
+      {
+        onSuccess: () => {
+          toast.success("TLS-Einstellungen gespeichert", "Wirksam nach einem Neustart des Servers.");
+          onNext();
+        },
+        onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
+      },
+    );
+  };
+
+  return (
+    <WizardStep
+      icon={Lock}
+      title="TLS-Zertifikate"
+      description="Verschlüsselung für SMTP, IMAP und die Weboberfläche."
+      footer={
+        <WizardNav
+          onBack={onBack}
+          onNext={next}
+          nextLabel={dirty ? "Speichern & weiter" : "Weiter"}
+          loading={save.isPending}
+          nextDisabled={!draft || emailInvalid || domainsInvalid}
+        />
+      }
+    >
+      <SettingsGate q={q}>
+        {(s) =>
+          draft && (
+            <div className="space-y-5">
+              <div className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950/50">
+                <Badge tone={/fehl|error|fail|expired|abgelaufen/i.test(s.tls.status) ? "red" : /ok|valid|gültig|aktiv|active/i.test(s.tls.status) ? "green" : "neutral"} dot>
+                  Status
+                </Badge>
+                <p className="min-w-0 break-words text-sm text-zinc-700 dark:text-zinc-300">{s.tls.status || "Keine Angabe"}</p>
+              </div>
+
+              <SwitchRow
+                label="Zertifikate automatisch per ACME beziehen"
+                description="Postwerk holt Zertifikate von Let’s Encrypt und erneuert sie selbstständig."
+                checked={draft.enabled}
+                onChange={enable}
+              />
+
+              {draft.enabled && (
+                <div className="animate-fade-in space-y-4">
+                  <Field label="Kontakt-E-Mail" required help="Die Zertifizierungsstelle schickt hierhin Ablaufwarnungen." error={draft.email && emailInvalid ? "Ungültige E-Mail-Adresse." : null}>
+                    {(id) => <Input id={id} type="email" value={draft.email} onChange={(e) => set({ email: e.target.value })} placeholder="admin@beispiel.de" invalid={!!draft.email && emailInvalid} className="max-w-md" />}
+                  </Field>
+                  <Field
+                    label="Domains im Zertifikat"
+                    help="Der Hostname ist Pflicht. Zusätzliche Namen, z. B. autoconfig.beispiel.de oder mta-sts.beispiel.de, mit Enter hinzufügen."
+                    error={domainsInvalid ? "Mindestens ein Name ist erforderlich." : null}
+                  >
+                    {(id) => (
+                      <ChipInput
+                        id={id}
+                        value={draft.domains}
+                        onChange={(v) => set({ domains: v })}
+                        placeholder={s.server.hostname || "mail.beispiel.de"}
+                        transform={(v) => v.toLowerCase()}
+                        suggestions={suggestTlsNames(s.server.hostname, ctx.domain).filter((n) => !draft.domains.includes(n))}
+                      />
+                    )}
+                  </Field>
+                  <Notice tone="warning" icon={TriangleAlert} title="Bitte beachten">
+                    <ul className="list-disc space-y-0.5 pl-4">
+                      <li>Port 80 muss von außen erreichbar sein, damit die Zertifizierungsstelle die Domain prüfen kann.</li>
+                      <li>Alle Namen müssen per DNS auf diesen Server zeigen.</li>
+                      <li>Die Änderung wird erst nach einem Neustart des Servers wirksam.</li>
+                    </ul>
+                  </Notice>
+                </div>
+              )}
+
+              {!draft.enabled && (
+                <Notice tone="info" icon={Info}>
+                  Ohne ACME verwendet Postwerk eigene Zertifikate aus dem Datenverzeichnis oder ein selbstsigniertes Zertifikat.
+                  Mail-Programme zeigen dann eventuell Warnungen.
+                </Notice>
+              )}
+            </div>
+          )
+        }
+      </SettingsGate>
+    </WizardStep>
+  );
+}
+
+function suggestTlsNames(hostname: string, domain: string): string[] {
+  const out = new Set<string>();
+  if (hostname) out.add(hostname);
+  if (domain) {
+    out.add(`autoconfig.${domain}`);
+    out.add(`mta-sts.${domain}`);
+  }
+  return [...out];
+}
+
+// ---------------------------------------------------------------------------
+// 6. Protection & AI
+// ---------------------------------------------------------------------------
+
+interface ProtectionDraft {
+  antivirus: Settings["antivirus"];
+  spam: Settings["spam"];
+  ai: Settings["ai"];
+}
+
+export function ProtectionStep({ onBack, onNext }: StepProps) {
+  const toast = useToast();
+  const q = useSettings();
+  const save = useSaveSettings();
+  const [draft, setDraft] = useState<ProtectionDraft | null>(null);
+  const [clamResult, setClamResult] = useState<ClamavTestResult | null>(null);
+  const [aiResult, setAiResult] = useState<AiTestResult | null>(null);
+
+  useEffect(() => {
+    if (q.data && !draft) setDraft({ antivirus: q.data.antivirus, spam: q.data.spam, ai: q.data.ai });
+  }, [q.data, draft]);
+
+  const clamTest = useMutation({
+    mutationFn: (address: string) => adminApi.testClamav(address),
+    onSuccess: setClamResult,
+    onError: (err) => setClamResult({ ok: false, error: errorMessage(err) }),
+  });
+
+  const aiPayload = (d: ProtectionDraft): SettingsUpdate["ai"] => {
+    const payload: SettingsUpdate["ai"] = { ...d.ai };
+    if (q.data && d.ai.apiKey === q.data.ai.apiKey) delete payload.apiKey;
+    return payload;
+  };
+
+  const aiTest = useMutation({
+    mutationFn: async () => {
+      // The test endpoint checks the stored configuration, so save AI first.
+      if (draft && q.data && !deepEqual(draft.ai, q.data.ai)) await save.mutateAsync({ ai: aiPayload(draft) });
+      return adminApi.testAi();
+    },
+    onSuccess: setAiResult,
+    onError: (err) => setAiResult({ ok: false, latencyMs: 0, models: [], error: errorMessage(err) }),
+  });
+
+  if (!draft || !q.data) {
+    return (
+      <WizardStep icon={ShieldCheck} title="Schutz & KI" footer={<WizardNav onBack={onBack} onNext={onNext} nextDisabled />}>
+        <SettingsGate q={q}>{() => <Skeleton className="h-64 rounded-lg" />}</SettingsGate>
+      </WizardStep>
+    );
+  }
+
+  const s = q.data;
+  const update: SettingsUpdate = {};
+  if (!deepEqual(draft.antivirus, s.antivirus)) update.antivirus = draft.antivirus;
+  if (!deepEqual(draft.spam, s.spam)) update.spam = draft.spam;
+  if (!deepEqual(draft.ai, s.ai)) update.ai = aiPayload(draft);
+  const dirty = Object.keys(update).length > 0;
+
+  const setAv = (patch: Partial<Settings["antivirus"]>) => setDraft((d) => (d ? { ...d, antivirus: { ...d.antivirus, ...patch } } : d));
+  const setAi = (patch: Partial<Settings["ai"]>) => setDraft((d) => (d ? { ...d, ai: { ...d.ai, ...patch } } : d));
+  const setSpam = (fn: (spam: Settings["spam"]) => Settings["spam"]) => setDraft((d) => (d ? { ...d, spam: fn(d.spam) } : d));
+
+  const next = () => {
+    if (!dirty) return onNext();
+    save.mutate(update, {
+      onSuccess: () => {
+        toast.success("Einstellungen gespeichert");
+        onNext();
+      },
+      onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
+    });
+  };
+
+  const pickModel = (m: string) => (/embed/i.test(m) ? setAi({ embeddingModel: m }) : setAi({ chatModel: m }));
+
+  return (
+    <WizardStep
+      icon={ShieldCheck}
+      title="Schutz & KI"
+      description="Optional – alles lässt sich später unter Einstellungen ändern."
+      footer={
+        <WizardNav
+          onBack={onBack}
+          onNext={next}
+          nextLabel={dirty ? "Speichern & weiter" : "Weiter"}
+          loading={save.isPending && !aiTest.isPending}
+          extra={
+            dirty ? (
+              <Button variant="ghost" icon={RotateCcw} onClick={() => setDraft({ antivirus: s.antivirus, spam: s.spam, ai: s.ai })}>
+                Verwerfen
+              </Button>
+            ) : undefined
+          }
+        />
+      }
+    >
+      <div className="space-y-6">
+        <section className="space-y-4">
+          <SectionTitle icon={Bug} title="Virenscan" text="Eingehende Nachrichten mit ClamAV prüfen. Benötigt einen erreichbaren clamd-Dienst." />
+          <SwitchRow label="Virenscan aktivieren" checked={draft.antivirus.enabled} onChange={(v) => setAv({ enabled: v })} />
+          <Field label="clamd-Adresse" help="z. B. tcp://clamav:3310 oder unix:///run/clamav/clamd.sock">
+            {(id) => (
+              <div className="flex flex-wrap gap-2">
+                <Input
+                  id={id}
+                  value={draft.antivirus.clamdAddress}
+                  onChange={(e) => {
+                    setAv({ clamdAddress: e.target.value });
+                    setClamResult(null);
+                  }}
+                  placeholder="tcp://clamav:3310"
+                  className="min-w-[16rem] flex-1 font-mono text-[13px]"
+                />
+                <Button icon={PlugZap} loading={clamTest.isPending} disabled={!draft.antivirus.clamdAddress.trim()} onClick={() => clamTest.mutate(draft.antivirus.clamdAddress.trim())}>
+                  Verbindung testen
+                </Button>
+              </div>
+            )}
+          </Field>
+          {clamResult && (
+            <Notice tone={clamResult.ok ? "success" : "error"} icon={clamResult.ok ? CircleCheck : CircleX} title={clamResult.ok ? "clamd ist erreichbar" : "Keine Verbindung zu clamd"}>
+              {clamResult.error && <span className="break-words font-mono text-xs">{clamResult.error}</span>}
+            </Notice>
+          )}
+        </section>
+
+        <div className="border-t border-zinc-100 dark:border-zinc-800" />
+
+        <section className="space-y-4">
+          <SectionTitle icon={ShieldAlert} title="Spamfilter" text="Zusätzliche Prüfungen für eingehende Verbindungen." />
+          <SwitchRow
+            label="Greylisting"
+            description="Unbekannte Absender werden beim ersten Versuch kurz abgewiesen. Echte Mailserver versuchen es später erneut – Spam-Bots meist nicht."
+            checked={draft.spam.greylisting.enabled}
+            onChange={(v) => setSpam((sp) => ({ ...sp, greylisting: { ...sp.greylisting, enabled: v } }))}
+          />
+          <SwitchRow
+            label="DNS-Blocklisten"
+            description={
+              draft.spam.dnsbl.servers.length > 0
+                ? `IP-Adressen einliefernder Server gegen ${draft.spam.dnsbl.servers.join(", ")} prüfen.`
+                : "IP-Adressen einliefernder Server gegen öffentliche Blocklisten prüfen (Listen unter Einstellungen → Spamfilter)."
+            }
+            checked={draft.spam.dnsbl.enabled}
+            onChange={(v) => setSpam((sp) => ({ ...sp, dnsbl: { ...sp.dnsbl, enabled: v } }))}
+          />
+        </section>
+
+        <div className="border-t border-zinc-100 dark:border-zinc-800" />
+
+        <section className="space-y-4">
+          <SectionTitle icon={Bot} title="KI" text="Anbindung an ein OpenAI-kompatibles Modell, z. B. Ollama, LM Studio oder vLLM." />
+          <SwitchRow label="KI-Funktionen aktivieren" description="Zusammenfassungen, Kategorien, Antwortentwürfe und semantische Suche." checked={draft.ai.enabled} onChange={(v) => setAi({ enabled: v })} />
+          {draft.ai.enabled && (
+            <div className="animate-fade-in space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Basis-URL" help="Inklusive /v1, z. B. http://ollama:11434/v1">
+                  {(id) => <Input id={id} value={draft.ai.baseUrl} onChange={(e) => setAi({ baseUrl: e.target.value })} placeholder="http://ollama:11434/v1" className="font-mono text-[13px]" />}
+                </Field>
+                <Field label="API-Schlüssel" help="Für Ollama nicht erforderlich.">
+                  {(id) => (
+                    <PasswordInput
+                      id={id}
+                      value={draft.ai.apiKey === MASK ? "" : draft.ai.apiKey}
+                      placeholder={draft.ai.apiKey === MASK ? "•••••••• (gespeichert)" : "sk-…"}
+                      autoComplete="new-password"
+                      onChange={(e) => setAi({ apiKey: e.target.value === "" && s.ai.apiKey === MASK ? MASK : e.target.value })}
+                    />
+                  )}
+                </Field>
+                <Field label="Chat-Modell" help="z. B. llama3.1:8b oder qwen2.5:7b">
+                  {(id) => <Input id={id} value={draft.ai.chatModel} onChange={(e) => setAi({ chatModel: e.target.value })} className="font-mono text-[13px]" />}
+                </Field>
+                <Field label="Embedding-Modell" help="Für die semantische Suche, z. B. nomic-embed-text">
+                  {(id) => <Input id={id} value={draft.ai.embeddingModel} onChange={(e) => setAi({ embeddingModel: e.target.value })} className="font-mono text-[13px]" />}
+                </Field>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button icon={PlugZap} loading={aiTest.isPending} disabled={!draft.ai.baseUrl.trim()} onClick={() => aiTest.mutate()}>
+                  Verbindung testen
+                </Button>
+                {!deepEqual(draft.ai, s.ai) && <span className="text-xs text-zinc-500 dark:text-zinc-400">Die KI-Einstellungen werden vor dem Test gespeichert.</span>}
+              </div>
+              {aiTest.isPending ? (
+                <div className="flex items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/50 dark:text-zinc-400">
+                  <Zap className="h-4 w-4 animate-pulse text-indigo-500" /> Verbindung wird getestet …
+                </div>
+              ) : aiResult ? (
+                <AiResult result={aiResult} chatModel={draft.ai.chatModel} embeddingModel={draft.ai.embeddingModel} onUse={pickModel} />
+              ) : null}
+            </div>
+          )}
+        </section>
+      </div>
+    </WizardStep>
+  );
+}
+
+function AiResult({
+  result,
+  chatModel,
+  embeddingModel,
+  onUse,
+}: {
+  result: AiTestResult;
+  chatModel: string;
+  embeddingModel: string;
+  onUse: (model: string) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-3",
+        result.ok
+          ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/30 dark:bg-emerald-500/[0.07]"
+          : "border-red-200 bg-red-50/60 dark:border-red-500/30 dark:bg-red-500/[0.07]",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {result.ok ? <CircleCheck className="h-4 w-4 text-emerald-600" /> : <CircleX className="h-4 w-4 text-red-600" />}
+        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{result.ok ? "Verbindung erfolgreich" : "Verbindung fehlgeschlagen"}</span>
+        {result.ok && <Badge tone="green">{result.latencyMs} ms</Badge>}
+      </div>
+      {result.error && <p className="mt-2 break-words font-mono text-xs text-red-700 dark:text-red-300">{result.error}</p>}
+      {result.models.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            Verfügbare Modelle – klicken zum Übernehmen (Modelle mit „embed“ im Namen werden als Embedding-Modell gesetzt):
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {result.models.map((m) => {
+              const active = m === chatModel || m === embeddingModel;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => onUse(m)}
+                  className={cn(
+                    "rounded-md px-2 py-0.5 font-mono text-xs ring-1 ring-inset transition",
+                    active
+                      ? "bg-indigo-50 text-indigo-700 ring-indigo-300 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/40"
+                      : "bg-white text-zinc-700 ring-zinc-200 hover:ring-indigo-400 dark:bg-zinc-900 dark:text-zinc-300 dark:ring-zinc-700",
+                  )}
+                >
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Data import
+// ---------------------------------------------------------------------------
+
+export function DataStep({ onBack, onNext }: StepProps) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const complete = useMutation({
+    mutationFn: adminApi.completeSetup,
+    onSettled: (_data, err) => {
+      if (err) toast.error(err, "Einrichtung konnte nicht abgeschlossen werden");
+      void qc.invalidateQueries({ queryKey: qk.setupStatus });
+      navigate("/admin/migration/new");
+    },
+  });
+
+  return (
+    <WizardStep
+      icon={ArrowRightLeft}
+      title="Daten übernehmen"
+      description="Bestehende Postfächer mitnehmen – jetzt oder später."
+      footer={<WizardNav onBack={onBack} onNext={onNext} />}
+    >
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="flex flex-col rounded-xl border border-indigo-200 bg-indigo-50/50 p-5 dark:border-indigo-500/30 dark:bg-indigo-500/[0.06]">
+          <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white dark:bg-indigo-500">
+            <ArrowRightLeft className="h-5 w-5" />
+          </span>
+          <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Von einem anderen Mailserver umziehen</h3>
+          <p className="mt-1 flex-1 text-sm text-zinc-600 dark:text-zinc-300">
+            Postfächer per IMAP übernehmen – von Gmail, Outlook, GMX, mailcow, Dovecot und vielen mehr. Ordner, Gelesen-Status
+            und Datum bleiben erhalten.
+          </p>
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Die Einrichtung wird dabei abgeschlossen.</p>
+          <Button variant="primary" iconRight={ArrowRight} className="mt-4 self-start" loading={complete.isPending} onClick={() => complete.mutate()}>
+            Migrationsassistent öffnen
+          </Button>
+        </div>
+        <div className="flex flex-col rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+            <Clock className="h-5 w-5" />
+          </span>
+          <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Später</h3>
+          <p className="mt-1 flex-1 text-sm text-zinc-600 dark:text-zinc-300">
+            Die Migration findest du jederzeit in der Verwaltung unter <strong className="font-medium">Daten → Migration</strong>.
+          </p>
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            <FileUp className="mt-px h-3.5 w-3.5 shrink-0" />
+            Benutzer können außerdem selbst .mbox- und .eml-Dateien im Webmail unter „Konto & Sicherheit“ importieren.
+          </p>
+          <Button className="mt-4 self-start" onClick={onNext}>
+            Später
+          </Button>
+        </div>
+      </div>
+    </WizardStep>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Done
+// ---------------------------------------------------------------------------
+
+function SummaryRow({ label, children, ok }: { label: string; children: ReactNode; ok?: boolean | null }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-2.5">
+      <dt className="text-sm text-zinc-500 dark:text-zinc-400">{label}</dt>
+      <dd className="flex min-w-0 items-center gap-2 text-right text-sm font-medium text-zinc-900 dark:text-zinc-100">
+        <span className="min-w-0 break-words">{children}</span>
+        {ok === true && <CircleCheck className="h-4 w-4 shrink-0 text-emerald-500" />}
+        {ok === false && <TriangleAlert className="h-4 w-4 shrink-0 text-amber-500" />}
+      </dd>
+    </div>
+  );
+}
+
+export function DoneStep({ onBack }: StepProps) {
+  const ctx = useSetup();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const settings = useSettings();
+  const domains = useQuery({ queryKey: setupKeys.domains, queryFn: adminApi.domains });
+  const domain = ctx.domain || domains.data?.[0]?.name || "";
+  const dns = qc.getQueryData<DnsCheck[]>(setupKeys.dnsCheck(domain));
+  const summary = dns ? dnsSummary(dns) : null;
+
+  const complete = useMutation({
+    mutationFn: adminApi.completeSetup,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.setupStatus });
+      toast.success("Einrichtung abgeschlossen", "Viel Freude mit Postwerk!");
+      navigate("/admin", { replace: true });
+    },
+    onError: (err) => toast.error(err, "Einrichtung konnte nicht abgeschlossen werden"),
+  });
+
+  const s = settings.data;
+
+  return (
+    <WizardStep
+      icon={PartyPopper}
+      title="Geschafft!"
+      description="Dein Mailserver ist eingerichtet. Hier die Zusammenfassung."
+      footer={<WizardNav onBack={onBack} onNext={() => complete.mutate()} nextLabel="Zur Verwaltung" loading={complete.isPending} />}
+    >
+      <dl className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <SummaryRow label="Hostname">{s?.server.hostname || ctx.status.hostname || "–"}</SummaryRow>
+        <SummaryRow label="Domains">{domains.data?.map((d) => d.name).join(", ") || "–"}</SummaryRow>
+        {ctx.me && <SummaryRow label="Administrator">{ctx.me.email}</SummaryRow>}
+        <SummaryRow label="DNS" ok={summary ? summary.problems === 0 : null}>
+          {summary
+            ? summary.problems === 0
+              ? "Alle Pflichteinträge korrekt"
+              : `${summary.ok} von ${summary.required} Pflichteinträgen korrekt`
+            : "Nicht geprüft"}
+        </SummaryRow>
+        <SummaryRow label="TLS" ok={s ? s.tls.acme.enabled : null}>
+          {s ? (s.tls.acme.enabled ? `ACME aktiv (${s.tls.acme.domains.join(", ")})` : "Kein ACME") : "–"}
+        </SummaryRow>
+        <SummaryRow label="Virenscan">{s ? (s.antivirus.enabled ? "Aktiv" : "Aus") : "–"}</SummaryRow>
+        <SummaryRow label="Spamfilter">
+          {s
+            ? [s.spam.greylisting.enabled && "Greylisting", s.spam.dnsbl.enabled && "DNS-Blocklisten"].filter(Boolean).join(", ") ||
+              "Nur Basisfilter"
+            : "–"}
+        </SummaryRow>
+        <SummaryRow label="KI">{s ? (s.ai.enabled ? `Aktiv (${s.ai.chatModel || "kein Modell"})` : "Aus") : "–"}</SummaryRow>
+      </dl>
+
+      {s?.tls.acme.enabled && (
+        <Notice tone="warning" icon={Info} className="mt-4">
+          Starte den Server neu, damit die TLS-Einstellungen wirksam werden.
+        </Notice>
+      )}
+
+      <div className="mt-5 rounded-lg border border-zinc-200 p-4 text-sm dark:border-zinc-800">
+        <div className="mb-2 font-medium text-zinc-900 dark:text-zinc-100">Nächste Schritte</div>
+        <ul className="list-disc space-y-1 pl-5 text-zinc-600 dark:text-zinc-300">
+          <li>Konten und Aliase für deine Benutzer anlegen.</li>
+          <li>Für Mail-Programme und Smartphones App-Passwörter verwenden.</li>
+          <li>Zwei-Faktor-Anmeldung für dein Admin-Konto aktivieren.</li>
+        </ul>
+      </div>
+    </WizardStep>
+  );
+}

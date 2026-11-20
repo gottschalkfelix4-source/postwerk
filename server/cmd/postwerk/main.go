@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
+	"postwerk/internal/migrate"
 	"postwerk/internal/pop3"
 	"postwerk/internal/queue"
 	"postwerk/internal/smtp"
@@ -70,7 +73,8 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
-	if err := bootstrap(ctx, cfg, st, log); err != nil {
+	setupToken, err := bootstrap(ctx, cfg, st, log)
+	if err != nil {
 		return err
 	}
 
@@ -105,9 +109,16 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	spamFilter := &spam.Filter{Store: st, Settings: settings}
 	hostname := func() string { return settings.Get().Server.Hostname }
-	q := queue.New(st, hostname, queue.Relay{Host: cfg.RelayHost, User: cfg.RelayUser, Password: cfg.RelayPassword}, log)
+	relayHost := cfg.RelayHost
+	if relayHost != "" {
+		if _, _, err := net.SplitHostPort(relayHost); err != nil {
+			relayHost = net.JoinHostPort(relayHost, "587")
+		}
+	}
+	q := queue.New(st, hostname, queue.Relay{Host: relayHost, User: cfg.RelayUser, Password: cfg.RelayPassword}, log)
 	svc := &delivery.Service{Store: st, Settings: settings, Auth: authn, Spam: spamFilter, AI: aiWorker, Queue: q, Log: log.With("component", "delivery")}
 	q.Bounce = svc.Bounce
+	migrations := migrate.NewManager(st, svc, log)
 
 	go q.Run(ctx)
 	go aiWorker.Run(ctx)
@@ -143,7 +154,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	apiSrv := &api.Server{
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
-		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLSStatus: tp.Status, Version: version, Started: time.Now(),
+		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLSStatus: tp.Status, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations,
 	}
 	handler := apiSrv.Handler()
 	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: tp.HTTPHandler(handler), ReadHeaderTimeout: 10 * time.Second}
@@ -187,27 +198,30 @@ func shutdown(srv *http.Server) {
 	_ = srv.Shutdown(ctx)
 }
 
-// bootstrap creates the first domain and admin account on an empty install.
-func bootstrap(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) error {
+// bootstrap prepares an empty install. With POSTWERK_ADMIN_EMAIL set it
+// creates the first domain and admin account directly; otherwise it returns a
+// one-time setup token for the web setup assistant.
+func bootstrap(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (string, error) {
 	n, err := st.CountAccounts(ctx)
 	if err != nil || n > 0 {
-		return err
+		return "", err
 	}
 	email := store.Normalize(cfg.AdminEmail)
 	if email == "" {
-		email = "admin@" + cfg.Hostname
-		if strings.Count(cfg.Hostname, ".") >= 2 {
-			email = "admin@" + cfg.Hostname[strings.IndexByte(cfg.Hostname, '.')+1:]
-		}
+		token := auth.NewAppPassword()
+		path := filepath.Join(cfg.DataDir, "setup-token.txt")
+		_ = os.WriteFile(path, []byte(token+"\n"), 0o600)
+		log.Warn("no account yet – open the web interface and finish the setup assistant", "component", "setup", "setup_token", token, "file", path)
+		return token, nil
 	}
 	domain := store.DomainOf(email)
 	if ok, _ := st.DomainExists(ctx, domain); !ok {
 		key, err := mailauth.GenerateKey()
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err := st.CreateDomain(ctx, domain, "pw"+time.Now().Format("200601"), key); err != nil {
-			return err
+			return "", err
 		}
 	}
 	pw := cfg.AdminPassword
@@ -217,17 +231,17 @@ func bootstrap(ctx context.Context, cfg *config.Config, st *store.Store, log *sl
 	}
 	h, err := auth.HashPassword(pw)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := st.CreateAccount(ctx, &store.Account{Email: email, Name: "Administrator", PasswordHash: h, Role: "admin"}); err != nil {
-		return err
+		return "", err
 	}
 	if generated {
 		log.Warn("created initial admin account – change this password after the first login", "email", email, "password", pw)
 	} else {
 		log.Info("created initial admin account", "email", email)
 	}
-	return nil
+	return "", nil
 }
 
 func housekeeping(ctx context.Context, st *store.Store) {

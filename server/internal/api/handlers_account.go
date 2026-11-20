@@ -43,14 +43,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 	case err != nil:
 		return nil, err
 	}
-	tok := auth.RandomToken(32)
-	if err := s.Store.CreateSession(r.Context(), auth.HashToken(tok), acct.ID, sessionTTL); err != nil {
+	if err := s.startSession(w, r, acct.ID); err != nil {
 		return nil, err
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.Cfg.SecureCookies || r.TLS != nil,
-		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds()),
-	})
 	s.Log.Info("web login", "component", "auth", "ip", ip, "user", acct.Email)
 	return toMe(acct), nil
 }
@@ -182,4 +177,17 @@ func (s *Server) putVacation(w http.ResponseWriter, r *http.Request, u *store.Ac
 		return nil, err
 	}
 	return &v, nil
+}
+
+// startSession creates a session and sets the cookie.
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, accountID int64) error {
+	tok := auth.RandomToken(32)
+	if err := s.Store.CreateSession(r.Context(), auth.HashToken(tok), accountID, sessionTTL); err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.Cfg.SecureCookies || r.TLS != nil,
+		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds()),
+	})
+	return nil
 }

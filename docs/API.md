@@ -221,3 +221,118 @@ interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt:
 - `GET /metrics` – Prometheus-Format (optional mit `Authorization: Bearer <METRICS_TOKEN>`).
 - `GET /healthz` – `ok`.
 - `GET /.well-known/mta-sts.txt` – MTA-STS-Policy (ab Meilenstein 3).
+
+## Einrichtung (Setup-Assistent)
+
+Postwerk kennt drei Setup-Zustände:
+
+- `initial` – es gibt noch kein Konto. Der Server hat beim Start einen **Setup-Token** ins Log
+  geschrieben (und nach `/data/setup-token.txt`). Nur damit lässt sich das erste Admin-Konto anlegen.
+- `configure` – Konten existieren, der Assistent wurde aber noch nicht abgeschlossen. Admins werden nach
+  dem Login in den Assistenten geleitet (überspringbar).
+- `done` – fertig eingerichtet.
+
+```ts
+interface SetupStatus { mode: "initial" | "configure" | "done"; hostname: string; version: string; }
+
+type CheckStatus = "ok" | "missing" | "mismatch" | "warning" | "error" | "info";
+
+interface DnsCheck {
+  type: DnsRecord["type"]; name: string; expected: string; found: string[];
+  status: CheckStatus; purpose: string; required: boolean;
+}
+
+interface SystemCheck {
+  hostname: string;
+  hostnameIps: string[];              // A/AAAA des Hostnamens
+  ptr: { ip: string; names: string[]; matches: boolean }[];   // Reverse-DNS je IP
+  port25Outbound: CheckStatus;        // "ok" | "error" (gesperrt) | "warning"
+  port25Detail: string;
+  tls: string;                        // wie Settings.tls.status
+  clamav: CheckStatus;                // "ok" | "error" | "info" (deaktiviert)
+  clamavDetail: string;
+  ai: CheckStatus;                    // "ok" | "error" | "info"
+  aiDetail: string;
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/setup/status` | – (ohne Anmeldung) | `SetupStatus` |
+| POST | `/api/setup/initialize` | `{ token, hostname, domain, adminEmail, adminName, adminPassword }` – nur im Modus `initial` | `Me` (setzt Session-Cookie) |
+| POST | `/api/admin/setup/complete` | – | `{ ok }` (Modus → `done`) |
+| GET | `/api/admin/system/check` | – | `SystemCheck` |
+| POST | `/api/admin/system/test-clamav` | `{ address }` | `{ ok, error? }` |
+| GET | `/api/admin/domains/{name}/dns/check` | – | `DnsCheck[]` (Live-Abfrage im DNS) |
+
+Fehlercodes: `invalid_token` (403), `already_initialized` (409).
+
+## Migration (Import von einem anderen Mailserver)
+
+Quelle ist ein beliebiger IMAP-Server (Gmail, Outlook, mailcow, Dovecot, Stalwart, Synology …).
+Zugangsdaten der Quelle werden **nur im Arbeitsspeicher** gehalten, nie gespeichert. Nach einem
+Neustart steht ein laufender Job auf `interrupted` und kann mit neu eingegebenen Passwörtern wieder
+gestartet werden; bereits importierte Nachrichten werden übersprungen (Abgleich über Message-ID).
+
+```ts
+type ImapSecurity = "tls" | "starttls" | "none";
+
+interface MigrationSource { host: string; port: number; security: ImapSecurity; }
+
+interface SourceFolder {
+  name: string;                 // Pfad auf der Quelle, z. B. "INBOX" oder "Projekte/2025"
+  messages: number;
+  specialUse: string | null;    // "\Sent", "\Drafts", "\Junk", "\Trash", "\Archive" …
+  target: string;               // vorgeschlagenes Ziel: Rolle ("inbox","sent",…) oder Ordnername
+}
+
+interface MigrationAccountInput {
+  targetEmail: string;
+  username: string;             // Login auf der Quelle
+  password: string;             // Passwort / App-Passwort der Quelle
+  createAccount?: { name: string; password: string };  // Zielkonto neu anlegen
+}
+
+interface MigrationOptions {
+  includeTrash: boolean;        // Papierkorb mitnehmen (Standard false)
+  includeJunk: boolean;         // Spam mitnehmen (Standard false)
+  excludeFolders: string[];     // Quellordner, die übersprungen werden
+  since: string | null;         // nur Nachrichten ab Datum (YYYY-MM-DD)
+  analyzeWithAI: boolean;       // importierte Mails durch die KI analysieren lassen (Standard false)
+}
+
+type MigrationStatus = "pending" | "running" | "done" | "failed" | "cancelled" | "interrupted";
+
+interface MigrationAccountProgress {
+  targetEmail: string; username: string; status: MigrationStatus;
+  foldersTotal: number; foldersDone: number; currentFolder: string | null;
+  messagesTotal: number; messagesDone: number;
+  imported: number; skipped: number; failed: number;
+  error: string | null;
+}
+
+interface MigrationJob {
+  id: number; name: string; source: MigrationSource; status: MigrationStatus;
+  options: MigrationOptions;
+  createdAt: string; startedAt: string | null; finishedAt: string | null;
+  accounts: MigrationAccountProgress[];
+  log: LogEntry[];              // die letzten 100 Einträge, neueste zuerst
+}
+
+interface ImportResult { imported: number; skipped: number; failed: number; errors: string[]; }
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| POST | `/api/admin/migrations/test` | `{ source: MigrationSource, username, password }` | `{ ok, folders: SourceFolder[], error? }` |
+| GET | `/api/admin/migrations` | – | `MigrationJob[]` (neueste zuerst) |
+| POST | `/api/admin/migrations` | `{ name?, source, accounts: MigrationAccountInput[], options }` | `MigrationJob` (startet sofort) |
+| GET | `/api/admin/migrations/{id}` | – | `MigrationJob` |
+| POST | `/api/admin/migrations/{id}/cancel` | – | `{ ok }` |
+| POST | `/api/admin/migrations/{id}/restart` | `{ accounts: { targetEmail, password }[] }` | `MigrationJob` |
+| DELETE | `/api/admin/migrations/{id}` | – | `{ ok }` (nur beendete Jobs) |
+| POST | `/api/mail/import` | `multipart/form-data`: `file` (.mbox, .eml oder .zip mit .eml/.mbox), optional `mailboxId` | `ImportResult` |
+
+`/api/mail/import` importiert in das eigene Konto (Selbstbedienung, z. B. Thunderbird-Export).
+Ohne `mailboxId` landen Nachrichten im Posteingang; bei .zip werden Unterordner als Ordner angelegt.
+Maximale Dateigröße: 2 GB.

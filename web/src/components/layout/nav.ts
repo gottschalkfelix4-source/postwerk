@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowRightLeft,
   AtSign,
   CalendarDays,
   Globe,
@@ -42,6 +43,10 @@ export const adminNav: NavGroup[] = [
     ],
   },
   {
+    title: "Daten",
+    items: [{ to: "/admin/migration", label: "Migration", icon: ArrowRightLeft, keywords: "import umzug imap gmail outlook" }],
+  },
+  {
     title: "Warteschlange",
     items: [{ to: "/admin/queue", label: "Ausgehend", icon: Send, keywords: "queue zustellung" }],
   },
@@ -63,5 +68,5 @@ export const mailPages: NavItem[] = [
   { to: "/mail", label: "Posteingang", icon: Inbox, end: true, keywords: "mail nachrichten" },
   { to: "/mail/calendar", label: "Kalender", icon: CalendarDays, keywords: "termine" },
   { to: "/mail/tasks", label: "Aufgaben", icon: ListTodo, keywords: "todo" },
-  { to: "/mail/settings", label: "Konto & Sicherheit", icon: UserCog, keywords: "passwort 2fa abwesenheit" },
+  { to: "/mail/settings", label: "Konto & Sicherheit", icon: UserCog, keywords: "passwort 2fa abwesenheit import mbox eml" },
 ];

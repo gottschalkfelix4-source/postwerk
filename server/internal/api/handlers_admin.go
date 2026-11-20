@@ -131,17 +131,15 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, u *store.A
 }
 
 type dnsRecord struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Value   string `json:"value"`
-	Purpose string `json:"purpose"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Value    string `json:"value"`
+	Purpose  string `json:"purpose"`
+	Required bool   `json:"-"`
 }
 
-func (s *Server) domainDNS(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
-	d, err := s.Store.GetDomain(r.Context(), r.PathValue("name"))
-	if err != nil {
-		return nil, err
-	}
+// dnsRecords lists the recommended DNS entries for a domain.
+func (s *Server) dnsRecords(d *store.Domain) ([]dnsRecord, error) {
 	host := s.Settings.Get().Server.Hostname
 	dkim, err := mailauth.DNSValue(d.DKIMPrivateKey)
 	if err != nil {
@@ -149,19 +147,27 @@ func (s *Server) domainDNS(w http.ResponseWriter, r *http.Request, u *store.Acco
 	}
 	n := d.Name
 	return []dnsRecord{
-		{"A", host + ".", "<öffentliche IPv4 des Servers>", "Hostname des Mailservers (dazu passender PTR/Reverse-DNS beim Provider)"},
-		{"MX", n + ".", "10 " + host + ".", "Eingehende Mails für " + n + " an diesen Server leiten"},
-		{"TXT", n + ".", "v=spf1 mx -all", "SPF: nur die MX-Server dürfen für " + n + " senden"},
-		{"TXT", d.DKIMSelector + "._domainkey." + n + ".", dkim, "DKIM: öffentlicher Schlüssel für Signaturen"},
-		{"TXT", "_dmarc." + n + ".", "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n, "DMARC-Richtlinie"},
-		{"TXT", "_mta-sts." + n + ".", "v=STSv1; id=" + time.Now().Format("20060102"), "MTA-STS aktivieren (Policy unter mta-sts." + n + ")"},
-		{"CNAME", "mta-sts." + n + ".", host + ".", "MTA-STS-Policy über HTTPS bereitstellen"},
-		{"TXT", "_smtp._tls." + n + ".", "v=TLSRPTv1; rua=mailto:postmaster@" + n, "TLS-Berichte (TLS-RPT)"},
-		{"SRV", "_submissions._tcp." + n + ".", "0 1 465 " + host + ".", "Autokonfiguration: SMTP-Versand (TLS)"},
-		{"SRV", "_submission._tcp." + n + ".", "0 1 587 " + host + ".", "Autokonfiguration: SMTP-Versand (STARTTLS)"},
-		{"SRV", "_pop3s._tcp." + n + ".", "0 1 995 " + host + ".", "Autokonfiguration: POP3 (TLS)"},
-		{"CNAME", "autoconfig." + n + ".", host + ".", "Thunderbird-Autokonfiguration"},
+		{"A", host + ".", "<öffentliche IPv4 des Servers>", "Hostname des Mailservers (dazu passender PTR/Reverse-DNS beim Provider)", true},
+		{"MX", n + ".", "10 " + host + ".", "Eingehende Mails für " + n + " an diesen Server leiten", true},
+		{"TXT", n + ".", "v=spf1 mx -all", "SPF: nur die MX-Server dürfen für " + n + " senden", true},
+		{"TXT", d.DKIMSelector + "._domainkey." + n + ".", dkim, "DKIM: öffentlicher Schlüssel für Signaturen", true},
+		{"TXT", "_dmarc." + n + ".", "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n, "DMARC-Richtlinie", true},
+		{"TXT", "_mta-sts." + n + ".", "v=STSv1; id=" + time.Now().Format("20060102"), "MTA-STS aktivieren (Policy unter mta-sts." + n + ")", false},
+		{"CNAME", "mta-sts." + n + ".", host + ".", "MTA-STS-Policy über HTTPS bereitstellen", false},
+		{"TXT", "_smtp._tls." + n + ".", "v=TLSRPTv1; rua=mailto:postmaster@" + n, "TLS-Berichte (TLS-RPT)", false},
+		{"SRV", "_submissions._tcp." + n + ".", "0 1 465 " + host + ".", "Autokonfiguration: SMTP-Versand (TLS)", false},
+		{"SRV", "_submission._tcp." + n + ".", "0 1 587 " + host + ".", "Autokonfiguration: SMTP-Versand (STARTTLS)", false},
+		{"SRV", "_pop3s._tcp." + n + ".", "0 1 995 " + host + ".", "Autokonfiguration: POP3 (TLS)", false},
+		{"CNAME", "autoconfig." + n + ".", host + ".", "Thunderbird-Autokonfiguration", false},
 	}, nil
+}
+
+func (s *Server) domainDNS(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	d, err := s.Store.GetDomain(r.Context(), r.PathValue("name"))
+	if err != nil {
+		return nil, err
+	}
+	return s.dnsRecords(d)
 }
 
 // ---- accounts ----

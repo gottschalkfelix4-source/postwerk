@@ -1,4 +1,4 @@
-import { buildUrl, http } from "./client";
+import { ApiError, buildUrl, http } from "./client";
 import type {
   Account,
   AiStatus,
@@ -8,14 +8,18 @@ import type {
   Ban,
   BulkRequest,
   CalendarEvent,
+  ClamavTestResult,
   CreateAccountRequest,
+  CreateMigrationRequest,
   CreatedAppPassword,
   CreateTaskRequest,
   Dashboard,
+  DnsCheck,
   DnsRecord,
   Domain,
   DraftRequest,
   ExtractResult,
+  ImportResult,
   LogEntry,
   LoginRequest,
   Mailbox,
@@ -23,16 +27,23 @@ import type {
   MessageDetail,
   MessageQuery,
   MessageSummary,
+  MigrationJob,
+  MigrationTestRequest,
+  MigrationTestResult,
   Ok,
   Paged,
   QueueItem,
   ReplyDraft,
   ReplyRequest,
+  RestartMigrationRequest,
   ScoredMessage,
   SendRequest,
   Settings,
   SettingsUpdate,
+  SetupInitializeRequest,
+  SetupStatus,
   SummarizeRequest,
+  SystemCheck,
   SummarizeResult,
   TagCount,
   Task,
@@ -74,6 +85,7 @@ export const adminApi = {
     http.patch<Domain>(`/api/admin/domains/${enc(name)}`, body),
   deleteDomain: (name: string) => http.delete<Ok>(`/api/admin/domains/${enc(name)}`),
   domainDns: (name: string) => http.get<DnsRecord[]>(`/api/admin/domains/${enc(name)}/dns`),
+  domainDnsCheck: (name: string) => http.get<DnsCheck[]>(`/api/admin/domains/${enc(name)}/dns/check`),
 
   accounts: (params: { q?: string; limit?: number; offset?: number }) =>
     http.get<Paged<Account>>("/api/admin/accounts", { query: params }),
@@ -103,6 +115,25 @@ export const adminApi = {
   settings: () => http.get<Settings>("/api/admin/settings"),
   saveSettings: (body: SettingsUpdate) => http.put<Settings>("/api/admin/settings", body),
   testAi: () => http.post<AiTestResult>("/api/admin/settings/ai/test"),
+
+  completeSetup: () => http.post<Ok>("/api/admin/setup/complete"),
+  systemCheck: () => http.get<SystemCheck>("/api/admin/system/check"),
+  testClamav: (address: string) => http.post<ClamavTestResult>("/api/admin/system/test-clamav", { address }),
+
+  migrations: () => http.get<MigrationJob[]>("/api/admin/migrations"),
+  migration: (id: number) => http.get<MigrationJob>(`/api/admin/migrations/${id}`),
+  testMigration: (body: MigrationTestRequest) => http.post<MigrationTestResult>("/api/admin/migrations/test", body),
+  createMigration: (body: CreateMigrationRequest) => http.post<MigrationJob>("/api/admin/migrations", body),
+  cancelMigration: (id: number) => http.post<Ok>(`/api/admin/migrations/${id}/cancel`),
+  restartMigration: (id: number, body: RestartMigrationRequest) =>
+    http.post<MigrationJob>(`/api/admin/migrations/${id}/restart`, body),
+  deleteMigration: (id: number) => http.delete<Ok>(`/api/admin/migrations/${id}`),
+};
+
+export const setupApi = {
+  status: () => http.get<SetupStatus>("/api/setup/status", { skipAuthRedirect: true }),
+  initialize: (body: SetupInitializeRequest) =>
+    http.post<Me>("/api/setup/initialize", body, { skipAuthRedirect: true }),
 };
 
 export const mailApi = {
@@ -133,6 +164,8 @@ export const mailApi = {
   send: (body: SendRequest) => http.post<{ ok: boolean; id: number }>("/api/mail/send", body),
   saveDraft: (body: DraftRequest) => http.post<{ id: number }>("/api/mail/drafts", body),
   tags: () => http.get<TagCount[]>("/api/mail/tags"),
+
+  importFile: uploadMailImport,
 
   rawUrl: (id: number) => `/api/mail/messages/${id}/raw`,
   attachmentUrl: (id: number, attId: number) => `/api/mail/messages/${id}/attachments/${attId}`,
@@ -167,3 +200,68 @@ export const dmsApi = {
 };
 
 export const metricsUrl = buildUrl("/metrics");
+
+export interface UploadOptions {
+  /** Target mailbox; omitted means the inbox. */
+  mailboxId?: number;
+  /** Called with the fraction (0..1) of bytes sent. */
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * POST /api/mail/import as multipart/form-data. Uses XMLHttpRequest because
+ * fetch does not report upload progress. The browser sets the multipart
+ * Content-Type (with boundary) itself.
+ */
+function uploadMailImport(file: File, opts: UploadOptions = {}): Promise<ImportResult> {
+  return new Promise<ImportResult>((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    if (opts.mailboxId !== undefined) form.append("mailboxId", String(opts.mailboxId));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/mail/import");
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("X-Postwerk", "1");
+    xhr.setRequestHeader("Accept", "application/json");
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && opts.onProgress) opts.onProgress(e.total > 0 ? e.loaded / e.total : 0);
+    };
+    xhr.onload = () => {
+      let data: unknown = null;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = null;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data as ImportResult);
+        return;
+      }
+      const body = (data ?? {}) as { error?: unknown; message?: unknown };
+      const code = typeof body.error === "string" ? body.error : xhr.status === 413 ? "too_large" : "error";
+      const message =
+        typeof body.message === "string" && body.message
+          ? body.message
+          : xhr.status === 413
+            ? "Die Datei ist zu groß."
+            : xhr.status === 401
+              ? "Bitte melde dich an."
+              : `Import fehlgeschlagen (HTTP ${xhr.status}).`;
+      reject(new ApiError(xhr.status, code, message));
+    };
+    xhr.onerror = () => reject(new ApiError(0, "network", "Der Server ist nicht erreichbar."));
+    xhr.onabort = () => reject(new DOMException("Upload abgebrochen", "AbortError"));
+
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        reject(new DOMException("Upload abgebrochen", "AbortError"));
+        return;
+      }
+      opts.signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    }
+    xhr.send(form);
+  });
+}

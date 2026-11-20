@@ -178,3 +178,95 @@ export interface ExtractResult { events: ExtractedEvent[]; tasks: ExtractedTask[
 export interface CreateTaskRequest { title: string; due?: string | null; sourceMessageId?: number | null; }
 
 export interface UpdateTaskRequest { title?: string; due?: string | null; done?: boolean; }
+
+// ---------------------------------------------------------------------------
+// Setup wizard (docs/API.md, "Einrichtung (Setup-Assistent)").
+// ---------------------------------------------------------------------------
+
+export interface SetupStatus { mode: "initial" | "configure" | "done"; hostname: string; version: string; }
+
+export type CheckStatus = "ok" | "missing" | "mismatch" | "warning" | "error" | "info";
+
+export interface DnsCheck {
+  type: DnsRecord["type"]; name: string; expected: string; found: string[];
+  status: CheckStatus; purpose: string; required: boolean;
+}
+
+export interface SystemCheck {
+  hostname: string;
+  hostnameIps: string[];              // A/AAAA of the hostname
+  ptr: { ip: string; names: string[]; matches: boolean }[];   // reverse DNS per IP
+  port25Outbound: CheckStatus;        // "ok" | "error" (blocked) | "warning"
+  port25Detail: string;
+  tls: string;                        // same as Settings.tls.status
+  clamav: CheckStatus;                // "ok" | "error" | "info" (disabled)
+  clamavDetail: string;
+  ai: CheckStatus;                    // "ok" | "error" | "info"
+  aiDetail: string;
+}
+
+export interface SetupInitializeRequest {
+  token: string; hostname: string; domain: string; adminEmail: string; adminName: string; adminPassword: string;
+}
+
+export interface ClamavTestResult { ok: boolean; error?: string; }
+
+// ---------------------------------------------------------------------------
+// Migration (docs/API.md, "Migration").
+// ---------------------------------------------------------------------------
+
+export type ImapSecurity = "tls" | "starttls" | "none";
+
+export interface MigrationSource { host: string; port: number; security: ImapSecurity; }
+
+export interface SourceFolder {
+  name: string;                 // path on the source, e.g. "INBOX" or "Projekte/2025"
+  messages: number;
+  specialUse: string | null;    // "\Sent", "\Drafts", "\Junk", "\Trash", "\Archive" …
+  target: string;               // suggested target: role ("inbox","sent",…) or folder name
+}
+
+export interface MigrationAccountInput {
+  targetEmail: string;
+  username: string;             // login on the source
+  password: string;             // password / app password on the source
+  createAccount?: { name: string; password: string };  // create the target account
+}
+
+export interface MigrationOptions {
+  includeTrash: boolean;        // migrate trash (default false)
+  includeJunk: boolean;         // migrate junk (default false)
+  excludeFolders: string[];     // source folders to skip
+  since: string | null;         // only messages since date (YYYY-MM-DD)
+  analyzeWithAI: boolean;       // run imported messages through the AI (default false)
+}
+
+export type MigrationStatus = "pending" | "running" | "done" | "failed" | "cancelled" | "interrupted";
+
+export interface MigrationAccountProgress {
+  targetEmail: string; username: string; status: MigrationStatus;
+  foldersTotal: number; foldersDone: number; currentFolder: string | null;
+  messagesTotal: number; messagesDone: number;
+  imported: number; skipped: number; failed: number;
+  error: string | null;
+}
+
+export interface MigrationJob {
+  id: number; name: string; source: MigrationSource; status: MigrationStatus;
+  options: MigrationOptions;
+  createdAt: string; startedAt: string | null; finishedAt: string | null;
+  accounts: MigrationAccountProgress[];
+  log: LogEntry[];              // the last 100 entries, newest first
+}
+
+export interface ImportResult { imported: number; skipped: number; failed: number; errors: string[]; }
+
+export interface MigrationTestRequest { source: MigrationSource; username: string; password: string; }
+
+export interface MigrationTestResult { ok: boolean; folders: SourceFolder[]; error?: string; }
+
+export interface CreateMigrationRequest {
+  name?: string; source: MigrationSource; accounts: MigrationAccountInput[]; options: MigrationOptions;
+}
+
+export interface RestartMigrationRequest { accounts: { targetEmail: string; password: string }[]; }

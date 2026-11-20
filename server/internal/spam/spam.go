@@ -20,13 +20,13 @@ import (
 )
 
 type Verdict struct {
-	Score   float64
-	Rules   []string
-	BayesP  float64 // -1 if not available
-	DNSBL   []string
-	Tokens  []string
-	IsSpam  bool
-	Reject  bool
+	Score  float64
+	Rules  []string
+	BayesP float64 // -1 if not available
+	DNSBL  []string
+	Tokens []string
+	IsSpam bool
+	Reject bool
 }
 
 type Filter struct {

@@ -233,6 +233,18 @@ var migrations = []string{
 		value INTEGER NOT NULL,
 		PRIMARY KEY(hour, metric)
 	);`,
+	`CREATE TABLE migrations (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		source_json TEXT NOT NULL,
+		options_json TEXT NOT NULL,
+		status TEXT NOT NULL,
+		accounts_json TEXT NOT NULL,
+		log_json TEXT NOT NULL DEFAULT '[]',
+		created_at INTEGER NOT NULL,
+		started_at INTEGER,
+		finished_at INTEGER
+	);`,
 }
 
 func migrate(db *sql.DB) error {

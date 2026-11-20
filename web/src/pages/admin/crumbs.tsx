@@ -25,3 +25,12 @@ export function AccountCrumb({ id }: { id: number }) {
   });
   return <>{q.data?.email ?? `Konto #${id}`}</>;
 }
+
+export function MigrationCrumb({ id }: { id: number }) {
+  const q = useQuery({
+    queryKey: ["admin", "migration", id],
+    queryFn: () => adminApi.migration(id),
+    enabled: Number.isFinite(id),
+  });
+  return <>{q.data?.name || `Migration #${id}`}</>;
+}

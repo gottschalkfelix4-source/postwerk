@@ -15,6 +15,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -25,6 +26,7 @@ import (
 	"postwerk/internal/delivery"
 	"postwerk/internal/logx"
 	"postwerk/internal/metrics"
+	"postwerk/internal/migrate"
 	"postwerk/internal/spam"
 	"postwerk/internal/store"
 )
@@ -33,20 +35,24 @@ const sessionCookie = "pw_session"
 const sessionTTL = 14 * 24 * time.Hour
 
 type Server struct {
-	Cfg       *config.Config
-	Store     *store.Store
-	Settings  *store.SettingsCache
-	Auth      *auth.Authenticator
-	Delivery  *delivery.Service
-	AI        *ai.Client
-	AIWorker  *ai.Worker
-	Spam      *spam.Filter
-	Logs      *logx.Ring
-	Log       *slog.Logger
-	UI        fs.FS
-	TLSStatus string
-	Version   string
-	Started   time.Time
+	Cfg        *config.Config
+	Store      *store.Store
+	Settings   *store.SettingsCache
+	Auth       *auth.Authenticator
+	Delivery   *delivery.Service
+	AI         *ai.Client
+	AIWorker   *ai.Worker
+	Spam       *spam.Filter
+	Logs       *logx.Ring
+	Log        *slog.Logger
+	UI         fs.FS
+	TLSStatus  string
+	Version    string
+	Started    time.Time
+	SetupToken string
+	Migrations *migrate.Manager
+
+	setupMu sync.Mutex
 }
 
 type apiError struct {
@@ -272,6 +278,24 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/auth/login", s.wrap(s.login))
 	m.HandleFunc("POST /api/auth/logout", s.wrap(s.logout))
 	m.HandleFunc("GET /api/auth/me", s.user(s.me))
+
+	// setup
+	m.HandleFunc("GET /api/setup/status", s.wrap(s.setupStatus))
+	m.HandleFunc("POST /api/setup/initialize", s.wrap(s.setupInitialize))
+	m.HandleFunc("POST /api/admin/setup/complete", s.admin(s.setupComplete))
+	m.HandleFunc("GET /api/admin/system/check", s.admin(s.systemCheck))
+	m.HandleFunc("POST /api/admin/system/test-clamav", s.admin(s.testClamAV))
+	m.HandleFunc("GET /api/admin/domains/{name}/dns/check", s.admin(s.domainDNSCheck))
+
+	// migration & import
+	m.HandleFunc("POST /api/admin/migrations/test", s.admin(s.migrationTest))
+	m.HandleFunc("GET /api/admin/migrations", s.admin(s.listMigrations))
+	m.HandleFunc("POST /api/admin/migrations", s.admin(s.createMigration))
+	m.HandleFunc("GET /api/admin/migrations/{id}", s.admin(s.getMigration))
+	m.HandleFunc("POST /api/admin/migrations/{id}/cancel", s.admin(s.cancelMigration))
+	m.HandleFunc("POST /api/admin/migrations/{id}/restart", s.admin(s.restartMigration))
+	m.HandleFunc("DELETE /api/admin/migrations/{id}", s.admin(s.deleteMigration))
+	m.HandleFunc("POST /api/mail/import", s.user(s.importFile))
 
 	// own account
 	m.HandleFunc("POST /api/account/password", s.user(s.changePassword))

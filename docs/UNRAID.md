@@ -56,14 +56,9 @@ Wenn du eingehende Mails auf Viren prüfen willst, starte zuerst ClamAV:
 
 ## 3. Postwerk-Container anlegen
 
-**Docker → Container hinzufügen**, bei **Vorlage** `Postwerk` wählen und mindestens diese Felder ausfüllen:
-
-| Feld | Beispiel | Hinweis |
-|---|---|---|
-| Hostname | `mail.deinedomain.de` | Name des Mailservers, bekommt einen A-Record |
-| Admin-E-Mail | `admin@deinedomain.de` | Die Domain wird beim ersten Start automatisch angelegt |
-| Admin-Passwort | ein langes Passwort | Leer lassen, dann steht ein erzeugtes Passwort im Container-Log |
-| Daten | `/mnt/user/appdata/postwerk` | Datenbank, Mails, DKIM-Schlüssel, Zertifikate |
+**Docker → Container hinzufügen**, bei **Vorlage** `Postwerk` wählen. Eigentlich musst du nur den
+**Hostnamen** eintragen (z. B. `mail.deinedomain.de`). Die Felder „Admin-E-Mail“ und „Admin-Passwort“
+bleiben leer, das Admin-Konto legst du gleich im Setup-Assistenten an.
 
 Die Ports sind schon passend vorbelegt:
 
@@ -80,16 +75,25 @@ Unraid selbst belegt 80 und 443, deshalb läuft die Weboberfläche auf 8880/8843
 Unter **Erweiterte Ansicht** findest du PUID/PGID (Standard 99/100 = `nobody:users`), Zeitzone,
 Smarthost und Reverse-Proxy-Optionen.
 
-**Anwenden** klicken. Danach ist die Oberfläche unter `http://<Unraid-IP>:8880` erreichbar
-(oder über das Postwerk-Icon → **WebUI**).
+**Anwenden** klicken.
 
-Ohne Admin-Passwort findest du das erzeugte Passwort so:
+## 3a. Setup-Assistent
 
-```bash
-docker logs Postwerk 2>&1 | grep -i "initial admin"
-```
+1. Den **Setup-Token** aus dem Log holen:
+   ```bash
+   docker logs Postwerk 2>&1 | grep -i setup_token
+   ```
+   Er steht auch in `/mnt/user/appdata/postwerk/setup-token.txt`.
+2. `http://<Unraid-IP>:8880` öffnen (oder Postwerk-Icon → **WebUI**). Der Assistent startet automatisch.
+3. Er führt dich durch:
+   - **Server & Admin:** Hostname, erste Domain, dein Admin-Konto
+   - **DNS:** prüft live, welche Einträge schon stimmen (MX, SPF, DKIM, DMARC …), mit Kopier-Knöpfen
+   - **System-Check:** Reverse-DNS, ausgehender Port 25, ClamAV, KI
+   - **TLS:** Let's Encrypt einschalten
+   - **Schutz & KI:** Virenscan, Spamfilter, Ollama, jeweils mit Verbindungstest
+   - **Daten übernehmen:** direkt weiter zum Migrationsassistenten
 
----
+Den Assistenten kannst du überspringen und später fortsetzen. Er erscheint nach dem Login, bis du ihn abschließt.
 
 ## 4. Router: Ports weiterleiten
 
@@ -173,6 +177,30 @@ kopieren und im Template unter **Erweiterte Ansicht** zwei Variablen ergänzen:
 Benutzername ist die volle E-Mail-Adresse. IMAP folgt in einer späteren Version (siehe Roadmap).
 
 ---
+
+## 7a. Von einem anderen Mailserver umziehen
+
+**Verwaltung → Migration → Neue Migration** übernimmt Postfächer per IMAP von jedem anderen Server
+(Gmail, Outlook/Microsoft 365, iCloud, GMX, WEB.DE, IONOS, Strato, T-Online, mailcow, Synology, Dovecot …):
+
+1. **Quelle** wählen (Voreinstellungen für die großen Anbieter) oder eigenen Server eintragen.
+2. **Testanmeldung** mit einem Postfach: Du siehst alle Ordner mit Anzahl und Ziel („Sent Items“ →
+   „Gesendet“ usw.) und kannst Ordner abwählen.
+3. **Postfächer** eintragen, einzeln oder per **CSV** für eine ganze Domain
+   (`zieladresse;quellbenutzer;quellpasswort;name;neues_passwort`). Fehlende Zielkonten und Domains legt
+   Postwerk dabei an.
+4. **Optionen:** Papierkorb und Spam mitnehmen, nur Mails ab einem Datum, KI-Analyse für importierte Mails.
+5. **Starten.** Der Fortschritt läuft live mit.
+
+Gelesen- und Markiert-Status sowie das ursprüngliche Empfangsdatum bleiben erhalten. Bereits importierte
+Nachrichten werden erkannt (Message-ID), ein zweiter Lauf holt also nur Neues nach. Das ist praktisch,
+um kurz vor der DNS-Umstellung noch einmal zu synchronisieren. Quell-Passwörter werden nicht
+gespeichert; nach einem Neustart fragt „Erneut starten“ sie neu ab.
+
+> Gmail, iCloud, Outlook und GMX verlangen meist ein **App-Passwort** und aktiviertes IMAP.
+
+**Selbst importieren:** Jeder Benutzer kann im Webmail unter **Einstellungen → Import** eigene Exporte
+hochladen (`.mbox` aus Thunderbird oder Apple Mail, `.eml`, `.zip`).
 
 ## Backup, Update, Fehlersuche
 

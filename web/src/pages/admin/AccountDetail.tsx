@@ -108,7 +108,7 @@ export default function AccountDetailPage() {
   const a = q.data;
   const original = toForm(a);
   const dirty = JSON.stringify(original) !== JSON.stringify(form);
-  const pwError = form.password && form.password.length < 8 ? "Mindestens 8 Zeichen." : null;
+  const pwError = form.password && form.password.length < 10 ? "Mindestens 10 Zeichen." : null;
 
   const submit = () => {
     if (pwError) return;

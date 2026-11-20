@@ -72,17 +72,17 @@ type msgRef struct {
 }
 
 type session struct {
-	s     *Server
-	conn  net.Conn
-	r     *bufio.Reader
-	w     *bufio.Writer
-	ip    string
-	tls   bool
-	user  string
-	acct  *store.Account
-	msgs  []*msgRef
-	log   *slog.Logger
-	ctx   context.Context
+	s    *Server
+	conn net.Conn
+	r    *bufio.Reader
+	w    *bufio.Writer
+	ip   string
+	tls  bool
+	user string
+	acct *store.Account
+	msgs []*msgRef
+	log  *slog.Logger
+	ctx  context.Context
 }
 
 func (s *Server) serve(ctx context.Context, c net.Conn) {

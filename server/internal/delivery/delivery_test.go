@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"log/slog"
 	"net"
 	"net/smtp"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -26,14 +26,14 @@ type noopQueue struct{ n int }
 func (q *noopQueue) Notify() { q.n++ }
 
 type env struct {
-	st      *store.Store
-	svc     *delivery.Service
-	smtp    string
-	sub     string
-	pop     string
-	queue   *noopQueue
-	userPw  string
-	cancel  context.CancelFunc
+	st     *store.Store
+	svc    *delivery.Service
+	smtp   string
+	sub    string
+	pop    string
+	queue  *noopQueue
+	userPw string
+	cancel context.CancelFunc
 }
 
 func freeAddr(t *testing.T) string {
@@ -86,7 +86,9 @@ func setup(t *testing.T) *env {
 	go (&smtpd.Server{Addr: e.smtp, Mode: smtpd.ModeInbound, Hostname: host, MaxSize: size, Backend: svc, Log: log}).ListenAndServe(ctx)
 	go (&smtpd.Server{Addr: e.sub, Mode: smtpd.ModeSubmission, Hostname: host, MaxSize: size, Backend: svc, Log: log, AllowInsecureAuth: true}).ListenAndServe(ctx)
 	go (&pop3.Server{Addr: e.pop, Store: st, Banned: guard.Banned, Hostname: host, Log: log, AllowInsecureAuth: true,
-		Auth: func(ctx context.Context, ip, u, p string) (*store.Account, error) { return authn.Protocol(ctx, ip, u, p, "pop3") }}).ListenAndServe(ctx)
+		Auth: func(ctx context.Context, ip, u, p string) (*store.Account, error) {
+			return authn.Protocol(ctx, ip, u, p, "pop3")
+		}}).ListenAndServe(ctx)
 	time.Sleep(100 * time.Millisecond)
 	t.Cleanup(func() { cancel(); st.Close() })
 	return e

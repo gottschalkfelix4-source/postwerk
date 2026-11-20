@@ -6,6 +6,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 - **Protokolle:** SMTP, Submission (587/465), POP3, Weboberfläche + REST-API
 - **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM/DMARC, Spamfilter mit Bayes, DNSBL und Greylisting,
   ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre
+- **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung, Migrationsassistent für den Umzug per
+  IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
 - **KI:** Spam-/Phishing-Erkennung, Kategorien, Prioritäten, Zusammenfassungen, Antwortentwürfe,
   semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – über jeden
   OpenAI-kompatiblen Endpunkt, also auch **lokal mit Ollama oder vLLM**
@@ -26,8 +28,12 @@ git clone https://github.com/gottschalkfelix4-source/postwerk.git && cd postwerk
 cp .env.example .env        # Hostname und Admin-Adresse eintragen
 docker compose pull         # fertiges Image von ghcr.io (oder: docker compose up -d --build)
 docker compose up -d
-docker compose logs postwerk | grep -i admin   # erzeugtes Admin-Passwort, falls keins gesetzt
+docker compose logs postwerk | grep -i setup_token   # Token für den Setup-Assistenten
 ```
+
+Dann `http://<server>/` öffnen: Der Setup-Assistent legt Domain und Admin-Konto an, prüft die
+DNS-Einträge und richtet TLS, Virenscan und KI ein. Wer lieber alles vorgibt, setzt
+`POSTWERK_ADMIN_EMAIL` (und optional `POSTWERK_ADMIN_PASSWORD`) in der `.env`.
 
 Ohne Compose:
 
@@ -37,8 +43,6 @@ docker run -d --name postwerk --restart unless-stopped \
   -p 25:2525 -p 587:5870 -p 465:4650 -p 995:9950 -p 80:8080 -p 443:8443 \
   -v postwerk-data:/data ghcr.io/gottschalkfelix4-source/postwerk:latest
 ```
-
-Danach ist die Oberfläche unter `http://<server>/` erreichbar.
 
 Mit Virenscanner und lokalem LLM:
 
@@ -120,6 +124,7 @@ server/
   internal/av/         ClamAV-Client
   internal/ai/         OpenAI-kompatibler Client, Analyse-Worker, Embeddings
   internal/dms/        Paperless-ngx
+  internal/migrate/    IMAP-Migration, mbox/eml/zip-Import
   internal/api/        REST-API, statische Oberfläche
   internal/store/      SQLite + Blob-Speicher
 web/                   React-Oberfläche (Verwaltung + Webmail)

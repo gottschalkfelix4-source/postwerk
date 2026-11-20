@@ -494,3 +494,69 @@ interface CertificateFile {
 
 Das Zertifikatsverzeichnis im Container ist `/certs` (Umgebungsvariable `POSTWERK_CERTS_DIR`); dorthin
 bindet man den Zertifikatsordner des Proxys **schreibgeschützt** ein.
+
+## Dynamische IP: DynDNS und Smarthost
+
+Bei einem Internetanschluss mit wechselnder IP hält Postwerk den A-Record des Mailserver-Hostnamens
+per **DynDNS** aktuell (Protokoll `dyndns2`, z. B. STRATO) und verschickt ausgehende Mails über einen
+**Smarthost**, weil Privatkunden-IPs von großen Mailanbietern meist abgelehnt werden (Spamhaus-PBL,
+kein Reverse-DNS). Postwerk ruft den DynDNS-Dienst nur bei einer IP-Änderung auf (sonst droht eine
+Sperre wegen „abuse“). Die öffentliche IP ermittelt es über einen einstellbaren Dienst
+(Standard `https://api.ipify.org`).
+
+### Neue Einstellungsabschnitte (`GET/PUT /api/admin/settings`)
+
+```ts
+interface Settings {
+  // … bestehende Abschnitte …
+  dyndns: {
+    enabled: boolean;
+    preset: "strato" | "inwx" | "desec" | "noip" | "custom";
+    updateUrl: string;            // dyndns2-Endpunkt; bei Presets vorbelegt
+    hostnames: string[];          // z. B. ["mail.example.com"]
+    username: string;             // STRATO: die Domain bzw. Subdomain
+    password: string;             // maskiert "••••" wenn gesetzt
+    ipCheckUrl: string;           // Dienst, der die öffentliche IPv4 als Text liefert
+    intervalMinutes: number;      // Prüfintervall (Standard 5, min. 1)
+  };
+  relay: {                        // Smarthost für ausgehende Mails
+    enabled: boolean;
+    preset: "strato" | "ionos" | "brevo" | "mailjet" | "smtp2go" | "ses" | "custom";
+    host: string;
+    port: number;
+    security: "tls" | "starttls";
+    username: string;
+    password: string;             // maskiert
+    spfInclude: string;           // z. B. "include:_spf.strato.com" – wird im SPF-Vorschlag ergänzt
+  };
+}
+```
+
+Umgebungsvariablen `POSTWERK_RELAY_*` überschreiben `relay` weiterhin (dann ist `relay` in der
+Oberfläche nur lesbar; `GET /api/admin/relay/presets` liefert dazu `envOverride: true`).
+
+### Typen und Endpunkte
+
+```ts
+interface DynDNSPreset { id: string; name: string; updateUrl: string; usernameHint: string; passwordHint: string; docsUrl: string | null; notes: string | null; }
+interface RelayPreset  { id: string; name: string; host: string; port: number; security: "tls" | "starttls"; usernameHint: string; spfInclude: string; docsUrl: string | null; notes: string | null; }
+
+interface DynDNSStatus {
+  enabled: boolean;
+  currentIp: string | null;       // zuletzt ermittelte öffentliche IP
+  dnsIps: Record<string, string[]>;   // aktuelle A-Records je Hostname (Live-Abfrage)
+  lastUpdate: string | null;      // Zeitpunkt der letzten erfolgreichen Meldung
+  lastResult: string | null;      // Antwort des Dienstes, z. B. "good 203.0.113.7" / "nochg …"
+  error: string | null;           // z. B. "badauth – Benutzername oder DynDNS-Passwort falsch"
+  pausedUntil: string | null;     // nach "abuse"/"badauth" pausiert
+  nextCheck: string | null;
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/dyndns/presets` | – | `DynDNSPreset[]` |
+| GET | `/api/admin/dyndns/status` | – | `DynDNSStatus` |
+| POST | `/api/admin/dyndns/update` | – | `DynDNSStatus` (jetzt sofort prüfen und – nur bei Abweichung – melden; mit `{ force: true }` immer melden) |
+| GET | `/api/admin/relay/presets` | – | `{ presets: RelayPreset[]; envOverride: boolean }` |
+| POST | `/api/admin/relay/test` | – (prüft gespeicherte Einstellungen) | `{ ok: boolean; detail: string }` (Verbindung, TLS, Anmeldung) |

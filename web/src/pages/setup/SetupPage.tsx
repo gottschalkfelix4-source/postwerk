@@ -12,8 +12,9 @@ import { Logo } from "@/components/layout/Logo";
 import { SetupContext, type InitForm, type SetupCtx } from "./context";
 import { DnsStep, ServerAdminStep, ServerStep, SystemStep, WelcomeStep } from "./steps";
 import { DataStep, DoneStep, ProtectionStep, ProxyStep, TlsStep } from "./settingsSteps";
+import { ConnectionStep } from "./connectionStep";
 
-type StepId = "welcome" | "server" | "dns" | "system" | "proxy" | "tls" | "protection" | "data" | "done";
+type StepId = "welcome" | "server" | "dns" | "system" | "connection" | "proxy" | "tls" | "protection" | "data" | "done";
 
 export default function SetupPage() {
   const navigate = useNavigate();
@@ -58,6 +59,7 @@ export default function SetupPage() {
         : { id: "server", label: "Server", description: "Hostname" },
       { id: "dns", label: "DNS", description: "Einträge prüfen" },
       { id: "system", label: "System-Check", description: "Ports und Reverse-DNS" },
+      { id: "connection", label: "Internetanschluss", description: "Feste oder dynamische IP" },
       { id: "proxy", label: "Reverse-Proxy", description: "Weboberfläche" },
       { id: "tls", label: "TLS", description: "Zertifikatsquelle" },
       { id: "protection", label: "Schutz & KI", description: "Optional" },
@@ -183,6 +185,8 @@ export default function SetupPage() {
             <DnsStep {...props} />
           ) : id === "system" ? (
             <SystemStep {...props} />
+          ) : id === "connection" ? (
+            <ConnectionStep {...props} />
           ) : id === "proxy" ? (
             <ProxyStep {...props} />
           ) : id === "tls" ? (

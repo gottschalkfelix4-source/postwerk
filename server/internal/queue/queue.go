@@ -20,7 +20,8 @@ import (
 )
 
 type Relay struct {
-	Host     string // host:port
+	Host     string // host:port; empty = deliver directly via MX
+	Security string // "tls" (implicit, e.g. 465) or "starttls"
 	User     string
 	Password string
 }
@@ -30,13 +31,14 @@ type Bouncer func(ctx context.Context, from string, failed []string, reason stri
 type Queue struct {
 	Store    *store.Store
 	Hostname func() string
-	Relay    Relay
-	Bounce   Bouncer
-	Log      *slog.Logger
-	wake     chan struct{}
+	// Relay returns the current smarthost configuration (may change at runtime).
+	Relay  func() Relay
+	Bounce Bouncer
+	Log    *slog.Logger
+	wake   chan struct{}
 }
 
-func New(st *store.Store, hostname func() string, relay Relay, log *slog.Logger) *Queue {
+func New(st *store.Store, hostname func() string, relay func() Relay, log *slog.Logger) *Queue {
 	return &Queue{Store: st, Hostname: hostname, Relay: relay, Log: log.With("component", "queue"), wake: make(chan struct{}, 1)}
 }
 
@@ -98,12 +100,13 @@ func (q *Queue) attempt(ctx context.Context, it *store.QueueItem) {
 		d := store.DomainOf(r)
 		byDomain[d] = append(byDomain[d], r)
 	}
-	if q.Relay.Host != "" {
+	relay := q.Relay()
+	if relay.Host != "" {
 		byDomain = map[string][]string{"": it.To}
 	}
 	var temp, perm []rcptErr
 	for domain, rcpts := range byDomain {
-		errs := q.deliverDomain(ctx, domain, it.From, rcpts, data)
+		errs := q.deliverDomain(ctx, relay, domain, it.From, rcpts, data)
 		for _, e := range errs {
 			if e.permanent {
 				perm = append(perm, e)
@@ -167,9 +170,9 @@ func allErr(rcpts []string, permanent bool, msg string) []rcptErr {
 	return out
 }
 
-func (q *Queue) deliverDomain(ctx context.Context, domain, from string, rcpts []string, data []byte) []rcptErr {
-	if q.Relay.Host != "" {
-		return q.send(ctx, q.Relay.Host, "", from, rcpts, data, true)
+func (q *Queue) deliverDomain(ctx context.Context, relay Relay, domain, from string, rcpts []string, data []byte) []rcptErr {
+	if relay.Host != "" {
+		return q.send(ctx, relay.Host, "", from, rcpts, data, &relay)
 	}
 	hosts, err := lookupMX(ctx, domain)
 	if err != nil {
@@ -181,7 +184,7 @@ func (q *Queue) deliverDomain(ctx context.Context, domain, from string, rcpts []
 	}
 	var last []rcptErr
 	for _, h := range hosts {
-		errs := q.send(ctx, net.JoinHostPort(h, "25"), h, from, rcpts, data, false)
+		errs := q.send(ctx, net.JoinHostPort(h, "25"), h, from, rcpts, data, nil)
 		if len(errs) == 0 {
 			return nil
 		}
@@ -233,37 +236,77 @@ func codeOf(err error) (int, string) {
 	return 0, msg
 }
 
-func (q *Queue) send(ctx context.Context, addr, mxHost, from string, rcpts []string, data []byte, relay bool) []rcptErr {
+// dialSMTP connects to addr and returns a client after EHLO, TLS and (for a
+// relay) authentication.
+func dialSMTP(ctx context.Context, addr, helo string, relay *Relay) (*smtp.Client, error) {
 	d := net.Dialer{Timeout: 30 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return allErr(rcpts, false, "Verbindung zu "+addr+" fehlgeschlagen: "+err.Error())
+		return nil, fmt.Errorf("Verbindung zu %s fehlgeschlagen: %w", addr, err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
 	host, _, _ := net.SplitHostPort(addr)
+	if relay != nil && relay.Security == "tls" {
+		tc := tls.Client(conn, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		if err := tc.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("TLS zu %s fehlgeschlagen: %w", addr, err)
+		}
+		conn = tc
+	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		conn.Close()
-		return allErr(rcpts, false, err.Error())
+		return nil, err
 	}
-	defer c.Close()
-	if err := c.Hello(q.Hostname()); err != nil {
+	if err := c.Hello(helo); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if _, isTLS := conn.(*tls.Conn); !isTLS {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			// Opportunistic TLS towards MX hosts; verified TLS towards a relay.
+			// Strict verification for MX (MTA-STS/DANE) comes with a later milestone.
+			cfg := &tls.Config{ServerName: host, InsecureSkipVerify: relay == nil, MinVersion: tls.VersionTLS12}
+			if err := c.StartTLS(cfg); err != nil {
+				c.Close()
+				return nil, fmt.Errorf("STARTTLS fehlgeschlagen: %w", err)
+			}
+		} else if relay != nil && relay.User != "" {
+			c.Close()
+			return nil, fmt.Errorf("der Smarthost bietet kein STARTTLS an – Port/Sicherheit prüfen (465 = TLS, 587 = STARTTLS)")
+		}
+	}
+	if relay != nil && relay.User != "" {
+		if err := c.Auth(smtp.PlainAuth("", relay.User, relay.Password, host)); err != nil {
+			c.Close()
+			return nil, fmt.Errorf("Anmeldung am Smarthost fehlgeschlagen: %w", err)
+		}
+	}
+	return c, nil
+}
+
+// TestRelay checks connection, TLS and authentication of a smarthost.
+func TestRelay(ctx context.Context, r Relay, helo string) error {
+	c, err := dialSMTP(ctx, r.Host, helo, &r)
+	if err != nil {
+		return err
+	}
+	_ = c.Quit()
+	return nil
+}
+
+func (q *Queue) send(ctx context.Context, addr, mxHost, from string, rcpts []string, data []byte, relay *Relay) []rcptErr {
+	c, err := dialSMTP(ctx, addr, q.Hostname(), relay)
+	if err != nil {
+		if relay != nil {
+			// Smarthost problems (wrong password, port …) are configuration
+			// errors: keep the mail queued instead of bouncing it.
+			return allErr(rcpts, false, err.Error())
+		}
 		return classify(rcpts, err)
 	}
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		// Opportunistic TLS. Strict verification (MTA-STS/DANE) comes with a later milestone.
-		cfg := &tls.Config{ServerName: host, InsecureSkipVerify: !relay, MinVersion: tls.VersionTLS12}
-		if err := c.StartTLS(cfg); err != nil {
-			return allErr(rcpts, false, "STARTTLS fehlgeschlagen: "+err.Error())
-		}
-	} else if relay && q.Relay.User != "" {
-		return allErr(rcpts, false, "Relay bietet kein STARTTLS an")
-	}
-	if relay && q.Relay.User != "" {
-		if err := c.Auth(smtp.PlainAuth("", q.Relay.User, q.Relay.Password, host)); err != nil {
-			return allErr(rcpts, false, "Relay-Anmeldung fehlgeschlagen: "+err.Error())
-		}
-	}
+	defer c.Close()
 	if err := c.Mail(from); err != nil {
 		return classify(rcpts, err)
 	}

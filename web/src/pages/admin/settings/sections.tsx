@@ -1,10 +1,11 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowRight, CircleCheck, CircleX, Info, PlugZap, Zap } from "lucide-react";
+import { ArrowRight, CircleCheck, CircleX, Info, PlugZap, RefreshCw, Zap } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { AiTestResult, Settings, SettingsUpdate, TlsMode } from "@/api/types";
+import type { AiTestResult, RelayTestResult, Settings, SettingsUpdate, TlsMode } from "@/api/types";
 import { useDraft } from "@/lib/hooks";
+import { domainFromHostname } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/api/client";
 import {
@@ -51,6 +52,31 @@ import {
   tlsDraftValid,
   tlsUpdate,
 } from "@/pages/admin/tls/CertificateParts";
+import {
+  DynDNSAdvancedFields,
+  DynDNSFields,
+  DynDNSStatusPanel,
+  RelayEnvNotice,
+  RelayFields,
+  RelayTestPanel,
+  StratoPrepNotice,
+  dyndnsChange,
+  dyndnsOf,
+  dyndnsValid,
+  relayChange,
+  relayOf,
+  relayValid,
+  routerDynDNSHint,
+  useDynDNSPresets,
+  useDynDNSStatus,
+  useDynDNSUpdate,
+  useRelayPresets,
+  useRelayTest,
+  withDynDNSSuggestions,
+  withRelaySuggestions,
+  type DynDNSSettings,
+  type RelaySettings,
+} from "@/pages/admin/dynip/DynIpParts";
 import type { SectionProps } from "./SettingsPage";
 
 const MASK = "••••";
@@ -245,6 +271,176 @@ export function WebSection({ settings, save, saving }: SectionProps) {
             error={detect.error}
             onRecheck={() => void detect.refetch()}
             note={dirty ? "Die Prüfung verwendet die gespeicherte Konfiguration – speichere zuerst, um Änderungen zu prüfen." : undefined}
+          />
+        </FormSection>
+      )}
+    </Shell>
+  );
+}
+
+export function DynDNSSection({ settings, save, saving }: SectionProps) {
+  const toast = useToast();
+  const source = useMemo(() => dyndnsOf(settings.dyndns), [settings.dyndns]);
+  const { draft, setDraft, reset } = useDraft(source);
+  const [showErrors, setShowErrors] = useState(false);
+  const presets = useDynDNSPresets();
+  const status = useDynDNSStatus(source.enabled);
+  const update = useDynDNSUpdate();
+  if (!draft) return null;
+  const change = dyndnsChange(draft, source);
+  const hostname = settings.server.hostname;
+  const set = (v: DynDNSSettings) => setDraft(() => v);
+
+  const onSave = () => {
+    if (!dyndnsValid(draft)) {
+      setShowErrors(true);
+      toast.error("Bitte die markierten Felder ausfüllen.", "Nicht gespeichert");
+      return;
+    }
+    if (change) save({ dyndns: change });
+  };
+
+  return (
+    <Shell
+      title="DynDNS"
+      description="Hält den A-Record des Mailserver-Hostnamens bei wechselnder IP aktuell. Postwerk meldet nur, wenn sich die IP ändert."
+      dirty={change !== null}
+      saving={saving}
+      onReset={() => {
+        reset();
+        setShowErrors(false);
+      }}
+      onSave={onSave}
+      actions={
+        <Button
+          icon={RefreshCw}
+          loading={update.isPending}
+          disabled={!source.enabled || change !== null}
+          onClick={() => update.mutate(undefined, { onError: (err) => toast.error(err, "Aktualisierung fehlgeschlagen") })}
+        >
+          Jetzt aktualisieren
+        </Button>
+      }
+    >
+      <FormSection title="Allgemein" description={routerDynDNSHint}>
+        <SwitchRow
+          label="DynDNS über Postwerk aktualisieren"
+          description="Für Internetanschlüsse mit wechselnder IP-Adresse."
+          checked={draft.enabled}
+          onChange={(v) => setDraft((d) => (v ? withDynDNSSuggestions(d, hostname, presets.data) : { ...d, enabled: false }))}
+        />
+      </FormSection>
+      {draft.enabled && (
+        <FormSection title="Anbieter & Zugang" description="dyndns2-Dienst, die zu aktualisierenden Hostnamen und die Zugangsdaten.">
+          <DynDNSFields
+            value={draft}
+            onChange={set}
+            presets={presets.data}
+            presetsLoading={presets.isLoading}
+            hostname={hostname}
+            showErrors={showErrors}
+            compact
+            advanced="none"
+            afterPresets={draft.preset === "strato" ? <StratoPrepNotice hostname={hostname} domain={domainFromHostname(hostname)} /> : undefined}
+          />
+        </FormSection>
+      )}
+      {draft.enabled && (
+        <FormSection title="Erweitert" description="Dienst zur Ermittlung der öffentlichen IP und Prüfintervall.">
+          <DynDNSAdvancedFields value={draft} onChange={set} showErrors={showErrors} />
+        </FormSection>
+      )}
+      {(source.enabled || update.data) && (
+        <FormSection title="Status" description="Öffentliche IP und A-Records laut DNS.">
+          <DynDNSStatusPanel
+            status={status.data}
+            loading={status.isFetching}
+            error={status.error}
+            note={change ? "„Jetzt aktualisieren“ verwendet die gespeicherte Konfiguration – speichere zuerst." : undefined}
+          />
+        </FormSection>
+      )}
+    </Shell>
+  );
+}
+
+export function RelaySection({ settings, save, saving }: SectionProps) {
+  const toast = useToast();
+  const source = useMemo(() => relayOf(settings.relay), [settings.relay]);
+  const { draft, setDraft, reset } = useDraft(source);
+  const [showErrors, setShowErrors] = useState(false);
+  const [result, setResult] = useState<RelayTestResult | null>(null);
+  const presets = useRelayPresets();
+  const test = useRelayTest();
+  if (!draft) return null;
+  const envOverride = !!presets.data?.envOverride;
+  const change = envOverride ? null : relayChange(draft, source);
+  const set = (v: RelaySettings) => setDraft(() => v);
+
+  const onSave = () => {
+    if (!relayValid(draft)) {
+      setShowErrors(true);
+      toast.error("Bitte die markierten Felder ausfüllen.", "Nicht gespeichert");
+      return;
+    }
+    if (change) save({ relay: change });
+  };
+
+  return (
+    <Shell
+      title="Smarthost"
+      description="Ausgehende Mails über den SMTP-Server eines Anbieters verschicken – bei dynamischer IP nötig, weil große Mailanbieter Privatkunden-IPs ablehnen."
+      dirty={change !== null}
+      saving={saving}
+      onReset={() => {
+        reset();
+        setShowErrors(false);
+      }}
+      onSave={onSave}
+      actions={
+        <Button
+          icon={PlugZap}
+          loading={test.isPending}
+          disabled={!source.enabled && !envOverride}
+          onClick={() => {
+            setResult(null);
+            test.mutate(undefined, { onSuccess: setResult, onError: (err) => setResult({ ok: false, detail: errorMessage(err) }) });
+          }}
+        >
+          Verbindung testen
+        </Button>
+      }
+    >
+      {(result || test.isPending) && (
+        <div className="space-y-2 pb-6">
+          <RelayTestPanel result={result} pending={test.isPending} />
+          {change && !test.isPending && (
+            <p className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <Info className="h-3.5 w-3.5" /> Der Test verwendet die gespeicherte Konfiguration. Speichere zuerst, um Änderungen zu testen.
+            </p>
+          )}
+        </div>
+      )}
+      <FormSection title="Allgemein" description="Ohne Smarthost stellt Postwerk ausgehende Mails direkt beim Server des Empfängers zu.">
+        {envOverride && <RelayEnvNotice />}
+        <SwitchRow
+          label="Ausgehende Mails über einen Smarthost senden"
+          description="Empfohlen bei dynamischer IP."
+          checked={draft.enabled}
+          disabled={envOverride}
+          onChange={(v) => setDraft((d) => (v ? withRelaySuggestions(d, presets.data?.presets) : { ...d, enabled: false }))}
+        />
+      </FormSection>
+      {(draft.enabled || envOverride) && (
+        <FormSection title="Server & Zugang" description="Anbieter wählen oder eigenen SMTP-Server eintragen.">
+          <RelayFields
+            value={draft}
+            onChange={set}
+            presets={presets.data?.presets}
+            presetsLoading={presets.isLoading}
+            readOnly={envOverride}
+            showErrors={showErrors}
+            compact
           />
         </FormSection>
       )}

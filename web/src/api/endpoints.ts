@@ -24,6 +24,8 @@ import type {
   DnsRecord,
   Domain,
   DraftRequest,
+  DynDNSPreset,
+  DynDNSStatus,
   ExtractResult,
   ImportResult,
   LogEntry,
@@ -43,6 +45,8 @@ import type {
   ProxyKind,
   PublicIp,
   QueueItem,
+  RelayPresets,
+  RelayTestResult,
   ReplyDraft,
   ReplyRequest,
   RestartMigrationRequest,
@@ -146,6 +150,14 @@ export const adminApi = {
     http.get<ProxyGuide>("/api/admin/proxy/guide", { query: { kind, upstream }, signal }),
   tlsCertificates: () => http.get<CertificateFile[]>("/api/admin/tls/certificates"),
   testTlsFiles: (body: TlsTestRequest) => http.post<TlsTestResult>("/api/admin/tls/test", body),
+
+  dyndnsPresets: () => http.get<DynDNSPreset[]>("/api/admin/dyndns/presets"),
+  dyndnsStatus: () => http.get<DynDNSStatus>("/api/admin/dyndns/status"),
+  /** Checks the public IP now and reports it only if it differs; `force` always reports. */
+  dyndnsUpdate: (force = false) => http.post<DynDNSStatus>("/api/admin/dyndns/update", force ? { force: true } : undefined),
+  relayPresets: () => http.get<RelayPresets>("/api/admin/relay/presets"),
+  /** Tests the stored smarthost settings (connection, TLS, login). */
+  testRelay: () => http.post<RelayTestResult>("/api/admin/relay/test"),
 
   migrations: () => http.get<MigrationJob[]>("/api/admin/migrations"),
   migration: (id: number) => http.get<MigrationJob>(`/api/admin/migrations/${id}`),

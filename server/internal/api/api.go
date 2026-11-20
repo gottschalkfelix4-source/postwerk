@@ -24,6 +24,7 @@ import (
 	"postwerk/internal/auth"
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
+	"postwerk/internal/dyndns"
 	"postwerk/internal/logx"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
@@ -52,6 +53,7 @@ type Server struct {
 	Started    time.Time
 	SetupToken string
 	Migrations *migrate.Manager
+	DynDNS     *dyndns.Updater
 
 	setupMu sync.Mutex
 }
@@ -351,6 +353,13 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/admin/proxy/guide", s.admin(s.proxyGuide))
 	m.HandleFunc("GET /api/admin/tls/certificates", s.admin(s.tlsCertificates))
 	m.HandleFunc("POST /api/admin/tls/test", s.admin(s.tlsTest))
+
+	// dynamic ip: dyndns & smarthost
+	m.HandleFunc("GET /api/admin/dyndns/presets", s.admin(s.dyndnsPresets))
+	m.HandleFunc("GET /api/admin/dyndns/status", s.admin(s.dyndnsStatus))
+	m.HandleFunc("POST /api/admin/dyndns/update", s.admin(s.dyndnsUpdate))
+	m.HandleFunc("GET /api/admin/relay/presets", s.admin(s.relayPresets))
+	m.HandleFunc("POST /api/admin/relay/test", s.admin(s.relayTest))
 
 	// dns providers
 	m.HandleFunc("GET /api/admin/dns/providers", s.admin(s.dnsProviders))

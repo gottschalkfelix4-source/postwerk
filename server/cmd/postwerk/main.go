@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
 	"postwerk/internal/dms"
+	"postwerk/internal/dyndns"
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
@@ -111,16 +113,13 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	spamFilter := &spam.Filter{Store: st, Settings: settings}
 	hostname := func() string { return settings.Get().Server.Hostname }
-	relayHost := cfg.RelayHost
-	if relayHost != "" {
-		if _, _, err := net.SplitHostPort(relayHost); err != nil {
-			relayHost = net.JoinHostPort(relayHost, "587")
-		}
-	}
-	q := queue.New(st, hostname, queue.Relay{Host: relayHost, User: cfg.RelayUser, Password: cfg.RelayPassword}, log)
+	q := queue.New(st, hostname, relayFunc(cfg, settings), log)
+
 	svc := &delivery.Service{Store: st, Settings: settings, Auth: authn, Spam: spamFilter, AI: aiWorker, Queue: q, Log: log.With("component", "delivery")}
 	q.Bounce = svc.Bounce
 	migrations := migrate.NewManager(st, svc, log)
+	dyn := dyndns.New(settings, log)
+	go dyn.Run(ctx)
 
 	go q.Run(ctx)
 	go aiWorker.Run(ctx)
@@ -156,7 +155,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	apiSrv := &api.Server{
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
-		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations,
+		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn,
 	}
 	handler := apiSrv.Handler()
 	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: tp.HTTPHandler(handler), ReadHeaderTimeout: 10 * time.Second}
@@ -191,6 +190,32 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		return nil
 	case err := <-errc:
 		return err
+	}
+}
+
+// relayFunc returns the smarthost: environment variables win over settings.
+func relayFunc(cfg *config.Config, settings *store.SettingsCache) func() queue.Relay {
+	return func() queue.Relay {
+		if cfg.RelayHost != "" {
+			host := cfg.RelayHost
+			if _, _, err := net.SplitHostPort(host); err != nil {
+				host = net.JoinHostPort(host, "587")
+			}
+			sec := "starttls"
+			if strings.HasSuffix(host, ":465") {
+				sec = "tls"
+			}
+			return queue.Relay{Host: host, Security: sec, User: cfg.RelayUser, Password: cfg.RelayPassword}
+		}
+		r := settings.Get().Relay
+		if !r.Enabled || r.Host == "" {
+			return queue.Relay{}
+		}
+		port := r.Port
+		if port == 0 {
+			port = 587
+		}
+		return queue.Relay{Host: net.JoinHostPort(r.Host, strconv.Itoa(port)), Security: r.Security, User: r.Username, Password: r.Password}
 	}
 }
 

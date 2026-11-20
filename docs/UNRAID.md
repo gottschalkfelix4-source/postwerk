@@ -148,6 +148,45 @@ zusammen; der Setup-Assistent hat dafür den Schritt **Reverse-Proxy**:
 > **Die Mail-Ports laufen nie über den Proxy.** 25, 465, 587 und 995 werden im Router direkt an Postwerk
 > weitergeleitet (Schritt 4). Nur die Weboberfläche läuft über den Proxy.
 
+## 4b. Dynamische IP-Adresse (DSL/Kabel zu Hause)
+
+Ändert sich deine öffentliche IP regelmäßig, richtest du im Setup-Assistenten den Schritt
+**Internetanschluss** → „Dynamische IP“ ein. Postwerk erledigt dann zwei Dinge:
+
+**1. DynDNS: Hostname aktuell halten.** Postwerk prüft alle paar Minuten die öffentliche IP und meldet
+eine Änderung an deinen DNS-Anbieter (Protokoll dyndns2). Gemeldet wird nur bei einer echten
+Änderung, sonst sperren Anbieter wie STRATO wegen „abuse“.
+
+Vorbereitung bei **STRATO**:
+1. Im STRATO-Login unter *Domains* die Subdomain `mail` anlegen (`mail.deinedomain.de`).
+2. Für diese Subdomain **DynDNS aktivieren**.
+3. Unter *Sicherheit → Passwörter festlegen* ein **DynDNS-Passwort** vergeben.
+4. Den **MX-Eintrag** der Domain auf `mail.deinedomain.de` stellen (eigener Mailserver).
+5. In Postwerk: Anbieter STRATO, Hostname `mail.deinedomain.de`, Benutzername `mail.deinedomain.de`,
+   das DynDNS-Passwort, dann „Jetzt aktualisieren“. Die Statusanzeige zeigt, ob der A-Record auf deine
+   aktuelle IP zeigt.
+
+Vorlagen gibt es auch für INWX, deSEC und No-IP sowie für beliebige dyndns2-Dienste. Hast du DynDNS
+schon in der **FRITZ!Box** eingerichtet, lass es in Postwerk einfach aus.
+
+**2. Smarthost: Mails zuverlässig verschicken.** Privatkunden-IPs stehen auf Sperrlisten (Spamhaus PBL),
+und einen Reverse-DNS-Eintrag kann man für sie nicht setzen. Gmail, Outlook und Co. lehnen Mails direkt
+von dort deshalb meist ab. Postwerk verschickt ausgehende Mails daher über einen Smarthost:
+
+| Vorlage | Server | Hinweis |
+|---|---|---|
+| **STRATO** | `smtp.strato.de:465` (TLS) | braucht ein STRATO-Mailpostfach; Benutzer = vollständige E-Mail-Adresse |
+| IONOS | `smtp.ionos.de:587` | IONOS-Postfach |
+| Brevo, Mailjet, SMTP2GO, Amazon SES | – | Versanddienste, Absender-Domain dort verifizieren |
+
+„Verbindung testen“ prüft Verbindung, TLS und Anmeldung. Postwerk ergänzt den SPF-Eintrag automatisch
+um den Smarthost (bei STRATO `include:_spf.strato.com`); die DNS-Prüfung und das automatische
+DNS-Einrichten berücksichtigen das.
+
+> Eingehende Mails funktionieren mit dynamischer IP ganz normal, solange Port 25 im Router an Postwerk
+> weitergeleitet ist und DynDNS den Hostnamen aktuell hält. Kurz nach einem IP-Wechsel kann es bis zur
+> nächsten Prüfung ein paar Minuten dauern; andere Mailserver versuchen es dann einfach erneut.
+
 ## 5. DNS-Einträge setzen
 
 ### Automatisch beim DNS-Anbieter
@@ -211,8 +250,8 @@ kopieren und im Template unter **Erweiterte Ansicht** zwei Variablen ergänzen:
 **Virenscan** (wenn du Schritt 2 gemacht hast)
 - Aktivieren, Adresse `<Unraid-IP>:3310`, Aktion „Ablehnen“ oder „Quarantäne“.
 
-**Smarthost** (falls Port 25 ausgehend gesperrt ist)
-- Im Template unter **Erweiterte Ansicht**: Smarthost (`smtp.anbieter.de:587`), Benutzer und Passwort.
+**Smarthost** (bei dynamischer IP oder wenn Port 25 ausgehend gesperrt ist)
+- Im Setup-Assistenten (Schritt Internetanschluss) oder unter **Einstellungen → Smarthost**, siehe 4b.
 
 **KI mit Ollama** (optional, komplett lokal)
 1. Ollama aus den **Community Apps** installieren (mit GPU-Unterstützung, falls vorhanden).

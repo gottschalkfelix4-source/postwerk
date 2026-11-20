@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"postwerk/internal/dnsprov"
 	"regexp"
 	"strings"
 	"time"
@@ -147,10 +148,20 @@ func (s *Server) dnsRecords(d *store.Domain) ([]dnsRecord, error) {
 		return nil, err
 	}
 	n := d.Name
+	opt := s.dnsOptions(s.Settings.Get())
+	spf := dnsprov.MergeSPF("", opt.SPFInclude)
+	spfPurpose := "SPF: nur die MX-Server dürfen für " + n + " senden"
+	if opt.SPFInclude != "" {
+		spfPurpose = "SPF: MX-Server und Smarthost (" + strings.TrimPrefix(opt.SPFInclude, "include:") + ") dürfen für " + n + " senden"
+	}
+	aValue, aPurpose := "<öffentliche IPv4 des Servers>", "Hostname des Mailservers (dazu passender PTR/Reverse-DNS beim Provider)"
+	if opt.DynDNS {
+		aValue, aPurpose = "<wird per DynDNS gesetzt>", "Hostname des Mailservers – Postwerk hält ihn per DynDNS aktuell"
+	}
 	return []dnsRecord{
-		{"A", host + ".", "<öffentliche IPv4 des Servers>", "Hostname des Mailservers (dazu passender PTR/Reverse-DNS beim Provider)", true},
+		{"A", host + ".", aValue, aPurpose, true},
 		{"MX", n + ".", "10 " + host + ".", "Eingehende Mails für " + n + " an diesen Server leiten", true},
-		{"TXT", n + ".", "v=spf1 mx -all", "SPF: nur die MX-Server dürfen für " + n + " senden", true},
+		{"TXT", n + ".", spf, spfPurpose, true},
 		{"TXT", d.DKIMSelector + "._domainkey." + n + ".", dkim, "DKIM: öffentlicher Schlüssel für Signaturen", true},
 		{"TXT", "_dmarc." + n + ".", "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n, "DMARC-Richtlinie", true},
 		{"TXT", "_mta-sts." + n + ".", "v=STSv1; id=" + time.Now().Format("20060102"), "MTA-STS aktivieren (Policy unter mta-sts." + n + ")", false},
@@ -433,6 +444,12 @@ func (s *Server) maskedSettings() store.Settings {
 	if cur.DMS.Paperless.Token != "" {
 		cur.DMS.Paperless.Token = mask
 	}
+	if cur.DynDNS.Password != "" {
+		cur.DynDNS.Password = mask
+	}
+	if cur.Relay.Password != "" {
+		cur.Relay.Password = mask
+	}
 	cur.TLS.Status = s.TLS.Status()
 	return cur
 }
@@ -448,9 +465,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	}
 	cur := s.Settings.Get()
 	oldKey, oldToken, oldACME := cur.AI.APIKey, cur.DMS.Paperless.Token, cur.TLS.ACME
+	oldDyn, oldRelay := cur.DynDNS.Password, cur.Relay.Password
 	sections := map[string]any{
 		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
-		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security,
+		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security, "dyndns": &cur.DynDNS, "relay": &cur.Relay,
 	}
 	for k, raw := range patch {
 		target, known := sections[k]
@@ -463,6 +481,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	}
 	if cur.AI.APIKey == mask {
 		cur.AI.APIKey = oldKey
+	}
+	if cur.DynDNS.Password == mask {
+		cur.DynDNS.Password = oldDyn
+	}
+	if cur.Relay.Password == mask {
+		cur.Relay.Password = oldRelay
 	}
 	if cur.DMS.Paperless.Token == mask {
 		cur.DMS.Paperless.Token = oldToken
@@ -484,6 +508,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	}
 	if s.AIWorker != nil {
 		s.AIWorker.Notify()
+	}
+	if s.DynDNS != nil && patch["dyndns"] != nil {
+		s.DynDNS.Notify()
 	}
 	return s.maskedSettings(), nil
 }
@@ -510,6 +537,38 @@ func validateSettings(c *store.Settings) error {
 	c.TLS.ACME.Enabled = c.TLS.Mode == "acme"
 	if c.TLS.Mode == "files" && strings.TrimSpace(c.TLS.Files.CertPath) == "" {
 		return invalid("Bitte den Pfad zum Zertifikat angeben")
+	}
+	if c.DynDNS.IntervalMinutes < 1 {
+		c.DynDNS.IntervalMinutes = 5
+	}
+	hosts := []string{}
+	for _, h := range c.DynDNS.Hostnames {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	c.DynDNS.Hostnames = hosts
+	if c.DynDNS.Enabled {
+		if !strings.HasPrefix(c.DynDNS.UpdateURL, "https://") && !strings.HasPrefix(c.DynDNS.UpdateURL, "http://") {
+			return invalid("DynDNS: ungültige Update-URL")
+		}
+		if len(hosts) == 0 || c.DynDNS.Username == "" || c.DynDNS.Password == "" {
+			return invalid("DynDNS: Hostname, Benutzername und Passwort sind nötig")
+		}
+	}
+	c.Relay.Host = strings.TrimSpace(c.Relay.Host)
+	if c.Relay.Security != "tls" {
+		c.Relay.Security = "starttls"
+	}
+	if c.Relay.Port <= 0 || c.Relay.Port > 65535 {
+		c.Relay.Port = 587
+	}
+	if c.Relay.Enabled && c.Relay.Host == "" {
+		return invalid("Smarthost: Server fehlt")
+	}
+	c.Relay.SPFInclude = strings.TrimSpace(c.Relay.SPFInclude)
+	if c.Relay.SPFInclude != "" && !strings.HasPrefix(c.Relay.SPFInclude, "include:") && !strings.HasPrefix(c.Relay.SPFInclude, "ip4:") && !strings.HasPrefix(c.Relay.SPFInclude, "ip6:") && !strings.HasPrefix(c.Relay.SPFInclude, "a:") {
+		return invalid("Smarthost: SPF-Eintrag muss mit include:, ip4:, ip6: oder a: beginnen")
 	}
 	c.Web.PublicURL = strings.TrimRight(strings.TrimSpace(c.Web.PublicURL), "/")
 	if c.Web.PublicURL != "" && !strings.HasPrefix(c.Web.PublicURL, "http://") && !strings.HasPrefix(c.Web.PublicURL, "https://") {

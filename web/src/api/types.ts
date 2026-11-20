@@ -81,6 +81,26 @@ export interface Settings {
   };
   dms: { paperless: { enabled: boolean; url: string; token: string /* masked */; autoForward: boolean; categories: string[] } };
   security: { bruteForce: { maxAttempts: number; windowSeconds: number; banSeconds: number } };
+  dyndns: {
+    enabled: boolean;
+    preset: DynDNSPresetId;
+    updateUrl: string;            // dyndns2 endpoint; prefilled for presets
+    hostnames: string[];          // e.g. ["mail.example.com"]
+    username: string;             // STRATO: the domain or subdomain
+    password: string;             // masked "••••" when set
+    ipCheckUrl: string;           // service returning the public IPv4 as plain text
+    intervalMinutes: number;      // check interval (default 5, min. 1)
+  };
+  relay: {                        // smarthost for outgoing mail
+    enabled: boolean;
+    preset: RelayPresetId;
+    host: string;
+    port: number;
+    security: RelaySecurity;
+    username: string;
+    password: string;             // masked
+    spfInclude: string;           // e.g. "include:_spf.strato.com" – added to the SPF suggestion
+  };
 }
 
 export interface Mailbox { id: number; name: string; role: "inbox" | "sent" | "drafts" | "trash" | "junk" | "archive" | null; total: number; unread: number; }
@@ -388,3 +408,29 @@ export interface CertificateFile {
 export interface TlsTestRequest { certPath: string; keyPath: string; }
 
 export interface TlsTestResult { ok: boolean; names: string[]; notAfter: string; matchesHostname: boolean; error?: string; }
+
+// ---------------------------------------------------------------------------
+// Dynamic IP: DynDNS and smarthost (docs/API.md, "Dynamische IP: DynDNS und Smarthost").
+// ---------------------------------------------------------------------------
+
+export type DynDNSPresetId = "strato" | "inwx" | "desec" | "noip" | "custom";
+export type RelayPresetId = "strato" | "ionos" | "brevo" | "mailjet" | "smtp2go" | "ses" | "custom";
+export type RelaySecurity = "tls" | "starttls";
+
+export interface DynDNSPreset { id: string; name: string; updateUrl: string; usernameHint: string; passwordHint: string; docsUrl: string | null; notes: string | null; }
+export interface RelayPreset  { id: string; name: string; host: string; port: number; security: RelaySecurity; usernameHint: string; spfInclude: string; docsUrl: string | null; notes: string | null; }
+
+export interface DynDNSStatus {
+  enabled: boolean;
+  currentIp: string | null;       // last detected public IP
+  dnsIps: Record<string, string[]>;   // current A records per host name (live lookup)
+  lastUpdate: string | null;      // time of the last successful update
+  lastResult: string | null;      // service response, e.g. "good 203.0.113.7" / "nochg …"
+  error: string | null;           // e.g. "badauth – Benutzername oder DynDNS-Passwort falsch"
+  pausedUntil: string | null;     // paused after "abuse"/"badauth"
+  nextCheck: string | null;
+}
+
+export interface RelayPresets { presets: RelayPreset[]; envOverride: boolean; }
+
+export interface RelayTestResult { ok: boolean; detail: string; }

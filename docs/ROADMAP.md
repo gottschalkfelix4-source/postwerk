@@ -29,6 +29,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | Einrichtung | Setup-Assistent mit Setup-Token, Live-DNS-Prüfung und System-Check (PTR, Port 25, ClamAV, KI) | ✅ |
 | | DNS-Einträge automatisch beim Anbieter setzen: IONOS, Hetzner, Cloudflare, netcup, INWX, deSEC (offizielle APIs), STRATO (inoffiziell, TXT/CNAME) | ✅ |
 | | Reverse-Proxy: Erkennung, vertrauenswürdige Proxys, fertige Konfigurationen (NPM, Traefik, Caddy, nginx, SWAG), Zertifikat vom Proxy übernehmen inkl. Traefik-acme.json, automatisches Neuladen | ✅ |
+| | Dynamische IP: DynDNS (STRATO, INWX, deSEC, No-IP, dyndns2) nur bei IP-Wechsel, Smarthost mit Vorlagen und Verbindungstest, SPF-Include automatisch | ✅ |
 | Umzug | Migrationsassistent per IMAP (Ordnerzuordnung, Flags, Datum, Duplikaterkennung, CSV für viele Postfächer) | ✅ |
 | | Import von .mbox, .eml und .zip im Webmail | ✅ |
 | KI | OpenAI-kompatible Endpunkte (Ollama, vLLM, LocalAI, OpenAI …) | ✅ |

@@ -17,6 +17,32 @@ type Settings struct {
 	AI        AISettings        `json:"ai"`
 	DMS       DMSSettings       `json:"dms"`
 	Security  SecuritySettings  `json:"security"`
+	DynDNS    DynDNSSettings    `json:"dyndns"`
+	Relay     RelaySettings     `json:"relay"`
+}
+
+// DynDNSSettings keep the mail host's A record current on dynamic IPs.
+type DynDNSSettings struct {
+	Enabled         bool     `json:"enabled"`
+	Preset          string   `json:"preset"`
+	UpdateURL       string   `json:"updateUrl"`
+	Hostnames       []string `json:"hostnames"`
+	Username        string   `json:"username"`
+	Password        string   `json:"password"`
+	IPCheckURL      string   `json:"ipCheckUrl"`
+	IntervalMinutes int      `json:"intervalMinutes"`
+}
+
+// RelaySettings configure a smarthost for outbound mail.
+type RelaySettings struct {
+	Enabled    bool   `json:"enabled"`
+	Preset     string `json:"preset"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	Security   string `json:"security"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	SPFInclude string `json:"spfInclude"`
 }
 
 type ServerSettings struct {
@@ -148,6 +174,9 @@ func DefaultSettings(hostname string) Settings {
 	s.AI.Categories = []string{"Rechnung", "Newsletter", "Support", "Privat", "Arbeit", "Versand", "Termin"}
 	s.DMS.Paperless.URL = "http://paperless:8000"
 	s.DMS.Paperless.Categories = []string{"Rechnung"}
+	s.DynDNS = DynDNSSettings{Preset: "strato", UpdateURL: "https://dyndns.strato.com/nic/update", Hostnames: []string{},
+		IPCheckURL: "https://api.ipify.org", IntervalMinutes: 5}
+	s.Relay = RelaySettings{Preset: "strato", Host: "smtp.strato.de", Port: 465, Security: "tls", SPFInclude: "include:_spf.strato.com"}
 	s.Security.BruteForce.MaxAttempts = 5
 	s.Security.BruteForce.WindowSeconds = 600
 	s.Security.BruteForce.BanSeconds = 3600
@@ -181,6 +210,9 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 		if cur.TLS.ACME.Enabled {
 			cur.TLS.Mode = "acme"
 		}
+	}
+	if cur.DynDNS.Hostnames == nil {
+		cur.DynDNS.Hostnames = []string{}
 	}
 	if cur.Web.TrustedProxies == nil {
 		cur.Web.TrustedProxies = []string{}

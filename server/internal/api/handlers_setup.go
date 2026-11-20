@@ -212,6 +212,10 @@ func (s *Server) domainDNSCheck(w http.ResponseWriter, r *http.Request, u *store
 					if strings.Contains(lt, " mx ") || strings.Contains(lt, " mx:"+d.Name) || strings.Contains(lt, " +mx ") || strings.Contains(lt, "a:"+host) {
 						c.Status = "ok"
 					}
+					// With a smarthost its include must be present as well.
+					if inc := strings.ToLower(s.dnsOptions(s.Settings.Get()).SPFInclude); inc != "" && !strings.Contains(lt, " "+inc+" ") {
+						c.Status = "mismatch"
+					}
 					for _, ip := range hostIPs {
 						if strings.Contains(lt, "ip4:"+ip) || strings.Contains(lt, "ip6:"+ip) {
 							c.Status = "ok"

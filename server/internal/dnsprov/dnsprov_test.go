@@ -593,3 +593,22 @@ func TestCloudflare(t *testing.T) {
 		}
 	}
 }
+
+func TestSmarthostIncludeAndDynDNS(t *testing.T) {
+	if got := MergeSPF("", "include:_spf.strato.com"); got != "v=spf1 mx include:_spf.strato.com -all" {
+		t.Errorf("fresh SPF = %q", got)
+	}
+	if got := MergeSPF("v=spf1 include:_spf.strato.com ~all", "include:_spf.strato.com"); got != "v=spf1 mx include:_spf.strato.com ~all" {
+		t.Errorf("include must not be duplicated: %q", got)
+	}
+	m := &memProvider{zone: "example.com", recs: []Record{{ID: "1", Name: "@", Type: "TXT", Value: "v=spf1 a ~all"}}}
+	info := Info{ID: "mem", Name: "Mem", Supports: allTypes}
+	d := DesiredRecords("example.com", "mail.example.com", "pw1", longDKIM, "", "", Options{SPFInclude: "include:_spf.strato.com", DynDNS: true})
+	plan, _ := MakePlan(context.Background(), m, info, "example.com", d)
+	if c := find1(t, plan, "spf"); c.Desired != "v=spf1 mx a include:_spf.strato.com ~all" {
+		t.Errorf("spf desired = %q", c.Desired)
+	}
+	if c := find1(t, plan, "a"); c.Action != "manual" || c.Reason == nil || !strings.Contains(*c.Reason, "DynDNS") {
+		t.Errorf("A with DynDNS = %+v", c)
+	}
+}

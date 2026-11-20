@@ -86,10 +86,13 @@ es bei Erneuerung automatisch neu. Die Mail-Ports laufen nicht über den Proxy.
 Unter **Einstellungen → TLS** „Let's Encrypt direkt“ wählen und die E-Mail eintragen; die Änderung
 wirkt ohne Neustart. Port 80 oder 443 muss dafür direkt bei Postwerk ankommen (ohne Reverse-Proxy).
 
-### Port 25 gesperrt?
+### Dynamische IP oder Port 25 gesperrt?
 
-Viele Heimanschlüsse sperren ausgehend Port 25. Dann in `.env` einen Smarthost eintragen
-(`POSTWERK_RELAY_HOST`, `POSTWERK_RELAY_USER`, `POSTWERK_RELAY_PASSWORD`).
+Bei Heimanschlüssen mit wechselnder IP hält Postwerk den A-Record per **DynDNS** aktuell (STRATO,
+INWX, deSEC, No-IP oder beliebiger dyndns2-Dienst) und verschickt ausgehende Mails über einen
+**Smarthost** (Vorlagen u. a. für STRATO, IONOS, Brevo, Mailjet, Amazon SES). Beides richtet der
+Setup-Assistent im Schritt „Internetanschluss“ ein; der SPF-Eintrag wird automatisch um den Smarthost
+ergänzt. Die Umgebungsvariablen `POSTWERK_RELAY_*` funktionieren weiterhin und haben Vorrang.
 
 ### Backup und Notfall-Zugang
 
@@ -134,6 +137,7 @@ server/
   internal/dms/        Paperless-ngx
   internal/migrate/    IMAP-Migration, mbox/eml/zip-Import
   internal/dnsprov/    DNS-Anbieter (IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX, deSEC)
+  internal/dyndns/     DynDNS-Aktualisierung bei dynamischer IP
   internal/api/        REST-API, statische Oberfläche
   internal/store/      SQLite + Blob-Speicher
 web/                   React-Oberfläche (Verwaltung + Webmail)

@@ -580,9 +580,9 @@ export function ProxyGuidePanel({
 // Connection check
 // ---------------------------------------------------------------------------
 
-type RowState = "ok" | "warn" | "bad" | "neutral";
+export type RowState = "ok" | "warn" | "bad" | "neutral";
 
-function CheckRow({ icon: Icon, label, state, children }: { icon: LucideIcon; label: string; state: RowState; children: ReactNode }) {
+export function CheckRow({ icon: Icon, label, state, children }: { icon: LucideIcon; label: string; state: RowState; children: ReactNode }) {
   const StateIcon = state === "ok" ? CircleCheck : state === "bad" ? CircleX : state === "warn" ? TriangleAlert : null;
   return (
     <div className="flex items-start gap-3 py-2.5">

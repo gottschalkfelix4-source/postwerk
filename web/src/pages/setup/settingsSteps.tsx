@@ -76,36 +76,38 @@ import {
   tlsUpdate,
   type TlsDraft,
 } from "@/pages/admin/tls/CertificateParts";
+import { dynIpKeys } from "@/pages/admin/dynip/DynIpParts";
 import { setupKeys, useSetup, type StepProps } from "./context";
 import { dnsSummary, SectionTitle } from "./steps";
 
 const MASK = "••••";
 const LETS_ENCRYPT = "https://acme-v02.api.letsencrypt.org/directory";
 
-function useSettings() {
+export function useSettings() {
   return useQuery({ queryKey: setupKeys.settings, queryFn: adminApi.settings, staleTime: 60_000 });
 }
 
-function useSaveSettings() {
+export function useSaveSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (update: SettingsUpdate) => adminApi.saveSettings(update),
-    onSuccess: (s) => {
+    onSuccess: (s, update) => {
       qc.setQueryData(setupKeys.settings, s);
       void qc.invalidateQueries({ queryKey: qk.aiStatus });
       void qc.invalidateQueries({ queryKey: setupKeys.systemCheck });
+      if (update.dyndns) void qc.invalidateQueries({ queryKey: dynIpKeys.dyndnsStatus });
     },
   });
 }
 
-function SettingsGate({ q, children }: { q: ReturnType<typeof useSettings>; children: (s: Settings) => ReactNode }) {
+export function SettingsGate({ q, children }: { q: ReturnType<typeof useSettings>; children: (s: Settings) => ReactNode }) {
   if (q.isLoading) return <Skeleton className="h-64 rounded-lg" />;
   if (q.error || !q.data) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   return <>{children(q.data)}</>;
 }
 
 // ---------------------------------------------------------------------------
-// 5. Reverse proxy
+// 6. Reverse proxy
 // ---------------------------------------------------------------------------
 
 export function ProxyStep({ onBack, onNext }: StepProps) {
@@ -267,7 +269,7 @@ export function ProxyStep({ onBack, onNext }: StepProps) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. TLS
+// 7. TLS
 // ---------------------------------------------------------------------------
 
 export function TlsStep({ onBack, onNext }: StepProps) {
@@ -423,7 +425,7 @@ function suggestTlsNames(hostname: string, domain: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Protection & AI
+// 8. Protection & AI
 // ---------------------------------------------------------------------------
 
 interface ProtectionDraft {
@@ -679,7 +681,7 @@ function AiResult({
 }
 
 // ---------------------------------------------------------------------------
-// 8. Data import
+// 9. Data import
 // ---------------------------------------------------------------------------
 
 export function DataStep({ onBack, onNext }: StepProps) {
@@ -739,7 +741,7 @@ export function DataStep({ onBack, onNext }: StepProps) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Done
+// 10. Done
 // ---------------------------------------------------------------------------
 
 function SummaryRow({ label, children, ok }: { label: string; children: ReactNode; ok?: boolean | null }) {
@@ -796,6 +798,13 @@ export function DoneStep({ onBack }: StepProps) {
               ? "Alle Pflichteinträge korrekt"
               : `${summary.ok} von ${summary.required} Pflichteinträgen korrekt`
             : "Nicht geprüft"}
+        </SummaryRow>
+        <SummaryRow label="Internetanschluss">
+          {s
+            ? s.dyndns?.enabled || s.relay?.enabled
+              ? `Dynamische IP (${[s.dyndns?.enabled && "DynDNS", s.relay?.enabled && `Smarthost ${s.relay.host}`].filter(Boolean).join(", ")})`
+              : "Feste IP"
+            : "–"}
         </SummaryRow>
         <SummaryRow label="Reverse-Proxy">
           {s ? (s.web?.behindProxy ? `Ja${s.web.publicUrl ? ` (${s.web.publicUrl})` : ""}` : "Nein") : "–"}

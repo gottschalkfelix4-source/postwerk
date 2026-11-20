@@ -70,7 +70,8 @@ func (s *Server) dnsPlan(r *http.Request, ctx context.Context) (dnsprov.Provider
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	desired := dnsprov.DesiredRecords(d.Name, s.Settings.Get().Server.Hostname, d.DKIMSelector, dkim, ipv4, ipv6)
+	cfg := s.Settings.Get()
+	desired := dnsprov.DesiredRecords(d.Name, cfg.Server.Hostname, d.DKIMSelector, dkim, ipv4, ipv6, s.dnsOptions(cfg))
 	plan, err := dnsprov.MakePlan(ctx, p, info, d.Name, desired)
 	if err != nil {
 		return nil, nil, nil, dnsErr(err)
@@ -124,4 +125,20 @@ func (s *Server) publicIP(w http.ResponseWriter, r *http.Request, u *store.Accou
 		return &ip
 	}
 	return map[string]any{"ipv4": get("https://api.ipify.org"), "ipv6": get("https://api6.ipify.org")}, nil
+}
+
+// dnsOptions derives SPF include and DynDNS handling from the settings.
+func (s *Server) dnsOptions(cfg store.Settings) dnsprov.Options {
+	var o dnsprov.Options
+	if s.Cfg.RelayHost == "" && cfg.Relay.Enabled {
+		o.SPFInclude = cfg.Relay.SPFInclude
+	}
+	if cfg.DynDNS.Enabled {
+		for _, h := range cfg.DynDNS.Hostnames {
+			if strings.EqualFold(h, cfg.Server.Hostname) {
+				o.DynDNS = true
+			}
+		}
+	}
+	return o
 }

@@ -21,6 +21,8 @@ type Desired struct {
 	MergeSPF bool
 	// Manual forces manual handling with this reason.
 	Manual string
+
+	spfExtra string
 }
 
 type Change struct {
@@ -44,13 +46,28 @@ type Plan struct {
 	Changes  []Change `json:"changes"`
 }
 
+// Options tune the desired record set.
+type Options struct {
+	// SPFInclude is added for a smarthost, e.g. "include:_spf.strato.com".
+	SPFInclude string
+	// DynDNS reports that the host's A record is maintained by DynDNS.
+	DynDNS bool
+}
+
 // DesiredRecords builds the record set for a mail domain.
-func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string) []Desired {
+func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string, opts ...Options) []Desired {
+	var opt Options
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	hostDot := host + "."
 	d := []Desired{}
-	if ipv4 != "" {
+	if opt.DynDNS {
+		d = append(d, Desired{Key: "a", Record: Record{Name: host, Type: "A", Value: "<per DynDNS>"}, Purpose: "Hostname des Mailservers", Required: true,
+			Manual: "Der A-Record wird von Postwerk automatisch per DynDNS aktuell gehalten."})
+	} else if ipv4 != "" {
 		d = append(d, Desired{Key: "a", Record: Record{Name: host, Type: "A", Value: ipv4}, Purpose: "Hostname des Mailservers", Required: true})
 	} else {
 		d = append(d, Desired{Key: "a", Record: Record{Name: host, Type: "A", Value: "<öffentliche IPv4>"}, Purpose: "Hostname des Mailservers", Required: true,
@@ -61,7 +78,7 @@ func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string) []
 	}
 	d = append(d,
 		Desired{Key: "mx", Record: Record{Name: domain, Type: "MX", Value: hostDot, Priority: 10}, Purpose: "Eingehende Mails an Postwerk leiten", Required: true},
-		Desired{Key: "spf", Record: Record{Name: domain, Type: "TXT", Value: "v=spf1 mx -all"}, Purpose: "SPF: erlaubte Absender", Required: true, Match: "v=spf1", MergeSPF: true},
+		Desired{Key: "spf", Record: Record{Name: domain, Type: "TXT", Value: MergeSPF("", opt.SPFInclude)}, Purpose: "SPF: erlaubte Absender", Required: true, Match: "v=spf1", MergeSPF: true, spfExtra: opt.SPFInclude},
 		Desired{Key: "dkim", Record: Record{Name: dkimSelector + "._domainkey." + domain, Type: "TXT", Value: dkimValue}, Purpose: "DKIM-Schlüssel", Required: true, Match: "v=DKIM1"},
 		Desired{Key: "dmarc", Record: Record{Name: "_dmarc." + domain, Type: "TXT", Value: "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + domain}, Purpose: "DMARC-Richtlinie", Required: true, Match: "v=DMARC1", CreateOnly: true},
 		Desired{Key: "mta-sts-txt", Record: Record{Name: "_mta-sts." + domain, Type: "TXT", Value: "v=STSv1; id=" + mtaSTSID()}, Purpose: "MTA-STS aktivieren", Match: "v=STSv1", CreateOnly: true},
@@ -101,29 +118,36 @@ func sameValue(a, b Record) bool {
 	return strings.EqualFold(strings.TrimSuffix(a.Value, "."), strings.TrimSuffix(b.Value, "."))
 }
 
-// MergeSPF keeps foreign mechanisms of an existing SPF record and adds "mx".
-func MergeSPF(existing string) string {
-	if existing == "" {
-		return "v=spf1 mx -all"
-	}
+// MergeSPF keeps foreign mechanisms of an existing SPF record and adds "mx"
+// plus optional extra terms (e.g. the smarthost's include).
+func MergeSPF(existing string, extra ...string) string {
 	all := "-all"
 	terms := []string{"mx"}
 	seen := map[string]bool{"mx": true, "+mx": true}
-	for _, t := range strings.Fields(existing)[1:] {
+	addTerm := func(t string) {
 		lt := strings.ToLower(t)
-		switch {
-		case strings.HasSuffix(lt, "all") && len(lt) <= 4:
-			if lt == "~all" || lt == "?all" {
-				all = lt
-			}
-			continue
-		case strings.HasPrefix(lt, "redirect="):
-			continue
-		}
-		if !seen[lt] {
+		if t != "" && !seen[lt] {
 			seen[lt] = true
 			terms = append(terms, t)
 		}
+	}
+	if f := strings.Fields(existing); len(f) > 1 {
+		for _, t := range f[1:] {
+			lt := strings.ToLower(t)
+			switch {
+			case strings.HasSuffix(lt, "all") && len(lt) <= 4:
+				if lt == "~all" || lt == "?all" {
+					all = lt
+				}
+				continue
+			case strings.HasPrefix(lt, "redirect="):
+				continue
+			}
+			addTerm(t)
+		}
+	}
+	for _, e := range extra {
+		addTerm(strings.TrimSpace(e))
 	}
 	return "v=spf1 " + strings.Join(terms, " ") + " " + all
 }
@@ -187,7 +211,7 @@ func MakePlan(ctx context.Context, p Provider, info Info, domain string, desired
 		}
 
 		if d.MergeSPF && len(matching) > 0 {
-			want.Value = MergeSPF(matching[0].Value)
+			want.Value = MergeSPF(matching[0].Value, d.spfExtra)
 			c.Desired = want.Value
 		}
 

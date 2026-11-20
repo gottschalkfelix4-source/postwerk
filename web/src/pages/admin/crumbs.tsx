@@ -3,6 +3,8 @@ import { adminApi } from "@/api/endpoints";
 
 export const settingsSections = [
   { id: "server", label: "Server" },
+  { id: "dyndns", label: "DynDNS" },
+  { id: "relay", label: "Smarthost" },
   { id: "web", label: "Web & Proxy" },
   { id: "tls", label: "TLS / Zertifikate" },
   { id: "spam", label: "Spamfilter" },

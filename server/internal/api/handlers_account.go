@@ -186,7 +186,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, accountID 
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.Cfg.SecureCookies || r.TLS != nil,
+		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.secureCookie(r),
 		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds()),
 	})
 	return nil

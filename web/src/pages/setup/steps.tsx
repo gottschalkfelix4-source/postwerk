@@ -53,6 +53,7 @@ import {
   useToast,
   type BadgeTone,
 } from "@/components/ui";
+import { DnsAutoSetupCard } from "@/pages/admin/dns/DnsAutoSetup";
 import { setupKeys, useSetup, type StepProps } from "./context";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ const overview: { icon: LucideIcon; title: string; text: string }[] = [
   { icon: ServerCog, title: "Server & Administrator", text: "Hostname, erste Domain und dein Admin-Konto." },
   { icon: Globe, title: "DNS-Einträge", text: "MX, SPF, DKIM und DMARC live prüfen." },
   { icon: Network, title: "System-Check", text: "Reverse-DNS, Port 25 und Dienste." },
-  { icon: Lock, title: "TLS", text: "Automatische Zertifikate per ACME." },
+  { icon: Lock, title: "Reverse-Proxy & TLS", text: "Proxy-Anleitung und Zertifikat für die Mail-Ports." },
   { icon: ShieldCheck, title: "Schutz & KI", text: "Virenscan, Spamfilter und KI-Funktionen." },
   { icon: ArrowRightLeft, title: "Daten übernehmen", text: "Postfächer von einem anderen Server umziehen." },
 ];
@@ -544,6 +545,9 @@ export function DnsStep({ onBack, onNext }: StepProps) {
     staleTime: 0,
   });
   const summary = dnsSummary(check.data);
+  // Only read a system check that is already cached; it is not fetched here.
+  const systemCheck = useQuery({ queryKey: setupKeys.systemCheck, queryFn: adminApi.systemCheck, enabled: false });
+  const defaultIpv4 = systemCheck.data?.hostnameIps.find((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) ?? null;
 
   return (
     <WizardStep
@@ -598,6 +602,8 @@ export function DnsStep({ onBack, onNext }: StepProps) {
               </div>
             )}
           </div>
+
+          <DnsAutoSetupCard key={selected} domain={selected} defaultIpv4={defaultIpv4} onApplied={() => void check.refetch()} />
 
           <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
             {check.isLoading ? (

@@ -10,6 +10,7 @@ import (
 
 type Settings struct {
 	Server    ServerSettings    `json:"server"`
+	Web       WebSettings       `json:"web"`
 	TLS       TLSSettings       `json:"tls"`
 	Spam      SpamSettings      `json:"spam"`
 	Antivirus AntivirusSettings `json:"antivirus"`
@@ -23,9 +24,25 @@ type ServerSettings struct {
 	MaxMessageSize int64  `json:"maxMessageSize"`
 }
 
+// WebSettings describe how the web interface is reached (reverse proxy).
+type WebSettings struct {
+	PublicURL      string   `json:"publicUrl"`
+	BehindProxy    bool     `json:"behindProxy"`
+	TrustedProxies []string `json:"trustedProxies"`
+	SecureCookies  bool     `json:"secureCookies"`
+}
+
 type TLSSettings struct {
-	ACME   ACMESettings `json:"acme"`
-	Status string       `json:"status"`
+	// Mode selects the certificate source: selfsigned, acme or files.
+	Mode   string           `json:"mode"`
+	ACME   ACMESettings     `json:"acme"`
+	Files  TLSFilesSettings `json:"files"`
+	Status string           `json:"status"`
+}
+
+type TLSFilesSettings struct {
+	CertPath string `json:"certPath"`
+	KeyPath  string `json:"keyPath"`
 }
 
 type ACMESettings struct {
@@ -107,6 +124,8 @@ func DefaultSettings(hostname string) Settings {
 	s.Server.MaxMessageSize = 50 << 20
 	s.TLS.ACME.DirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 	s.TLS.ACME.Domains = []string{}
+	s.TLS.Mode = "selfsigned"
+	s.Web.TrustedProxies = []string{}
 	s.Spam.Enabled = true
 	s.Spam.JunkThreshold = 5
 	s.Spam.RejectThreshold = 15
@@ -155,6 +174,16 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 		if err := json.Unmarshal([]byte(raw), &cur); err != nil {
 			return nil, err
 		}
+	}
+	if cur.TLS.Mode == "" {
+		// Settings from before the TLS mode existed.
+		cur.TLS.Mode = "selfsigned"
+		if cur.TLS.ACME.Enabled {
+			cur.TLS.Mode = "acme"
+		}
+	}
+	if cur.Web.TrustedProxies == nil {
+		cur.Web.TrustedProxies = []string{}
 	}
 	c := &SettingsCache{cur: cur, st: s}
 	if raw == "" {

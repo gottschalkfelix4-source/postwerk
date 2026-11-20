@@ -29,6 +29,7 @@ import (
 	"postwerk/internal/migrate"
 	"postwerk/internal/spam"
 	"postwerk/internal/store"
+	"postwerk/internal/tlsutil"
 )
 
 const sessionCookie = "pw_session"
@@ -46,7 +47,7 @@ type Server struct {
 	Logs       *logx.Ring
 	Log        *slog.Logger
 	UI         fs.FS
-	TLSStatus  string
+	TLS        *tlsutil.Dynamic
 	Version    string
 	Started    time.Time
 	SetupToken string
@@ -179,19 +180,77 @@ func queryInt(r *http.Request, key string, def, max int) int {
 func ok() any { return map[string]bool{"ok": true} }
 
 func (s *Server) clientIP(r *http.Request) string {
-	if s.Cfg.TrustProxy {
-		if v := r.Header.Get("X-Real-IP"); v != "" {
-			return strings.TrimSpace(v)
+	return s.resolveClient(r).client
+}
+
+type clientInfo struct {
+	remote  string // direct peer
+	client  string // effective client after evaluating trusted proxies
+	trusted bool   // remote is a trusted proxy
+	https   bool   // original request used HTTPS
+}
+
+func (s *Server) behindProxy() (bool, []string) {
+	w := s.Settings.Get().Web
+	return w.BehindProxy || s.Cfg.TrustProxy, w.TrustedProxies
+}
+
+// isTrustedProxy decides whether X-Forwarded-* from ip may be believed.
+func isTrustedProxy(ip net.IP, list []string) bool {
+	if ip == nil {
+		return false
+	}
+	if len(list) == 0 {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+	for _, e := range list {
+		if _, n, err := net.ParseCIDR(e); err == nil && n.Contains(ip) {
+			return true
 		}
-		if v := r.Header.Get("X-Forwarded-For"); v != "" {
-			return strings.TrimSpace(strings.Split(v, ",")[0])
+		if p := net.ParseIP(e); p != nil && p.Equal(ip) {
+			return true
 		}
 	}
+	return false
+}
+
+// resolveClient walks X-Forwarded-For from right to left, skipping trusted
+// proxies, so a client cannot spoof its address by sending the header.
+func (s *Server) resolveClient(r *http.Request) clientInfo {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	info := clientInfo{remote: host, client: host, https: r.TLS != nil}
+	enabled, list := s.behindProxy()
+	if !enabled || !isTrustedProxy(net.ParseIP(host), list) {
+		return info
+	}
+	info.trusted = true
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		parts := strings.Split(v, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			ip := strings.TrimSpace(parts[i])
+			if net.ParseIP(ip) == nil {
+				break
+			}
+			info.client = ip
+			if !isTrustedProxy(net.ParseIP(ip), list) {
+				break
+			}
+		}
+	} else if v := r.Header.Get("X-Real-IP"); net.ParseIP(strings.TrimSpace(v)) != nil {
+		info.client = strings.TrimSpace(v)
+	}
+	if strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
+		info.https = true
+	}
+	return info
+}
+
+// secureCookie reports whether the session cookie must carry the Secure flag.
+func (s *Server) secureCookie(r *http.Request) bool {
+	return s.Cfg.SecureCookies || s.Settings.Get().Web.SecureCookies || s.resolveClient(r).https
 }
 
 // Handler builds the complete HTTP handler.
@@ -286,6 +345,18 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/admin/system/check", s.admin(s.systemCheck))
 	m.HandleFunc("POST /api/admin/system/test-clamav", s.admin(s.testClamAV))
 	m.HandleFunc("GET /api/admin/domains/{name}/dns/check", s.admin(s.domainDNSCheck))
+
+	// reverse proxy & tls
+	m.HandleFunc("GET /api/admin/proxy/detect", s.admin(s.proxyDetect))
+	m.HandleFunc("GET /api/admin/proxy/guide", s.admin(s.proxyGuide))
+	m.HandleFunc("GET /api/admin/tls/certificates", s.admin(s.tlsCertificates))
+	m.HandleFunc("POST /api/admin/tls/test", s.admin(s.tlsTest))
+
+	// dns providers
+	m.HandleFunc("GET /api/admin/dns/providers", s.admin(s.dnsProviders))
+	m.HandleFunc("POST /api/admin/domains/{name}/dns/plan", s.admin(s.domainDNSPlan))
+	m.HandleFunc("POST /api/admin/domains/{name}/dns/apply", s.admin(s.domainDNSApply))
+	m.HandleFunc("GET /api/admin/system/public-ip", s.admin(s.publicIP))
 
 	// migration & import
 	m.HandleFunc("POST /api/admin/migrations/test", s.admin(s.migrationTest))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -432,7 +433,7 @@ func (s *Server) maskedSettings() store.Settings {
 	if cur.DMS.Paperless.Token != "" {
 		cur.DMS.Paperless.Token = mask
 	}
-	cur.TLS.Status = s.TLSStatus
+	cur.TLS.Status = s.TLS.Status()
 	return cur
 }
 
@@ -448,7 +449,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	cur := s.Settings.Get()
 	oldKey, oldToken, oldACME := cur.AI.APIKey, cur.DMS.Paperless.Token, cur.TLS.ACME
 	sections := map[string]any{
-		"server": &cur.Server, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
+		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
 		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security,
 	}
 	for k, raw := range patch {
@@ -478,8 +479,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 		keys = append(keys, k)
 	}
 	s.Log.Info("settings updated", "component", "admin", "sections", strings.Join(keys, ","), "by", u.Email)
-	if fmt.Sprint(oldACME) != fmt.Sprint(cur.TLS.ACME) {
-		s.Log.Warn("ACME settings changed: restart required", "component", "tls")
+	if fmt.Sprint(oldACME) != fmt.Sprint(cur.TLS.ACME) || patch["tls"] != nil {
+		s.Log.Info("tls settings changed", "component", "tls", "status", s.TLS.Status())
 	}
 	if s.AIWorker != nil {
 		s.AIWorker.Notify()
@@ -501,6 +502,31 @@ func validateSettings(c *store.Settings) error {
 	if c.Spam.RejectThreshold != 0 && c.Spam.RejectThreshold <= c.Spam.JunkThreshold {
 		return invalid("Ablehnungs-Schwelle muss größer als die Spam-Schwelle sein")
 	}
+	switch c.TLS.Mode {
+	case "acme", "files", "selfsigned":
+	default:
+		return invalid("Ungültige Zertifikatsquelle")
+	}
+	c.TLS.ACME.Enabled = c.TLS.Mode == "acme"
+	if c.TLS.Mode == "files" && strings.TrimSpace(c.TLS.Files.CertPath) == "" {
+		return invalid("Bitte den Pfad zum Zertifikat angeben")
+	}
+	c.Web.PublicURL = strings.TrimRight(strings.TrimSpace(c.Web.PublicURL), "/")
+	if c.Web.PublicURL != "" && !strings.HasPrefix(c.Web.PublicURL, "http://") && !strings.HasPrefix(c.Web.PublicURL, "https://") {
+		return invalid("Die öffentliche URL muss mit http:// oder https:// beginnen")
+	}
+	proxies := []string{}
+	for _, p := range c.Web.TrustedProxies {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(p); err != nil && net.ParseIP(p) == nil {
+			return invalid("Ungültige Proxy-Adresse: " + p)
+		}
+		proxies = append(proxies, p)
+	}
+	c.Web.TrustedProxies = proxies
 	if c.Antivirus.Action != "reject" && c.Antivirus.Action != "quarantine" {
 		c.Antivirus.Action = "reject"
 	}

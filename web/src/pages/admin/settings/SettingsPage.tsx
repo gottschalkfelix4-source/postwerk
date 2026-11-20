@@ -1,15 +1,16 @@
 import { NavLink, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, FileStack, Lock, ServerCog, ShieldAlert, ShieldCheck, Bug, type LucideIcon } from "lucide-react";
+import { Bot, FileStack, Lock, ServerCog, ShieldAlert, ShieldCheck, Bug, Waypoints, type LucideIcon } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
 import type { Settings, SettingsUpdate } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { Card, ErrorState, PageHeader, Skeleton, useToast } from "@/components/ui";
 import { settingsSections, type SettingsSectionId } from "../crumbs";
-import { AiSection, AntivirusSection, DmsSection, SecuritySection, ServerSection, SpamSection, TlsSection } from "./sections";
+import { AiSection, AntivirusSection, DmsSection, SecuritySection, ServerSection, SpamSection, TlsSection, WebSection } from "./sections";
 
 const icons: Record<SettingsSectionId, LucideIcon> = {
   server: ServerCog,
+  web: Waypoints,
   tls: Lock,
   spam: ShieldAlert,
   antivirus: Bug,
@@ -32,9 +33,15 @@ export default function SettingsPage() {
 
   const mutation = useMutation({
     mutationFn: adminApi.saveSettings,
-    onSuccess: (s) => {
+    onSuccess: (s, update) => {
       qc.setQueryData(["admin", "settings"], s);
       void qc.invalidateQueries({ queryKey: ["ai", "status"] });
+      // TLS and proxy changes apply immediately: reload for a fresh certificate status and detection.
+      if (update.tls || update.web) {
+        void qc.invalidateQueries({ queryKey: ["admin", "settings"] });
+        void qc.invalidateQueries({ queryKey: ["admin", "system-check"] });
+        void qc.invalidateQueries({ queryKey: ["admin", "proxy-detect"] });
+      }
       toast.success("Einstellungen gespeichert");
     },
     onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
@@ -87,6 +94,8 @@ export default function SettingsPage() {
             </Card>
           ) : id === "server" ? (
             <ServerSection key={id} {...props} />
+          ) : id === "web" ? (
+            <WebSection key={id} {...props} />
           ) : id === "tls" ? (
             <TlsSection key={id} {...props} />
           ) : id === "spam" ? (

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, AtSign, Globe, Info, KeyRound, Trash2, Users } from "lucide-react";
+import { ArrowLeft, AtSign, Globe, Info, KeyRound, Trash2, Users, Wand2 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { DnsRecord, Domain } from "@/api/types";
+import type { DnsRecord, Domain, SystemCheck } from "@/api/types";
 import { formatDate } from "@/lib/format";
 import { isEmail } from "@/lib/utils";
 import {
@@ -32,6 +32,7 @@ import {
   useToast,
   type BadgeTone,
 } from "@/components/ui";
+import { DnsAutoSetup } from "./dns/DnsAutoSetup";
 
 const typeTones: Record<DnsRecord["type"], BadgeTone> = {
   MX: "indigo",
@@ -53,6 +54,10 @@ export default function DomainDetailPage() {
   const domains = useQuery({ queryKey: ["admin", "domains"], queryFn: adminApi.domains });
   const dns = useQuery({ queryKey: ["admin", "domain-dns", name], queryFn: () => adminApi.domainDns(name), enabled: !!name });
   const domain = domains.data?.find((d) => d.name === name);
+  const [autoOpen, setAutoOpen] = useState(false);
+  // Pre-fill the IPv4 from a cached system check (setup wizard), without fetching it here.
+  const defaultIpv4 =
+    qc.getQueryData<SystemCheck>(["admin", "system-check"])?.hostnameIps.find((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) ?? null;
 
   const remove = useMutation({
     mutationFn: () => adminApi.deleteDomain(name),
@@ -131,6 +136,11 @@ export default function DomainDetailPage() {
         <CardHeader
           title="Empfohlene DNS-Einträge"
           description="Trage diese Einträge beim DNS-Anbieter der Domain ein, damit Zustellung, DKIM, SPF und DMARC funktionieren."
+          actions={
+            <Button size="sm" variant="primary" icon={Wand2} onClick={() => setAutoOpen(true)} disabled={!name}>
+              Automatisch einrichten
+            </Button>
+          }
         />
         {dns.isLoading ? (
           <SkeletonRows rows={5} cols={3} />
@@ -183,6 +193,17 @@ export default function DomainDetailPage() {
           </p>
         </CardFooter>
       </Card>
+
+      <DnsAutoSetup
+        open={autoOpen}
+        onClose={() => setAutoOpen(false)}
+        domain={name}
+        defaultIpv4={defaultIpv4}
+        onApplied={() => {
+          void qc.invalidateQueries({ queryKey: ["admin", "dns-check", name] });
+          void qc.invalidateQueries({ queryKey: ["admin", "domain-dns", name] });
+        }}
+      />
     </>
   );
 }

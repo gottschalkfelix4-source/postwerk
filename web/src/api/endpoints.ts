@@ -8,13 +8,19 @@ import type {
   Ban,
   BulkRequest,
   CalendarEvent,
+  CertificateFile,
   ClamavTestResult,
   CreateAccountRequest,
   CreateMigrationRequest,
   CreatedAppPassword,
   CreateTaskRequest,
   Dashboard,
+  DnsApplyRequest,
+  DnsApplyResult,
   DnsCheck,
+  DnsPlan,
+  DnsPlanRequest,
+  DnsProviderInfo,
   DnsRecord,
   Domain,
   DraftRequest,
@@ -32,6 +38,10 @@ import type {
   MigrationTestResult,
   Ok,
   Paged,
+  ProxyDetect,
+  ProxyGuide,
+  ProxyKind,
+  PublicIp,
   QueueItem,
   ReplyDraft,
   ReplyRequest,
@@ -47,6 +57,8 @@ import type {
   SummarizeResult,
   TagCount,
   Task,
+  TlsTestRequest,
+  TlsTestResult,
   TotpSetup,
   UpdateAccountRequest,
   UpdateMessageRequest,
@@ -87,6 +99,12 @@ export const adminApi = {
   domainDns: (name: string) => http.get<DnsRecord[]>(`/api/admin/domains/${enc(name)}/dns`),
   domainDnsCheck: (name: string) => http.get<DnsCheck[]>(`/api/admin/domains/${enc(name)}/dns/check`),
 
+  dnsProviders: () => http.get<DnsProviderInfo[]>("/api/admin/dns/providers"),
+  domainDnsPlan: (name: string, body: DnsPlanRequest) =>
+    http.post<DnsPlan>(`/api/admin/domains/${enc(name)}/dns/plan`, body),
+  domainDnsApply: (name: string, body: DnsApplyRequest) =>
+    http.post<DnsApplyResult>(`/api/admin/domains/${enc(name)}/dns/apply`, body),
+
   accounts: (params: { q?: string; limit?: number; offset?: number }) =>
     http.get<Paged<Account>>("/api/admin/accounts", { query: params }),
   account: (id: number) => http.get<Account>(`/api/admin/accounts/${id}`),
@@ -119,6 +137,15 @@ export const adminApi = {
   completeSetup: () => http.post<Ok>("/api/admin/setup/complete"),
   systemCheck: () => http.get<SystemCheck>("/api/admin/system/check"),
   testClamav: (address: string) => http.post<ClamavTestResult>("/api/admin/system/test-clamav", { address }),
+  /** Queries api.ipify.org on the server: only call on explicit user action. */
+  publicIp: () => http.get<PublicIp>("/api/admin/system/public-ip"),
+
+  proxyDetect: () => http.get<ProxyDetect>("/api/admin/proxy/detect"),
+  /** `upstream` = address under which the proxy reaches Postwerk, e.g. http://192.168.1.10:8880. */
+  proxyGuide: (kind: ProxyKind, upstream: string, signal?: AbortSignal) =>
+    http.get<ProxyGuide>("/api/admin/proxy/guide", { query: { kind, upstream }, signal }),
+  tlsCertificates: () => http.get<CertificateFile[]>("/api/admin/tls/certificates"),
+  testTlsFiles: (body: TlsTestRequest) => http.post<TlsTestResult>("/api/admin/tls/test", body),
 
   migrations: () => http.get<MigrationJob[]>("/api/admin/migrations"),
   migration: (id: number) => http.get<MigrationJob>(`/api/admin/migrations/${id}`),

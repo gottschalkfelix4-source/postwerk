@@ -312,7 +312,7 @@ func (s *Server) systemCheck(w http.ResponseWriter, r *http.Request, u *store.Ac
 	return map[string]any{
 		"hostname": host, "hostnameIps": ips, "ptr": ptrs,
 		"port25Outbound": port25, "port25Detail": port25Detail,
-		"tls": s.TLSStatus, "clamav": clam, "clamavDetail": clamDetail, "ai": aiStatus, "aiDetail": aiDetail,
+		"tls": s.TLS.Status(), "clamav": clam, "clamavDetail": clamDetail, "ai": aiStatus, "aiDetail": aiDetail,
 	}, nil
 }
 

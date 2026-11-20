@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { CircleCheck, CircleX, Info, PlugZap, Zap } from "lucide-react";
+import { ArrowRight, CircleCheck, CircleX, Info, PlugZap, Zap } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { AiTestResult, Settings, SettingsUpdate } from "@/api/types";
+import type { AiTestResult, Settings, SettingsUpdate, TlsMode } from "@/api/types";
 import { useDraft } from "@/lib/hooks";
-import { cn, isEmail } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { errorMessage } from "@/api/client";
 import {
   Badge,
@@ -20,7 +21,36 @@ import {
   SaveBar,
   Select,
   SwitchRow,
+  useToast,
 } from "@/components/ui";
+import {
+  DetectNotice,
+  ProxyCheckPanel,
+  ProxyGuidePanel,
+  ProxyKindPicker,
+  PublicUrlField,
+  SecureCookiesRow,
+  TrustedProxiesField,
+  UpstreamField,
+  isHttpUrl,
+  useCookieFollowsUrl,
+  useGuideInput,
+  useProxyDetect,
+  webOf,
+  withProxySuggestions,
+  type WebSettings,
+} from "@/pages/admin/proxy/ProxyParts";
+import {
+  AcmeNotice,
+  CertificateFilesPanel,
+  SelfSignedNotice,
+  TlsModePicker,
+  TlsStatusBox,
+  tlsDraftErrors,
+  tlsDraftOf,
+  tlsDraftValid,
+  tlsUpdate,
+} from "@/pages/admin/tls/CertificateParts";
 import type { SectionProps } from "./SettingsPage";
 
 const MASK = "••••";
@@ -143,6 +173,85 @@ export function ServerSection({ settings, save, saving }: SectionProps) {
   );
 }
 
+export function WebSection({ settings, save, saving }: SectionProps) {
+  const toast = useToast();
+  const source = useMemo(() => webOf(settings.web), [settings.web]);
+  const { draft, setDraft, dirty, reset } = useDraft(source);
+  const detect = useProxyDetect();
+  const guide = useGuideInput(detect.data);
+  const hostname = settings.server.hostname;
+  const touchCookies = useCookieFollowsUrl(draft?.publicUrl, (v) => setDraft((d) => ({ ...d, secureCookies: v })));
+  if (!draft) return null;
+  const set = (patch: Partial<WebSettings>) => setDraft((d) => ({ ...d, ...patch }));
+  const urlInvalid = (draft.behindProxy || !!draft.publicUrl.trim()) && !isHttpUrl(draft.publicUrl);
+
+  return (
+    <Shell
+      title="Web & Proxy"
+      description="Öffentliche Adresse der Weboberfläche und Betrieb hinter einem Reverse-Proxy. Änderungen wirken sofort."
+      dirty={dirty}
+      saving={saving}
+      onReset={reset}
+      onSave={() =>
+        urlInvalid ? toast.error("Bitte eine gültige öffentliche URL mit http:// oder https:// angeben.", "Nicht gespeichert") : save({ web: draft })
+      }
+    >
+      <FormSection title="Reverse-Proxy" description="Nur die Weboberfläche läuft über den Proxy – die Mail-Ports werden direkt an Postwerk weitergeleitet.">
+        <SwitchRow
+          label="Postwerk läuft hinter einem Reverse-Proxy"
+          description="Postwerk wertet dann X-Forwarded-For und X-Forwarded-Proto vertrauenswürdiger Proxys aus."
+          checked={draft.behindProxy}
+          onChange={(v) => setDraft((d) => (v ? withProxySuggestions(d, detect.data, hostname) : { ...d, behindProxy: false }))}
+        />
+        <DetectNotice detect={detect.data} loading={detect.isLoading} />
+        {draft.behindProxy && (
+          <TrustedProxiesField value={draft.trustedProxies} onChange={(v) => set({ trustedProxies: v })} suggestion={detect.data?.suggestedTrustedProxy} />
+        )}
+      </FormSection>
+      <FormSection title="Adresse & Cookies" description="Unter welcher Adresse die Weboberfläche erreichbar ist.">
+        <PublicUrlField value={draft.publicUrl} onChange={(v) => set({ publicUrl: v })} hostname={hostname} />
+        <SecureCookiesRow
+          checked={draft.secureCookies}
+          onChange={(v) => {
+            touchCookies();
+            set({ secureCookies: v });
+          }}
+        />
+      </FormSection>
+      {draft.behindProxy && (
+        <FormSection title="Anleitung" description="Konfiguration für deinen Proxy. Proxy-Typ und Zieladresse werden nur in diesem Browser gemerkt.">
+          <ProxyKindPicker value={guide.kind} onChange={guide.setKind} compact />
+          <UpstreamField value={guide.upstream} onChange={guide.setUpstream} suggestion={guide.suggestion} />
+          <ProxyGuidePanel
+            kind={guide.kind}
+            upstream={guide.upstream}
+            hostname={hostname}
+            certificateAction={
+              <Link
+                to="/admin/settings/tls"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-300"
+              >
+                Zur Zertifikatsauswahl <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            }
+          />
+        </FormSection>
+      )}
+      {draft.behindProxy && (
+        <FormSection title="Verbindung prüfen" description="Zeigt, wie Postwerk deine aktuelle Anfrage sieht.">
+          <ProxyCheckPanel
+            detect={detect.data}
+            loading={detect.isFetching}
+            error={detect.error}
+            onRecheck={() => void detect.refetch()}
+            note={dirty ? "Die Prüfung verwendet die gespeicherte Konfiguration – speichere zuerst, um Änderungen zu prüfen." : undefined}
+          />
+        </FormSection>
+      )}
+    </Shell>
+  );
+}
+
 const ACME_PRESETS = [
   { label: "Let's Encrypt", url: "https://acme-v02.api.letsencrypt.org/directory" },
   { label: "Let's Encrypt (Staging)", url: "https://acme-staging-v02.api.letsencrypt.org/directory" },
@@ -150,62 +259,101 @@ const ACME_PRESETS = [
 ];
 
 export function TlsSection({ settings, save, saving }: SectionProps) {
-  const { draft, setDraft, dirty, reset } = useDraft(settings.tls.acme);
+  const toast = useToast();
+  const source = useMemo(() => tlsDraftOf(settings.tls), [settings.tls]);
+  const { draft, setDraft, dirty, reset } = useDraft(source);
   if (!draft) return null;
-  const set = (patch: Partial<Settings["tls"]["acme"]>) => setDraft((d) => ({ ...d, ...patch }));
-  const status = settings.tls.status;
-  const statusTone = /fehl|error|fail|expired|abgelaufen/i.test(status) ? "red" : /ok|valid|gültig|aktiv|active/i.test(status) ? "green" : "neutral";
+  const setAcme = (patch: Partial<Settings["tls"]["acme"]>) => setDraft((d) => ({ ...d, acme: { ...d.acme, ...patch } }));
+  const setMode = (mode: TlsMode) =>
+    setDraft((d) => {
+      const acme = { ...d.acme, enabled: mode === "acme" };
+      if (mode === "acme") {
+        if (acme.domains.length === 0 && settings.server.hostname) acme.domains = [settings.server.hostname];
+        if (!acme.directoryUrl) acme.directoryUrl = ACME_PRESETS[0].url;
+      }
+      return { ...d, mode, acme };
+    });
+  const errors = tlsDraftErrors(draft);
+  const behindProxy = !!settings.web?.behindProxy;
+
   return (
     <Shell
-      title="TLS / ACME"
-      description="Zertifikate für SMTP, IMAP und die Weboberfläche."
+      title="TLS / Zertifikate"
+      description="Zertifikat für SMTP, IMAP und POP3. Änderungen wirken ohne Neustart."
       dirty={dirty}
       saving={saving}
       onReset={reset}
-      onSave={() => save({ tls: { acme: draft } })}
+      onSave={() =>
+        tlsDraftValid(draft)
+          ? save(tlsUpdate(draft))
+          : toast.error(
+              draft.mode === "files" ? "Bitte Zertifikat und Schlüssel angeben." : "Bitte E-Mail-Adresse und mindestens eine Domain angeben.",
+              "Nicht gespeichert",
+            )
+      }
     >
-      <FormSection title="Status" description="Aktueller Zustand der Zertifikate laut Server.">
-        <div className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950/50">
-          <Badge tone={statusTone} dot>
-            {statusTone === "green" ? "OK" : statusTone === "red" ? "Problem" : "Info"}
-          </Badge>
-          <p className="min-w-0 break-words text-sm text-zinc-700 dark:text-zinc-300">{status || "Keine Angabe"}</p>
-        </div>
+      <FormSection title="Status" description="Aktueller Zustand des Zertifikats laut Server.">
+        <TlsStatusBox status={settings.tls.status} />
       </FormSection>
-      <FormSection title="Automatische Zertifikate" description="Zertifikate werden per ACME (z. B. Let's Encrypt) bezogen und automatisch erneuert.">
-        <SwitchRow label="ACME aktivieren" description="Port 80 oder 443 muss für die Validierung von außen erreichbar sein." checked={draft.enabled} onChange={(v) => set({ enabled: v })} />
-        <Field label="Kontakt-E-Mail" help="Die Zertifizierungsstelle schickt hierhin Ablaufwarnungen." error={draft.email && !isEmail(draft.email) ? "Ungültige E-Mail-Adresse." : null}>
-          {(id) => <Input id={id} type="email" value={draft.email} onChange={(e) => set({ email: e.target.value })} placeholder="admin@beispiel.de" disabled={!draft.enabled} />}
-        </Field>
-        <Field label="ACME-Verzeichnis" help="Zum Testen die Staging-Umgebung verwenden, um Rate-Limits zu vermeiden.">
-          {(id) => (
-            <div className="space-y-2">
-              <Input id={id} value={draft.directoryUrl} onChange={(e) => set({ directoryUrl: e.target.value })} disabled={!draft.enabled} className="font-mono text-[13px]" />
-              <div className="flex flex-wrap gap-1.5">
-                {ACME_PRESETS.map((p) => (
-                  <button
-                    key={p.url}
-                    type="button"
-                    disabled={!draft.enabled}
-                    onClick={() => set({ directoryUrl: p.url })}
-                    className={cn(
-                      "rounded-md px-2 py-1 text-xs ring-1 ring-inset transition disabled:opacity-50",
-                      draft.directoryUrl === p.url
-                        ? "bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/30"
-                        : "text-zinc-600 ring-zinc-200 hover:bg-zinc-50 dark:text-zinc-400 dark:ring-zinc-700 dark:hover:bg-zinc-800",
-                    )}
-                  >
-                    {p.label}
-                  </button>
-                ))}
+      <FormSection title="Zertifikatsquelle" description="Woher Postwerk das Zertifikat für die Mail-Ports bezieht.">
+        <TlsModePicker value={draft.mode} onChange={setMode} recommended={behindProxy ? "files" : "acme"} stacked />
+      </FormSection>
+      {draft.mode === "files" && (
+        <FormSection
+          title="Zertifikat vom Proxy"
+          description={
+            <>
+              Der Zertifikatsordner des Proxys muss schreibgeschützt nach <code className="font-mono">/certs</code> eingebunden sein.
+            </>
+          }
+        >
+          <CertificateFilesPanel value={draft.files} onChange={(files) => setDraft((d) => ({ ...d, files }))} hostname={settings.server.hostname} />
+        </FormSection>
+      )}
+      {draft.mode === "acme" && (
+        <FormSection title="ACME" description="Zertifikate werden per ACME (z. B. Let's Encrypt) bezogen und automatisch erneuert.">
+          <Field label="Kontakt-E-Mail" help="Die Zertifizierungsstelle schickt hierhin Ablaufwarnungen." error={draft.acme.email && errors.email ? "Ungültige E-Mail-Adresse." : null}>
+            {(id) => <Input id={id} type="email" value={draft.acme.email} onChange={(e) => setAcme({ email: e.target.value })} placeholder="admin@beispiel.de" />}
+          </Field>
+          <Field label="ACME-Verzeichnis" help="Zum Testen die Staging-Umgebung verwenden, um Rate-Limits zu vermeiden.">
+            {(id) => (
+              <div className="space-y-2">
+                <Input id={id} value={draft.acme.directoryUrl} onChange={(e) => setAcme({ directoryUrl: e.target.value })} className="font-mono text-[13px]" />
+                <div className="flex flex-wrap gap-1.5">
+                  {ACME_PRESETS.map((p) => (
+                    <button
+                      key={p.url}
+                      type="button"
+                      onClick={() => setAcme({ directoryUrl: p.url })}
+                      className={cn(
+                        "rounded-md px-2 py-1 text-xs ring-1 ring-inset transition disabled:opacity-50",
+                        draft.acme.directoryUrl === p.url
+                          ? "bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/30"
+                          : "text-zinc-600 ring-zinc-200 hover:bg-zinc-50 dark:text-zinc-400 dark:ring-zinc-700 dark:hover:bg-zinc-800",
+                      )}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-        </Field>
-        <Field label="Domains" help="Alle Namen, für die ein Zertifikat ausgestellt werden soll (z. B. mail.beispiel.de, autoconfig.beispiel.de).">
-          {(id) => <ChipInput id={id} value={draft.domains} onChange={(v) => set({ domains: v })} placeholder="mail.beispiel.de" transform={(v) => v.toLowerCase()} disabled={!draft.enabled} />}
-        </Field>
-      </FormSection>
+            )}
+          </Field>
+          <Field
+            label="Domains"
+            help="Alle Namen, für die ein Zertifikat ausgestellt werden soll (z. B. mail.beispiel.de, autoconfig.beispiel.de)."
+            error={errors.domains ? "Mindestens ein Name ist erforderlich." : null}
+          >
+            {(id) => <ChipInput id={id} value={draft.acme.domains} onChange={(v) => setAcme({ domains: v })} placeholder="mail.beispiel.de" transform={(v) => v.toLowerCase()} />}
+          </Field>
+          <AcmeNotice behindProxy={behindProxy} />
+        </FormSection>
+      )}
+      {draft.mode === "selfsigned" && (
+        <FormSection title="Selbstsigniert" description="Postwerk erzeugt sich selbst ein Zertifikat.">
+          <SelfSignedNotice />
+        </FormSection>
+      )}
     </Shell>
   );
 }

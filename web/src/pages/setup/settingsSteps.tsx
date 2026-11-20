@@ -10,21 +10,25 @@ import {
   CircleX,
   Clock,
   FileUp,
+  Globe,
   Info,
+  ListOrdered,
   Lock,
   PartyPopper,
   PlugZap,
   RotateCcw,
+  Save,
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
+  Waypoints,
   Zap,
 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
 import { errorMessage } from "@/api/client";
-import type { AiTestResult, ClamavTestResult, DnsCheck, Settings, SettingsUpdate } from "@/api/types";
+import type { AiTestResult, ClamavTestResult, DnsCheck, Settings, SettingsUpdate, TlsMode } from "@/api/types";
 import { qk } from "@/lib/queries";
-import { cn, deepEqual, isEmail } from "@/lib/utils";
+import { cn, deepEqual } from "@/lib/utils";
 import {
   Badge,
   Button,
@@ -34,12 +38,44 @@ import {
   Input,
   Notice,
   PasswordInput,
+  Segmented,
   Skeleton,
   SwitchRow,
   WizardNav,
   WizardStep,
   useToast,
 } from "@/components/ui";
+import {
+  DetectNotice,
+  ProxyCheckPanel,
+  ProxyGuidePanel,
+  ProxyKindPicker,
+  PublicUrlField,
+  SecureCookiesRow,
+  TrustedProxiesField,
+  UpstreamField,
+  initialWebDraft,
+  isHttpUrl,
+  useCookieFollowsUrl,
+  useGuideInput,
+  useProxyDetect,
+  webOf,
+  withProxySuggestions,
+  type WebSettings,
+} from "@/pages/admin/proxy/ProxyParts";
+import {
+  AcmeNotice,
+  CertificateFilesPanel,
+  SelfSignedNotice,
+  TlsModePicker,
+  TlsStatusBox,
+  tlsDraftErrors,
+  tlsDraftOf,
+  tlsDraftValid,
+  tlsModeLabels,
+  tlsUpdate,
+  type TlsDraft,
+} from "@/pages/admin/tls/CertificateParts";
 import { setupKeys, useSetup, type StepProps } from "./context";
 import { dnsSummary, SectionTitle } from "./steps";
 
@@ -69,121 +105,305 @@ function SettingsGate({ q, children }: { q: ReturnType<typeof useSettings>; chil
 }
 
 // ---------------------------------------------------------------------------
-// 5. TLS
+// 5. Reverse proxy
 // ---------------------------------------------------------------------------
 
-export function TlsStep({ onBack, onNext }: StepProps) {
+export function ProxyStep({ onBack, onNext }: StepProps) {
   const ctx = useSetup();
   const toast = useToast();
   const q = useSettings();
+  const detect = useProxyDetect();
   const save = useSaveSettings();
-  const [draft, setDraft] = useState<Settings["tls"]["acme"] | null>(null);
+  const guide = useGuideInput(detect.data);
+  const [draft, setDraft] = useState<WebSettings | null>(null);
+  const hostname = q.data?.server.hostname || ctx.status.hostname;
 
   useEffect(() => {
-    if (q.data && !draft) setDraft(q.data.tls.acme);
-  }, [q.data, draft]);
+    if (!draft && q.data && !detect.isLoading) setDraft(initialWebDraft(q.data, detect.data, hostname));
+  }, [draft, q.data, detect.isLoading, detect.data, hostname]);
 
-  const dirty = !!q.data && !!draft && !deepEqual(draft, q.data.tls.acme);
-  const emailInvalid = !!draft?.enabled && !isEmail(draft.email);
-  const domainsInvalid = !!draft?.enabled && draft.domains.length === 0;
+  const set = (patch: Partial<WebSettings>) => setDraft((d) => (d ? { ...d, ...patch } : d));
+  const touchCookies = useCookieFollowsUrl(draft?.publicUrl, (v) => set({ secureCookies: v }));
 
-  const set = (patch: Partial<Settings["tls"]["acme"]>) => setDraft((d) => (d ? { ...d, ...patch } : d));
+  const saved = q.data ? webOf(q.data.web) : null;
+  // "No" only switches the proxy mode off and leaves the other values alone.
+  const update: SettingsUpdate | null = !draft || !saved
+    ? null
+    : draft.behindProxy
+      ? deepEqual(draft, saved)
+        ? null
+        : { web: draft }
+      : saved.behindProxy
+        ? { web: { behindProxy: false } }
+        : null;
+  const dirty = update !== null;
+  const urlInvalid = !!draft?.behindProxy && !isHttpUrl(draft.publicUrl);
 
-  const enable = (on: boolean) => {
-    if (!q.data || !draft) return;
-    const hostname = q.data.server.hostname;
-    set({
-      enabled: on,
-      ...(on && !draft.email && ctx.me ? { email: ctx.me.email } : {}),
-      ...(on && draft.domains.length === 0 && hostname ? { domains: [hostname] } : {}),
-      ...(on && !draft.directoryUrl ? { directoryUrl: LETS_ENCRYPT } : {}),
+  const persist = (after: (saved: boolean) => void) => {
+    if (!update) return after(false);
+    save.mutate(update, {
+      onSuccess: (s) => {
+        if (draft?.behindProxy) setDraft(webOf(s.web));
+        after(true);
+      },
+      onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
     });
   };
 
-  const next = () => {
-    if (!dirty || !draft) return onNext();
-    save.mutate(
-      { tls: { acme: draft } },
-      {
-        onSuccess: () => {
-          toast.success("TLS-Einstellungen gespeichert", "Wirksam nach einem Neustart des Servers.");
-          onNext();
-        },
-        onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
-      },
-    );
-  };
+  const next = () =>
+    persist((didSave) => {
+      if (didSave) toast.success("Proxy-Einstellungen gespeichert", "Sie gelten ab sofort.");
+      onNext();
+    });
+
+  const recheck = () => persist(() => void detect.refetch());
+
+  const setBehind = (v: boolean) =>
+    setDraft((d) => (d ? (v ? withProxySuggestions(d, detect.data, hostname) : { ...d, behindProxy: false }) : d));
 
   return (
     <WizardStep
-      icon={Lock}
-      title="TLS-Zertifikate"
-      description="Verschlüsselung für SMTP, IMAP und die Weboberfläche."
+      icon={Waypoints}
+      title="Reverse-Proxy"
+      description="Weboberfläche hinter Nginx Proxy Manager, Traefik, Caddy & Co."
       footer={
         <WizardNav
           onBack={onBack}
           onNext={next}
           nextLabel={dirty ? "Speichern & weiter" : "Weiter"}
           loading={save.isPending}
-          nextDisabled={!draft || emailInvalid || domainsInvalid}
+          nextDisabled={!draft || urlInvalid}
+        />
+      }
+    >
+      <SettingsGate q={q}>
+        {() =>
+          !draft ? (
+            <Skeleton className="h-64 rounded-lg" />
+          ) : (
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Läuft Postwerk hinter einem Reverse-Proxy?</h3>
+                  <Segmented
+                    items={[
+                      { value: "no", label: "Nein" },
+                      { value: "yes", label: "Ja" },
+                    ]}
+                    value={draft.behindProxy ? "yes" : "no"}
+                    onChange={(v) => setBehind(v === "yes")}
+                    className="w-40"
+                  />
+                </div>
+                <DetectNotice detect={detect.data} loading={detect.isLoading} suggested={!!detect.data?.viaProxy && draft.behindProxy} />
+              </div>
+
+              {!draft.behindProxy ? (
+                <Notice tone="info" icon={Info} title="Ohne Reverse-Proxy">
+                  Du erreichst die Weboberfläche direkt über die Portfreigabe von Postwerk. Postwerk wertet dann keine
+                  X-Forwarded-Header aus, damit niemand seine IP-Adresse fälschen kann. Das lässt sich jederzeit unter Einstellungen →
+                  Web &amp; Proxy ändern.
+                </Notice>
+              ) : (
+                <div className="animate-fade-in space-y-6">
+                  <section className="space-y-4">
+                    <SectionTitle icon={Waypoints} title="Welchen Proxy verwendest du?" text="Die Anleitung unten passt sich deiner Auswahl an." />
+                    <ProxyKindPicker value={guide.kind} onChange={guide.setKind} />
+                  </section>
+
+                  <div className="border-t border-zinc-100 dark:border-zinc-800" />
+
+                  <section className="space-y-4">
+                    <SectionTitle icon={Globe} title="Adressen" text="Wie der Browser Postwerk erreicht und wohin der Proxy weiterleitet." />
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <PublicUrlField value={draft.publicUrl} onChange={(v) => set({ publicUrl: v })} hostname={hostname} />
+                      <UpstreamField value={guide.upstream} onChange={guide.setUpstream} suggestion={guide.suggestion} />
+                    </div>
+                    <TrustedProxiesField
+                      value={draft.trustedProxies}
+                      onChange={(v) => set({ trustedProxies: v })}
+                      suggestion={detect.data?.suggestedTrustedProxy}
+                    />
+                    <SecureCookiesRow
+                      checked={draft.secureCookies}
+                      onChange={(v) => {
+                        touchCookies();
+                        set({ secureCookies: v });
+                      }}
+                    />
+                  </section>
+
+                  <div className="border-t border-zinc-100 dark:border-zinc-800" />
+
+                  <section className="space-y-4">
+                    <SectionTitle icon={ListOrdered} title="Anleitung" text="Schritt für Schritt – mit Konfiguration zum Kopieren." />
+                    <ProxyGuidePanel
+                      kind={guide.kind}
+                      upstream={guide.upstream}
+                      hostname={hostname}
+                      certificateAction={
+                        <Button variant="primary" iconRight={ArrowRight} onClick={next} loading={save.isPending} disabled={urlInvalid}>
+                          Weiter zur Zertifikatsauswahl
+                        </Button>
+                      }
+                    />
+                  </section>
+
+                  <ProxyCheckPanel
+                    detect={detect.data}
+                    loading={detect.isFetching || save.isPending}
+                    error={detect.error}
+                    onRecheck={recheck}
+                    note={dirty ? "Ungespeicherte Änderungen werden vor der Prüfung gespeichert." : undefined}
+                  />
+                </div>
+              )}
+            </div>
+          )
+        }
+      </SettingsGate>
+    </WizardStep>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. TLS
+// ---------------------------------------------------------------------------
+
+export function TlsStep({ onBack, onNext }: StepProps) {
+  const ctx = useSetup();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useSettings();
+  const save = useSaveSettings();
+  const [draft, setDraft] = useState<TlsDraft | null>(null);
+
+  useEffect(() => {
+    if (q.data && !draft) setDraft(tlsDraftOf(q.data.tls));
+  }, [q.data, draft]);
+
+  const source = q.data ? tlsDraftOf(q.data.tls) : null;
+  const dirty = !!source && !!draft && !deepEqual(draft, source);
+  const errors = draft ? tlsDraftErrors(draft) : null;
+  const valid = !!draft && tlsDraftValid(draft);
+  const behindProxy = !!q.data?.web?.behindProxy;
+  const hostname = q.data?.server.hostname || ctx.status.hostname;
+
+  const setAcme = (patch: Partial<TlsDraft["acme"]>) => setDraft((d) => (d ? { ...d, acme: { ...d.acme, ...patch } } : d));
+
+  const setMode = (mode: TlsMode) =>
+    setDraft((d) => {
+      if (!d) return d;
+      const acme = { ...d.acme, enabled: mode === "acme" };
+      if (mode === "acme") {
+        if (!acme.email && ctx.me) acme.email = ctx.me.email;
+        if (acme.domains.length === 0 && hostname) acme.domains = [hostname];
+        if (!acme.directoryUrl) acme.directoryUrl = LETS_ENCRYPT;
+      }
+      return { ...d, mode, acme };
+    });
+
+  const persist = (after?: () => void) => {
+    if (!draft) return;
+    save.mutate(tlsUpdate(draft), {
+      onSuccess: (s) => {
+        setDraft(tlsDraftOf(s.tls));
+        // The certificate is loaded right away; fetch the settings again for a fresh status.
+        void qc.invalidateQueries({ queryKey: setupKeys.settings });
+        toast.success("TLS-Einstellungen gespeichert", s.tls.status || undefined);
+        after?.();
+      },
+      onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
+    });
+  };
+
+  const next = () => (dirty ? persist(onNext) : onNext());
+
+  return (
+    <WizardStep
+      icon={Lock}
+      title="TLS-Zertifikate"
+      description="Verschlüsselung für SMTP, IMAP und POP3 – Änderungen wirken ohne Neustart."
+      footer={
+        <WizardNav
+          onBack={onBack}
+          onNext={next}
+          nextLabel={dirty ? "Speichern & weiter" : "Weiter"}
+          loading={save.isPending}
+          nextDisabled={!draft || (dirty && !valid)}
+          extra={
+            dirty ? (
+              <Button icon={Save} onClick={() => persist()} disabled={!valid || save.isPending}>
+                Speichern
+              </Button>
+            ) : undefined
+          }
         />
       }
     >
       <SettingsGate q={q}>
         {(s) =>
-          draft && (
+          draft &&
+          errors && (
             <div className="space-y-5">
-              <div className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950/50">
-                <Badge tone={/fehl|error|fail|expired|abgelaufen/i.test(s.tls.status) ? "red" : /ok|valid|gültig|aktiv|active/i.test(s.tls.status) ? "green" : "neutral"} dot>
-                  Status
-                </Badge>
-                <p className="min-w-0 break-words text-sm text-zinc-700 dark:text-zinc-300">{s.tls.status || "Keine Angabe"}</p>
+              <TlsStatusBox status={s.tls.status} />
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Woher kommt das Zertifikat?</h3>
+                <TlsModePicker value={draft.mode} onChange={setMode} recommended={behindProxy ? "files" : "acme"} />
               </div>
 
-              <SwitchRow
-                label="Zertifikate automatisch per ACME beziehen"
-                description="Postwerk holt Zertifikate von Let’s Encrypt und erneuert sie selbstständig."
-                checked={draft.enabled}
-                onChange={enable}
-              />
+              {draft.mode === "files" && (
+                <div className="animate-fade-in">
+                  <CertificateFilesPanel
+                    value={draft.files}
+                    onChange={(files) => setDraft((d) => (d ? { ...d, files } : d))}
+                    hostname={hostname}
+                  />
+                </div>
+              )}
 
-              {draft.enabled && (
+              {draft.mode === "acme" && (
                 <div className="animate-fade-in space-y-4">
-                  <Field label="Kontakt-E-Mail" required help="Die Zertifizierungsstelle schickt hierhin Ablaufwarnungen." error={draft.email && emailInvalid ? "Ungültige E-Mail-Adresse." : null}>
-                    {(id) => <Input id={id} type="email" value={draft.email} onChange={(e) => set({ email: e.target.value })} placeholder="admin@beispiel.de" invalid={!!draft.email && emailInvalid} className="max-w-md" />}
+                  <Field
+                    label="Kontakt-E-Mail"
+                    required
+                    help="Die Zertifizierungsstelle schickt hierhin Ablaufwarnungen."
+                    error={draft.acme.email && errors.email ? "Ungültige E-Mail-Adresse." : null}
+                  >
+                    {(id) => (
+                      <Input
+                        id={id}
+                        type="email"
+                        value={draft.acme.email}
+                        onChange={(e) => setAcme({ email: e.target.value })}
+                        placeholder="admin@beispiel.de"
+                        invalid={!!draft.acme.email && errors.email}
+                        className="max-w-md"
+                      />
+                    )}
                   </Field>
                   <Field
                     label="Domains im Zertifikat"
                     help="Der Hostname ist Pflicht. Zusätzliche Namen, z. B. autoconfig.beispiel.de oder mta-sts.beispiel.de, mit Enter hinzufügen."
-                    error={domainsInvalid ? "Mindestens ein Name ist erforderlich." : null}
+                    error={errors.domains ? "Mindestens ein Name ist erforderlich." : null}
                   >
                     {(id) => (
                       <ChipInput
                         id={id}
-                        value={draft.domains}
-                        onChange={(v) => set({ domains: v })}
-                        placeholder={s.server.hostname || "mail.beispiel.de"}
+                        value={draft.acme.domains}
+                        onChange={(v) => setAcme({ domains: v })}
+                        placeholder={hostname || "mail.beispiel.de"}
                         transform={(v) => v.toLowerCase()}
-                        suggestions={suggestTlsNames(s.server.hostname, ctx.domain).filter((n) => !draft.domains.includes(n))}
+                        suggestions={suggestTlsNames(hostname, ctx.domain).filter((n) => !draft.acme.domains.includes(n))}
                       />
                     )}
                   </Field>
-                  <Notice tone="warning" icon={TriangleAlert} title="Bitte beachten">
-                    <ul className="list-disc space-y-0.5 pl-4">
-                      <li>Port 80 muss von außen erreichbar sein, damit die Zertifizierungsstelle die Domain prüfen kann.</li>
-                      <li>Alle Namen müssen per DNS auf diesen Server zeigen.</li>
-                      <li>Die Änderung wird erst nach einem Neustart des Servers wirksam.</li>
-                    </ul>
-                  </Notice>
+                  <AcmeNotice behindProxy={behindProxy} />
                 </div>
               )}
 
-              {!draft.enabled && (
-                <Notice tone="info" icon={Info}>
-                  Ohne ACME verwendet Postwerk eigene Zertifikate aus dem Datenverzeichnis oder ein selbstsigniertes Zertifikat.
-                  Mail-Programme zeigen dann eventuell Warnungen.
-                </Notice>
-              )}
+              {draft.mode === "selfsigned" && <SelfSignedNotice />}
             </div>
           )
         }
@@ -203,7 +423,7 @@ function suggestTlsNames(hostname: string, domain: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Protection & AI
+// 7. Protection & AI
 // ---------------------------------------------------------------------------
 
 interface ProtectionDraft {
@@ -459,7 +679,7 @@ function AiResult({
 }
 
 // ---------------------------------------------------------------------------
-// 7. Data import
+// 8. Data import
 // ---------------------------------------------------------------------------
 
 export function DataStep({ onBack, onNext }: StepProps) {
@@ -519,7 +739,7 @@ export function DataStep({ onBack, onNext }: StepProps) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Done
+// 9. Done
 // ---------------------------------------------------------------------------
 
 function SummaryRow({ label, children, ok }: { label: string; children: ReactNode; ok?: boolean | null }) {
@@ -557,6 +777,7 @@ export function DoneStep({ onBack }: StepProps) {
   });
 
   const s = settings.data;
+  const tls = s ? tlsDraftOf(s.tls) : null;
 
   return (
     <WizardStep
@@ -576,8 +797,17 @@ export function DoneStep({ onBack }: StepProps) {
               : `${summary.ok} von ${summary.required} Pflichteinträgen korrekt`
             : "Nicht geprüft"}
         </SummaryRow>
-        <SummaryRow label="TLS" ok={s ? s.tls.acme.enabled : null}>
-          {s ? (s.tls.acme.enabled ? `ACME aktiv (${s.tls.acme.domains.join(", ")})` : "Kein ACME") : "–"}
+        <SummaryRow label="Reverse-Proxy">
+          {s ? (s.web?.behindProxy ? `Ja${s.web.publicUrl ? ` (${s.web.publicUrl})` : ""}` : "Nein") : "–"}
+        </SummaryRow>
+        <SummaryRow label="TLS" ok={tls ? tls.mode !== "selfsigned" : null}>
+          {tls
+            ? tls.mode === "acme"
+              ? `${tlsModeLabels.acme} (${tls.acme.domains.join(", ")})`
+              : tls.mode === "files"
+                ? `${tlsModeLabels.files}${tls.files.certPath ? ` (${tls.files.certPath})` : ""}`
+                : tlsModeLabels.selfsigned
+            : "–"}
         </SummaryRow>
         <SummaryRow label="Virenscan">{s ? (s.antivirus.enabled ? "Aktiv" : "Aus") : "–"}</SummaryRow>
         <SummaryRow label="Spamfilter">
@@ -588,12 +818,6 @@ export function DoneStep({ onBack }: StepProps) {
         </SummaryRow>
         <SummaryRow label="KI">{s ? (s.ai.enabled ? `Aktiv (${s.ai.chatModel || "kein Modell"})` : "Aus") : "–"}</SummaryRow>
       </dl>
-
-      {s?.tls.acme.enabled && (
-        <Notice tone="warning" icon={Info} className="mt-4">
-          Starte den Server neu, damit die TLS-Einstellungen wirksam werden.
-        </Notice>
-      )}
 
       <div className="mt-5 rounded-lg border border-zinc-200 p-4 text-sm dark:border-zinc-800">
         <div className="mb-2 font-medium text-zinc-900 dark:text-zinc-100">Nächste Schritte</div>

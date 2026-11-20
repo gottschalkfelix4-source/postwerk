@@ -87,7 +87,8 @@ Smarthost und Reverse-Proxy-Optionen.
 2. `http://<Unraid-IP>:8880` öffnen (oder Postwerk-Icon → **WebUI**). Der Assistent startet automatisch.
 3. Er führt dich durch:
    - **Server & Admin:** Hostname, erste Domain, dein Admin-Konto
-   - **DNS:** prüft live, welche Einträge schon stimmen (MX, SPF, DKIM, DMARC …), mit Kopier-Knöpfen
+   - **DNS:** prüft live, welche Einträge schon stimmen (MX, SPF, DKIM, DMARC …), mit Kopier-Knöpfen –
+     oder trägt sie **automatisch beim DNS-Anbieter** ein (siehe unten)
    - **System-Check:** Reverse-DNS, ausgehender Port 25, ClamAV, KI
    - **TLS:** Let's Encrypt einschalten
    - **Schutz & KI:** Virenscan, Spamfilter, Ollama, jeweils mit Verbindungstest
@@ -104,14 +105,83 @@ Leite im Router diese Ports aus dem Internet an die IP deines Unraid-Servers wei
 | 25 | 25 | Mails von anderen Servern empfangen (Pflicht) |
 | 465 und 587 | 465 und 587 | Versand mit Mailprogrammen unterwegs |
 | 995 | 995 | Abruf unterwegs |
-| 80 | 8880 | Let's-Encrypt-Prüfung (nur nötig, wenn Postwerk das Zertifikat selbst holt) |
+| 80 | 8880 | Let's-Encrypt-Prüfung, nur ohne Reverse-Proxy (mit Proxy zeigen 80/443 auf den Proxy, siehe 4a) |
 
 Die Weboberfläche solltest du **nicht** direkt ins Internet stellen, sondern über VPN (z. B. WireGuard
-in Unraid) oder einen Reverse-Proxy mit HTTPS erreichen.
+in Unraid) oder einen Reverse-Proxy mit HTTPS erreichen (siehe 4a).
 
 ---
 
+## 4a. Hinter einem Reverse-Proxy (Nginx Proxy Manager, Traefik, Caddy, SWAG)
+
+Viele Unraid-Server haben schon einen Reverse-Proxy für die Weboberflächen. Postwerk arbeitet damit
+zusammen; der Setup-Assistent hat dafür den Schritt **Reverse-Proxy**:
+
+1. **Erkennung:** Rufst du den Assistenten bereits über den Proxy auf, erkennt Postwerk das und schlägt die
+   Proxy-IP als vertrauenswürdig vor. Nur von dort übernimmt Postwerk die echte Besucher-IP. Wichtig für
+   die Brute-Force-Sperre, die sonst den Proxy selbst sperren würde.
+2. **Fertige Konfiguration:** Proxy-Typ wählen und die Adresse angeben, unter der der Proxy Postwerk
+   erreicht (z. B. `http://<Unraid-IP>:8880`). Der Assistent zeigt die passende Anleitung mit
+   Konfiguration zum Kopieren:
+   - Nginx Proxy Manager: Proxy Host und „Advanced“-Konfiguration
+   - Traefik: dynamische Konfiguration oder Labels
+   - Caddy: Caddyfile
+   - nginx bzw. SWAG: Server-Block bzw. `proxy-conf`
+3. **Zertifikat für die Mail-Ports:** Der Proxy beantwortet die Let's-Encrypt-Prüfung selbst, deshalb
+   übernimmt Postwerk **das Zertifikat des Proxys**. Im Postwerk-Template den Zertifikatsordner des
+   Proxys bei **„Zertifikate vom Reverse-Proxy“** eintragen (wird schreibgeschützt nach `/certs`
+   eingebunden), dann im Schritt **TLS** „Zertifikat vom Reverse-Proxy übernehmen“ wählen. Postwerk
+   listet die gefundenen Zertifikate und zeigt an, welches zum Hostnamen passt. Erneuert der Proxy das
+   Zertifikat, lädt Postwerk es automatisch neu, ohne Neustart.
+
+| Proxy | Zertifikatsordner (Unraid, typisch) |
+|---|---|
+| Nginx Proxy Manager | `/mnt/user/appdata/Nginx-Proxy-Manager-Official/letsencrypt` oder `/mnt/user/appdata/NginxProxyManager/letsencrypt` |
+| SWAG | `/mnt/user/appdata/swag/etc/letsencrypt` |
+| Caddy | `/mnt/user/appdata/caddy/data` |
+| Traefik | `acme.json` per `traefik-certs-dumper` in einen Ordner schreiben lassen (Anleitung im Assistenten) |
+
+> **Zugriffsrechte:** Postwerk läuft im Container als Benutzer 99. Die privaten Schlüssel der Proxys sind
+> oft nur für root lesbar. Zeigt die Zertifikatsauswahl „Zugriff verweigert“, im Postwerk-Template unter
+> „Erweiterte Ansicht“ **PUID auf 0** setzen.
+
+> **Die Mail-Ports laufen nie über den Proxy.** 25, 465, 587 und 995 werden im Router direkt an Postwerk
+> weitergeleitet (Schritt 4). Nur die Weboberfläche läuft über den Proxy.
+
 ## 5. DNS-Einträge setzen
+
+### Automatisch beim DNS-Anbieter
+
+Im Setup-Assistenten (Schritt DNS) oder unter **Verwaltung → Domains → Domain → Automatisch einrichten**
+trägt Postwerk die Einträge selbst ein:
+
+| Anbieter | Anbindung | Was du brauchst |
+|---|---|---|
+| **IONOS** | offizielle API | API-Schlüssel aus dem IONOS-Entwicklerportal (`präfix.geheimnis`) |
+| **STRATO** | inoffiziell über den Kundenlogin | Kundennummer/E-Mail + Passwort (bei 2FA zusätzlich Geheimnis und Gerätename) |
+| **Hetzner** | offizielle Cloud-API | API-Token aus der Hetzner Console (Lesen & Schreiben) |
+| **Cloudflare** | offizielle API | API-Token mit „Zone → DNS → Bearbeiten“ |
+| **netcup** | offizielle CCP-API | Kundennummer, API-Key, API-Passwort |
+| **INWX** | offizielle API | Benutzername, Passwort (bei 2FA das Geheimnis) |
+| **deSEC** | offizielle API | API-Token |
+
+So läuft es ab:
+1. Anbieter wählen und Zugangsdaten eingeben (sie werden **nicht gespeichert**).
+2. Öffentliche IPv4 eintragen oder „Ermitteln“ klicken (für den A-Record von `mail.deinedomain.de`).
+3. **Vorschau:** Postwerk zeigt jeden Eintrag mit altem und neuem Wert. Fremde Einträge (z. B.
+   Google-Verifizierung, Webseite) bleiben unberührt, eine bestehende SPF-Regel wird ergänzt statt
+   überschrieben, eine vorhandene DMARC-Regel bleibt erhalten. Werden bestehende MX-Einträge ersetzt, warnt
+   Postwerk ausdrücklich, denn ab dann kommen Mails bei Postwerk an.
+4. Auswahl prüfen und **Übernehmen**. Danach die DNS-Prüfung erneut starten.
+
+> **STRATO:** STRATO bietet keine offizielle DNS-API. Postwerk bedient deshalb die Weboberfläche des
+> Kundenlogins, wie es auch bekannte Community-Werkzeuge tun. Automatisch gesetzt werden TXT- (SPF,
+> DKIM, DMARC, MTA-STS, TLS-RPT) und CNAME-Einträge. **MX- und A-Einträge** trägst du im STRATO-Menü unter
+> *Domains → Domainverwaltung → DNS* von Hand ein; die Vorschau zeigt sie als „manuell“ mit dem passenden
+> Wert. Ändert STRATO seine Seiten, kann die Anbindung ausfallen; Postwerk bricht dann ab, ohne
+> Einträge zu löschen.
+
+### Von Hand
 
 In Postwerk unter **Verwaltung → Domains → deine Domain** stehen alle Einträge mit Kopier-Knopf:
 
@@ -122,10 +192,8 @@ In Postwerk unter **Verwaltung → Domains → deine Domain** stehen alle Eintr�
 - **TXT (DMARC)** `_dmarc.deinedomain.de` → `v=DMARC1; p=quarantine; …`
 - optional MTA-STS, TLS-RPT, SRV- und Autoconfig-Einträge
 
-Den **PTR-Eintrag** (Reverse-DNS) für deine IP setzt dein Internetanbieter, meist im Kundenportal.
-Er sollte auf `mail.deinedomain.de` zeigen.
-
----
+Den **PTR-Eintrag** (Reverse-DNS) für deine IP setzt dein Internetanbieter, meist im Kundenportal,
+nicht der DNS-Anbieter. Er sollte auf `mail.deinedomain.de` zeigen.
 
 ## 6. Einstellungen in Postwerk
 

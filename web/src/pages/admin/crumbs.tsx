@@ -3,7 +3,8 @@ import { adminApi } from "@/api/endpoints";
 
 export const settingsSections = [
   { id: "server", label: "Server" },
-  { id: "tls", label: "TLS / ACME" },
+  { id: "web", label: "Web & Proxy" },
+  { id: "tls", label: "TLS / Zertifikate" },
   { id: "spam", label: "Spamfilter" },
   { id: "antivirus", label: "Virenscan" },
   { id: "ai", label: "KI" },

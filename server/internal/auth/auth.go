@@ -283,3 +283,9 @@ func (a *Authenticator) Protocol(ctx context.Context, ip, email, password, proto
 	a.Guard.Fail(ip, proto+" auth")
 	return nil, ErrInvalid
 }
+
+// TOTPCode returns the current 6-digit code for a Base32 secret (used when
+// Postwerk itself must answer a provider's 2FA prompt).
+func TOTPCode(secret string) string {
+	return totpAt(strings.ReplaceAll(strings.TrimSpace(secret), " ", ""), uint64(time.Now().Unix()/30))
+}

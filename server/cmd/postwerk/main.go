@@ -78,9 +78,12 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		return err
 	}
 
-	s := settings.Get()
-	tp, err := tlsutil.New(cfg.DataDir, s.Server.Hostname, s.TLS.ACME, cfg.TLSCertFile, cfg.TLSKeyFile,
-		func(ctx context.Context, host string) bool {
+	tp := &tlsutil.Dynamic{
+		DataDir:  cfg.DataDir,
+		Settings: func() store.TLSSettings { return settings.Get().TLS },
+		Hostname: func() string { return settings.Get().Server.Hostname },
+		EnvCert:  cfg.TLSCertFile, EnvKey: cfg.TLSKeyFile,
+		ExtraHost: func(ctx context.Context, host string) bool {
 			for _, prefix := range []string{"mta-sts.", "autoconfig."} {
 				if d, ok := strings.CutPrefix(host, prefix); ok {
 					exists, _ := st.DomainExists(ctx, d)
@@ -88,11 +91,10 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 				}
 			}
 			return false
-		})
-	if err != nil {
-		return fmt.Errorf("tls: %w", err)
+		},
 	}
-	log.Info("tls ready", "component", "tls", "status", tp.Status)
+	tlsConfig := tp.Config()
+	log.Info("tls ready", "component", "tls", "status", tp.Status())
 
 	guard := auth.NewGuard(func() auth.Limits {
 		b := settings.Get().Security.BruteForce
@@ -128,15 +130,15 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	smtpLog := log.With("component", "smtp")
 	listeners := []func(context.Context) error{}
 	if cfg.SMTPAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SMTPAddr, Mode: smtp.ModeInbound, TLSConfig: tp.Config, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
+		srv := &smtp.Server{Addr: cfg.SMTPAddr, Mode: smtp.ModeInbound, TLSConfig: tlsConfig, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.SubmissionAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SubmissionAddr, Mode: smtp.ModeSubmission, TLSConfig: tp.Config, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		srv := &smtp.Server{Addr: cfg.SubmissionAddr, Mode: smtp.ModeSubmission, TLSConfig: tlsConfig, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.SubmissionsAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SubmissionsAddr, Mode: smtp.ModeSubmission, ImplicitTLS: true, TLSConfig: tp.Config, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
+		srv := &smtp.Server{Addr: cfg.SubmissionsAddr, Mode: smtp.ModeSubmission, ImplicitTLS: true, TLSConfig: tlsConfig, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	popAuth := func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
@@ -144,17 +146,17 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	}
 	pop3Log := log.With("component", "pop3")
 	if cfg.POP3Addr != "" {
-		srv := &pop3.Server{Addr: cfg.POP3Addr, TLSConfig: tp.Config, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		srv := &pop3.Server{Addr: cfg.POP3Addr, TLSConfig: tlsConfig, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log, AllowInsecureAuth: cfg.AllowInsecureAuth}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.POP3SAddr != "" {
-		srv := &pop3.Server{Addr: cfg.POP3SAddr, ImplicitTLS: true, TLSConfig: tp.Config, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log}
+		srv := &pop3.Server{Addr: cfg.POP3SAddr, ImplicitTLS: true, TLSConfig: tlsConfig, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 
 	apiSrv := &api.Server{
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
-		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLSStatus: tp.Status, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations,
+		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations,
 	}
 	handler := apiSrv.Handler()
 	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: tp.HTTPHandler(handler), ReadHeaderTimeout: 10 * time.Second}
@@ -167,7 +169,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		return nil
 	})
 	if cfg.HTTPSAddr != "" {
-		httpsSrv := &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, TLSConfig: tp.Config, ReadHeaderTimeout: 10 * time.Second}
+		httpsSrv := &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second}
 		listeners = append(listeners, func(ctx context.Context) error {
 			log.Info("listening", "component", "http", "proto", "https", "addr", cfg.HTTPSAddr)
 			go func() { <-ctx.Done(); shutdown(httpsSrv) }()

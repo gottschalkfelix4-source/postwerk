@@ -336,3 +336,161 @@ interface ImportResult { imported: number; skipped: number; failed: number; erro
 `/api/mail/import` importiert in das eigene Konto (Selbstbedienung, z. B. Thunderbird-Export).
 Ohne `mailboxId` landen Nachrichten im Posteingang; bei .zip werden Unterordner als Ordner angelegt.
 Maximale Dateigröße: 2 GB.
+
+## DNS-Anbieter (automatische Einrichtung der DNS-Einträge)
+
+Postwerk kann die empfohlenen DNS-Einträge einer Domain direkt beim DNS-Anbieter setzen. Ablauf:
+Anbieter wählen → Zugangsdaten eingeben → **Vorschau** (Vergleich alt/neu) → ausgewählte Änderungen
+**anwenden** → DNS-Prüfung erneut ausführen. Zugangsdaten werden nur für die jeweilige Anfrage
+verwendet und **nicht gespeichert**.
+
+Regeln der Vorschau:
+- Fremde Einträge bleiben unberührt (z. B. andere TXT-Einträge wie Google-Verifizierungen).
+- TXT-Einträge werden über ihr Präfix zugeordnet (`v=spf1`, `v=DKIM1`, `v=DMARC1`, `v=STSv1`, `v=TLSRPTv1`).
+- Eine vorhandene SPF-Regel wird **zusammengeführt** (bestehende `include:`/`ip4:`/`ip6:` bleiben erhalten, `mx` kommt dazu).
+- Vorhandene MX-Einträge werden **ersetzt** (Warnung, denn danach gehen Mails an Postwerk).
+- Typen, die der Anbieter nicht unterstützt (z. B. MX/A bei Strato), erscheinen als `manual`.
+
+```ts
+interface DnsProviderField {
+  key: string; label: string; type: "text" | "password";
+  required: boolean; help: string | null; placeholder: string | null;
+}
+
+interface DnsProviderInfo {
+  id: string;                 // "ionos" | "strato" | "hetzner" | "cloudflare" | "netcup" | "inwx" | "desec"
+  name: string;               // Anzeigename
+  official: boolean;          // false = inoffizielle Anbindung (z. B. Strato über den Kundenlogin)
+  description: string;        // ein Satz
+  docsUrl: string | null;     // wo man den API-Schlüssel bekommt
+  fields: DnsProviderField[];
+  supports: string[];         // unterstützte Record-Typen, z. B. ["A","AAAA","MX","TXT","CNAME","SRV"]
+  notes: string | null;       // Hinweise/Einschränkungen
+}
+
+interface DnsPlanRequest {
+  provider: string;
+  credentials: Record<string, string>;
+  ipv4?: string | null;       // öffentliche IPv4 für den A-Record des Hostnamens (sonst "manual")
+  ipv6?: string | null;       // optional AAAA
+}
+
+type DnsChangeAction = "create" | "update" | "unchanged" | "manual";
+
+interface DnsChange {
+  key: string;                // stabiler Schlüssel, z. B. "mx", "spf", "dkim", "dmarc", "a", "aaaa", "mta-sts-txt" …
+  type: string;
+  name: string;               // FQDN mit Punkt am Ende
+  action: DnsChangeAction;
+  current: string[];          // vorhandene Werte (nur die zugeordneten)
+  desired: string;            // Zielwert (bei MX "10 mail.example.com.")
+  purpose: string;
+  required: boolean;
+  warning: string | null;     // z. B. "Bestehende MX-Einträge werden ersetzt"
+  reason: string | null;      // Begründung bei "manual"
+}
+
+interface DnsPlan { zone: string; provider: string; changes: DnsChange[]; }
+
+interface DnsApplyResult {
+  applied: string[];                         // keys
+  failed: { key: string; error: string }[];
+  manual: string[];                          // keys, die von Hand gesetzt werden müssen
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/dns/providers` | – | `DnsProviderInfo[]` |
+| POST | `/api/admin/domains/{name}/dns/plan` | `DnsPlanRequest` | `DnsPlan` |
+| POST | `/api/admin/domains/{name}/dns/apply` | `DnsPlanRequest & { keys: string[] }` | `DnsApplyResult` |
+| GET | `/api/admin/system/public-ip` | – | `{ ipv4: string \| null; ipv6: string \| null }` (fragt `api.ipify.org` ab, nur auf Knopfdruck aufrufen) |
+
+Fehler: `dns_provider_error` (502) mit Meldung des Anbieters, z. B. bei falschen Zugangsdaten;
+`invalid` (400) bei unbekanntem Anbieter oder fehlenden Feldern.
+
+## Reverse-Proxy und Zertifikatsquelle
+
+Hinter einem Reverse-Proxy (Nginx Proxy Manager, Traefik, Caddy, nginx/SWAG …) läuft nur die
+**Weboberfläche** über den Proxy. Die Mail-Ports (25, 465, 587, 110/995) gehen weiterhin per
+Portfreigabe direkt an Postwerk. Für TLS auf den Mail-Ports kann Postwerk das Zertifikat des Proxys
+übernehmen (Dateien oder Traefik-`acme.json`) und lädt es bei Erneuerung automatisch neu.
+Änderungen an `web` und `tls` wirken **ohne Neustart**.
+
+### Neue/erweiterte Einstellungsabschnitte (`GET/PUT /api/admin/settings`)
+
+```ts
+interface Settings {
+  // … bestehende Abschnitte …
+  web: {
+    publicUrl: string;            // z. B. "https://mail.example.com" (leer = unbekannt)
+    behindProxy: boolean;
+    trustedProxies: string[];     // IPs oder CIDRs, deren X-Forwarded-For/-Proto vertraut wird.
+                                  // Leer + behindProxy = private Netze und Loopback vertrauen.
+    secureCookies: boolean;       // Session-Cookie nur über HTTPS
+  };
+  tls: {
+    mode: "selfsigned" | "acme" | "files";
+    acme: { enabled: boolean; email: string; directoryUrl: string; domains: string[] };  // enabled wird aus mode abgeleitet
+    files: { certPath: string; keyPath: string };   // Pfade im Container; certPath darf auch eine Traefik-acme.json sein
+    status: string;               // nur lesend
+  };
+}
+```
+
+### Typen
+
+```ts
+type ProxyKind = "npm" | "traefik" | "caddy" | "nginx" | "swag" | "other";
+
+interface ProxyDetect {
+  viaProxy: boolean;              // Anfrage kam mit X-Forwarded-*-Headern
+  remoteIp: string;               // direkte Gegenstelle (= Proxy, falls viaProxy)
+  clientIp: string;               // so sieht Postwerk den Browser nach Auswertung der Einstellungen
+  trusted: boolean;               // remoteIp gilt aktuell als vertrauenswürdiger Proxy
+  forwardedFor: string | null;
+  forwardedProto: string | null;
+  forwardedHost: string | null;
+  requestHost: string;
+  suggestedTrustedProxy: string | null;   // Vorschlag für trustedProxies
+  suggestedPublicUrl: string | null;      // aus X-Forwarded-Proto/-Host abgeleitet
+}
+
+interface ProxyConfigFile { name: string; language: "nginx" | "yaml" | "caddy" | "text"; content: string; }
+
+interface ProxyGuide {
+  kind: ProxyKind;
+  title: string;                  // z. B. "Nginx Proxy Manager"
+  steps: string[];                // nummerierte Anleitung (Klartext, kann `Code` in Backticks enthalten)
+  files: ProxyConfigFile[];       // Konfigurationen zum Kopieren
+  certificate: {                  // wie Postwerk an das Zertifikat kommt
+    recommendedMode: "files" | "acme";
+    hostPathHint: string | null;  // wo der Proxy seine Zertifikate ablegt (Host/Appdata)
+    containerPathExample: string | null; // passender certPath in Postwerk, z. B. "/certs/live/npm-1/fullchain.pem"
+    mountHint: string;            // wie das Verzeichnis nach /certs eingebunden wird
+  };
+  notes: string[];                // Warnungen/Hinweise
+}
+
+interface CertificateFile {
+  certPath: string;               // im Container
+  keyPath: string | null;         // gefundener passender Schlüssel (null bei acme.json, dort steckt er drin)
+  source: "files" | "traefik";
+  names: string[];                // SANs
+  issuer: string;
+  notAfter: string;
+  matchesHostname: boolean;       // deckt den Mailserver-Hostnamen ab
+}
+```
+
+### Endpunkte
+
+| Methode | Pfad | Body / Query | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/proxy/detect` | – | `ProxyDetect` |
+| GET | `/api/admin/proxy/guide?kind=&upstream=` | `upstream` = Adresse, unter der der Proxy Postwerk erreicht, z. B. `http://192.168.188.129:8880` oder `http://postwerk:8080` | `ProxyGuide` |
+| GET | `/api/admin/tls/certificates` | – | `CertificateFile[]` (durchsucht das Zertifikatsverzeichnis, Standard `/certs`) |
+| POST | `/api/admin/tls/test` | `{ certPath, keyPath }` | `{ ok, names, notAfter, matchesHostname, error? }` |
+
+Das Zertifikatsverzeichnis im Container ist `/certs` (Umgebungsvariable `POSTWERK_CERTS_DIR`); dorthin
+bindet man den Zertifikatsordner des Proxys **schreibgeschützt** ein.

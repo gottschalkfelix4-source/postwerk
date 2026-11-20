@@ -24,6 +24,8 @@ type Config struct {
 
 	TLSCertFile string
 	TLSKeyFile  string
+	// CertsDir is scanned for certificates taken over from a reverse proxy.
+	CertsDir string
 
 	AdminEmail    string
 	AdminPassword string
@@ -58,6 +60,7 @@ func Load() *Config {
 		POP3SAddr:         env("POSTWERK_POP3S_ADDR", ""),
 		TLSCertFile:       env("POSTWERK_TLS_CERT", ""),
 		TLSKeyFile:        env("POSTWERK_TLS_KEY", ""),
+		CertsDir:          env("POSTWERK_CERTS_DIR", "/certs"),
 		AdminEmail:        env("POSTWERK_ADMIN_EMAIL", ""),
 		AdminPassword:     env("POSTWERK_ADMIN_PASSWORD", ""),
 		MetricsToken:      env("POSTWERK_METRICS_TOKEN", ""),

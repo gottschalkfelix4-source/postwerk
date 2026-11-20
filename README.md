@@ -6,7 +6,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 - **Protokolle:** SMTP, Submission (587/465), POP3, Weboberfläche + REST-API
 - **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM/DMARC, Spamfilter mit Bayes, DNSBL und Greylisting,
   ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre
-- **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung, Migrationsassistent für den Umzug per
+- **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung und automatischem Eintragen der
+  DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
 - **KI:** Spam-/Phishing-Erkennung, Kategorien, Prioritäten, Zusammenfassungen, Antwortentwürfe,
   semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – über jeden
@@ -73,10 +74,17 @@ Für jede Domain zeigt **Verwaltung → Domains → Domain öffnen** alle nötig
 DMARC, MTA-STS, TLS-RPT, SRV) mit Kopier-Knopf. Zusätzlich braucht der Server einen A-Record für den
 Hostnamen und einen passenden Reverse-DNS-Eintrag (PTR) beim Provider.
 
+### Reverse-Proxy
+
+Hinter Nginx Proxy Manager, Traefik, Caddy oder SWAG führt der Setup-Assistent (Schritt
+„Reverse-Proxy“) durch die Einrichtung und liefert fertige Konfigurationen. Postwerk übernimmt dann
+das Zertifikat des Proxys für SMTP/POP3 (Ordner schreibgeschützt nach `/certs` einbinden) und lädt
+es bei Erneuerung automatisch neu. Die Mail-Ports laufen nicht über den Proxy.
+
 ### Let’s Encrypt
 
-Unter **Einstellungen → TLS** ACME aktivieren, E-Mail eintragen und den Container neu starten.
-Port 80 oder 443 muss dafür aus dem Internet erreichbar sein.
+Unter **Einstellungen → TLS** „Let's Encrypt direkt“ wählen und die E-Mail eintragen; die Änderung
+wirkt ohne Neustart. Port 80 oder 443 muss dafür direkt bei Postwerk ankommen (ohne Reverse-Proxy).
 
 ### Port 25 gesperrt?
 
@@ -125,6 +133,7 @@ server/
   internal/ai/         OpenAI-kompatibler Client, Analyse-Worker, Embeddings
   internal/dms/        Paperless-ngx
   internal/migrate/    IMAP-Migration, mbox/eml/zip-Import
+  internal/dnsprov/    DNS-Anbieter (IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX, deSEC)
   internal/api/        REST-API, statische Oberfläche
   internal/store/      SQLite + Blob-Speicher
 web/                   React-Oberfläche (Verwaltung + Webmail)
@@ -141,10 +150,11 @@ web/                   React-Oberfläche (Verwaltung + Webmail)
 | `POSTWERK_SUBMISSION_ADDR` / `POSTWERK_SUBMISSIONS_ADDR` | `:5870` / – | Versand |
 | `POSTWERK_POP3_ADDR` / `POSTWERK_POP3S_ADDR` | `:1110` / – | POP3 |
 | `POSTWERK_ADMIN_EMAIL` / `POSTWERK_ADMIN_PASSWORD` | – | Erstes Admin-Konto |
-| `POSTWERK_TLS_CERT` / `POSTWERK_TLS_KEY` | – | Eigenes Zertifikat |
+| `POSTWERK_TLS_CERT` / `POSTWERK_TLS_KEY` | – | Eigenes Zertifikat (überschreibt die Einstellung) |
+| `POSTWERK_CERTS_DIR` | `/certs` | Ordner mit Zertifikaten des Reverse-Proxys |
 | `POSTWERK_RELAY_HOST` / `_USER` / `_PASSWORD` | – | Smarthost |
 | `POSTWERK_METRICS_TOKEN` | – | Bearer-Token für `/metrics` |
 | `POSTWERK_SECURE_COOKIES` | `false` | Cookie nur über HTTPS |
-| `POSTWERK_TRUST_PROXY` | `false` | Client-IP aus `X-Forwarded-For` |
+| `POSTWERK_TRUST_PROXY` | `false` | Proxy-Auswertung erzwingen (sonst im Setup-Assistenten) |
 | `POSTWERK_ALLOW_INSECURE_AUTH` | `false` | Anmeldung ohne TLS (nur Entwicklung) |
 | `POSTWERK_DEBUG` | `false` | Ausführliche Logs |

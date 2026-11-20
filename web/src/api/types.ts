@@ -52,7 +52,19 @@ export interface Dashboard {
 
 export interface Settings {
   server: { hostname: string; maxMessageSize: number; };
-  tls: { acme: { enabled: boolean; email: string; directoryUrl: string; domains: string[] }; status: string };
+  web: {
+    publicUrl: string;            // e.g. "https://mail.example.com" (empty = unknown)
+    behindProxy: boolean;
+    trustedProxies: string[];     // IPs or CIDRs whose X-Forwarded-For/-Proto are trusted.
+                                  // Empty + behindProxy = trust private networks and loopback.
+    secureCookies: boolean;       // session cookie only over HTTPS
+  };
+  tls: {
+    mode: TlsMode;
+    acme: { enabled: boolean; email: string; directoryUrl: string; domains: string[] };  // enabled is derived from mode
+    files: { certPath: string; keyPath: string };   // paths inside the container; certPath may also be a Traefik acme.json
+    status: string;               // read-only
+  };
   spam: {
     enabled: boolean; junkThreshold: number; rejectThreshold: number;
     greylisting: { enabled: boolean; delaySeconds: number };
@@ -270,3 +282,109 @@ export interface CreateMigrationRequest {
 }
 
 export interface RestartMigrationRequest { accounts: { targetEmail: string; password: string }[]; }
+
+// ---------------------------------------------------------------------------
+// DNS providers (docs/API.md, "DNS-Anbieter (automatische Einrichtung der DNS-Einträge)").
+// ---------------------------------------------------------------------------
+
+export interface DnsProviderField {
+  key: string; label: string; type: "text" | "password";
+  required: boolean; help: string | null; placeholder: string | null;
+}
+
+export interface DnsProviderInfo {
+  id: string;                 // "ionos" | "strato" | "hetzner" | "cloudflare" | "netcup" | "inwx" | "desec"
+  name: string;               // display name
+  official: boolean;          // false = unofficial integration (e.g. Strato via the customer login)
+  description: string;        // one sentence
+  docsUrl: string | null;     // where to get the API key
+  fields: DnsProviderField[];
+  supports: string[];         // supported record types, e.g. ["A","AAAA","MX","TXT","CNAME","SRV"]
+  notes: string | null;       // notes / limitations
+}
+
+export interface DnsPlanRequest {
+  provider: string;
+  credentials: Record<string, string>;
+  ipv4?: string | null;       // public IPv4 for the A record of the host name (otherwise "manual")
+  ipv6?: string | null;       // optional AAAA
+}
+
+export type DnsChangeAction = "create" | "update" | "unchanged" | "manual";
+
+export interface DnsChange {
+  key: string;                // stable key, e.g. "mx", "spf", "dkim", "dmarc", "a", "aaaa", "mta-sts-txt" …
+  type: string;
+  name: string;               // FQDN with trailing dot
+  action: DnsChangeAction;
+  current: string[];          // existing values (only the matched ones)
+  desired: string;            // target value (for MX "10 mail.example.com.")
+  purpose: string;
+  required: boolean;
+  warning: string | null;     // e.g. "Bestehende MX-Einträge werden ersetzt"
+  reason: string | null;      // reason for "manual"
+}
+
+export interface DnsPlan { zone: string; provider: string; changes: DnsChange[]; }
+
+export interface DnsApplyRequest extends DnsPlanRequest { keys: string[]; }
+
+export interface DnsApplyResult {
+  applied: string[];                         // keys
+  failed: { key: string; error: string }[];
+  manual: string[];                          // keys that have to be set by hand
+}
+
+export interface PublicIp { ipv4: string | null; ipv6: string | null; }
+
+// ---------------------------------------------------------------------------
+// Reverse proxy and certificate source (docs/API.md, "Reverse-Proxy und Zertifikatsquelle").
+// ---------------------------------------------------------------------------
+
+export type TlsMode = "selfsigned" | "acme" | "files";
+
+export type ProxyKind = "npm" | "traefik" | "caddy" | "nginx" | "swag" | "other";
+
+export interface ProxyDetect {
+  viaProxy: boolean;              // request carried X-Forwarded-* headers
+  remoteIp: string;               // direct peer (= the proxy, if viaProxy)
+  clientIp: string;               // how Postwerk sees the browser after applying the settings
+  trusted: boolean;               // remoteIp currently counts as a trusted proxy
+  forwardedFor: string | null;
+  forwardedProto: string | null;
+  forwardedHost: string | null;
+  requestHost: string;
+  suggestedTrustedProxy: string | null;   // suggestion for trustedProxies
+  suggestedPublicUrl: string | null;      // derived from X-Forwarded-Proto/-Host
+}
+
+export interface ProxyConfigFile { name: string; language: "nginx" | "yaml" | "caddy" | "text"; content: string; }
+
+export interface ProxyGuide {
+  kind: ProxyKind;
+  title: string;                  // e.g. "Nginx Proxy Manager"
+  steps: string[];                // numbered instructions (plain text, may contain `code` in backticks)
+  files: ProxyConfigFile[];       // configurations to copy
+  certificate: {                  // how Postwerk gets the certificate
+    recommendedMode: "files" | "acme";
+    hostPathHint: string | null;  // where the proxy stores its certificates (host/appdata)
+    containerPathExample: string | null; // matching certPath in Postwerk, e.g. "/certs/live/npm-1/fullchain.pem"
+    mountHint: string;            // how the directory is mounted to /certs
+  };
+  notes: string[];                // warnings / notes
+}
+
+export interface CertificateFile {
+  certPath: string;               // inside the container
+  keyPath: string | null;         // matching key found (null for acme.json, the key is inside)
+  source: "files" | "traefik";
+  names: string[];                // SANs
+  issuer: string;
+  notAfter: string;
+  matchesHostname: boolean;       // covers the mail server host name
+  error: string | null;           // found but unusable, e.g. private key not readable (permissions)
+}
+
+export interface TlsTestRequest { certPath: string; keyPath: string; }
+
+export interface TlsTestResult { ok: boolean; names: string[]; notAfter: string; matchesHostname: boolean; error?: string; }

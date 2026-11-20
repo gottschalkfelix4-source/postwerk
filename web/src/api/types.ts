@@ -315,7 +315,14 @@ export interface ImportResult { imported: number; skipped: number; failed: numbe
 
 export interface MigrationTestRequest { source: MigrationSource; username: string; password: string; }
 
-export interface MigrationTestResult { ok: boolean; folders: SourceFolder[]; error?: string; }
+export interface MigrationDiagStep { step: string; ok: boolean; detail: string; }
+export interface MigrationTestResult {
+  ok: boolean; folders: SourceFolder[]; error?: string;
+  /** Step-by-step connection diagnosis (only when ok is false). */
+  diagnostics?: MigrationDiagStep[];
+  /** Concrete advice derived from the diagnosis. */
+  hint?: string;
+}
 
 export interface CreateMigrationRequest {
   name?: string; source: MigrationSource; accounts: MigrationAccountInput[]; options: MigrationOptions;

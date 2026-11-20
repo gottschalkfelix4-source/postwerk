@@ -581,11 +581,43 @@ function TestStep({
       )}
 
       {result && !result.ok && (
-        <Notice tone="error" icon={CircleX} title="Anmeldung fehlgeschlagen">
-          <span className="break-words">{result.error || "Der Server hat die Anmeldung abgelehnt."}</span>
-          <span className="mt-1 block text-xs opacity-80">
-            Prüfe Benutzername, Passwort und Verschlüsselung ({securityLabels[source.security]}, Port {source.port}).
-          </span>
+        <Notice
+          tone="error"
+          icon={CircleX}
+          title={
+            result.diagnostics?.some((d) => d.step === "Anmeldung" && !d.ok)
+              ? "Anmeldung abgelehnt"
+              : result.diagnostics?.length
+                ? "Keine Verbindung zum Server"
+                : "Verbindung fehlgeschlagen"
+          }
+        >
+          {result.hint ? (
+            <span className="block break-words">{result.hint}</span>
+          ) : (
+            <span className="break-words">{result.error || "Der Server hat die Anmeldung abgelehnt."}</span>
+          )}
+          {result.diagnostics && result.diagnostics.length > 0 && (
+            <ul className="mt-3 space-y-1.5 text-xs">
+              {result.diagnostics.map((d, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  {d.ok ? (
+                    <CircleCheck className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  ) : (
+                    <CircleX className="mt-px h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+                  )}
+                  <span className="min-w-0 break-words">
+                    <span className="font-medium">{d.step}:</span> <span className="opacity-80">{d.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!result.diagnostics?.length && (
+            <span className="mt-1 block text-xs opacity-80">
+              Verschlüsselung: {securityLabels[source.security]}, Port {source.port}.
+            </span>
+          )}
         </Notice>
       )}
 

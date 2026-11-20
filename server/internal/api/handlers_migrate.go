@@ -27,7 +27,12 @@ func (s *Server) migrationTest(w http.ResponseWriter, r *http.Request, u *store.
 	defer cancel()
 	folders, err := migrate.ListFolders(ctx, req.Source, req.Username, req.Password)
 	if err != nil {
-		return map[string]any{"ok": false, "folders": []any{}, "error": err.Error()}, nil
+		// Find out where exactly it fails (DNS, network, port, TLS, login).
+		dctx, dcancel := context.WithTimeout(r.Context(), 60*time.Second)
+		dg := migrate.Diagnose(dctx, req.Source, req.Username, req.Password, err)
+		dcancel()
+		s.Log.Warn("migration source test failed", "component", "migration", "host", req.Source.Host, "err", err, "hint", dg.Hint)
+		return map[string]any{"ok": false, "folders": []any{}, "error": err.Error(), "diagnostics": dg.Steps, "hint": dg.Hint}, nil
 	}
 	if folders == nil {
 		folders = []migrate.Folder{}

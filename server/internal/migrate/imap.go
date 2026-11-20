@@ -87,7 +87,7 @@ func friendlyErr(err error) error {
 	case strings.Contains(msg, "no such host"):
 		return fmt.Errorf("Server nicht gefunden: %v", err)
 	case strings.Contains(msg, "timeout"):
-		return fmt.Errorf("Zeitüberschreitung beim Verbinden: %v", err)
+		return fmt.Errorf("Keine Verbindung zum Server (Zeitüberschreitung) – das liegt nicht an den Zugangsdaten, sondern am Netzwerk: %v", err)
 	}
 	return err
 }

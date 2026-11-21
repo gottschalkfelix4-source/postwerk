@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // CertState describes the certificate served for the mail hostname.
@@ -21,6 +22,14 @@ type CertState struct {
 // hostname without side effects: in ACME mode it only reads the cache and
 // never starts an order.
 func (d *Dynamic) Current(ctx context.Context) (*CertState, error) {
+	return d.CertFor(ctx, d.Hostname())
+}
+
+// CertFor is Current for another name served by this instance (e.g.
+// mta-sts.<domain>). In ACME mode every name has its own certificate in the
+// cache; in file mode the configured certificate is served for all names, so
+// callers still have to check that it covers host.
+func (d *Dynamic) CertFor(ctx context.Context, host string) (*CertState, error) {
 	mode, s := d.mode()
 	switch mode {
 	case "acme":
@@ -28,7 +37,7 @@ func (d *Dynamic) Current(ctx context.Context) (*CertState, error) {
 		if m == nil || m.Cache == nil {
 			break
 		}
-		data, err := m.Cache.Get(ctx, d.Hostname())
+		data, err := m.Cache.Get(ctx, strings.ToLower(host))
 		if err != nil {
 			return d.selfState("Noch kein Let's-Encrypt-Zertifikat vorhanden")
 		}

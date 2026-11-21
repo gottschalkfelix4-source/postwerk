@@ -513,6 +513,14 @@ var migrations = []string{
 		modseq INTEGER NOT NULL,
 		PRIMARY KEY(collection_id, name)
 	);`,
+	// Ids of JMAP objects, accounts and DAV collections are never reused.
+	idSeqMigration,
+	// DAV tombstones expire; sync tokens older than the pruned range of a
+	// collection are rejected (RFC 6578 valid-sync-token).
+	`ALTER TABLE dav_collections ADD COLUMN tombstone_floor INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE dav_tombstones ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0;
+	UPDATE dav_tombstones SET deleted_at = CAST(strftime('%s', 'now') AS INTEGER);
+	CREATE INDEX dav_tombstones_age ON dav_tombstones(deleted_at);`,
 }
 
 func migrate(db *sql.DB) error {

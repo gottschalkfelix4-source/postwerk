@@ -202,7 +202,7 @@ func (s *Server) dnsRecords(d *store.Domain) ([]dnsRecord, error) {
 			Purpose: "Öffentlicher Schlüssel, mit dem Empfänger prüfen, dass deine Mails echt sind.", Required: true, Content: dkim},
 		{Key: "dmarc", Type: "TXT", Name: "_dmarc." + n + ".", Value: "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + n,
 			Title: "Schutz vor Fälschungen (DMARC)", Purpose: "Sagt Empfängern, was mit gefälschten Mails in deinem Namen passieren soll.", Required: true},
-		{Key: "mta-sts-txt", Type: "TXT", Name: "_mta-sts." + n + ".", Value: "v=STSv1; id=" + time.Now().Format("20060102"), Title: "Verschlüsselung erzwingen (MTA-STS)",
+		{Key: "mta-sts-txt", Type: "TXT", Name: "_mta-sts." + n + ".", Value: "v=STSv1; id=" + s.mtaSTSID(s.Settings.Get()), Title: "Verschlüsselung erzwingen (MTA-STS)",
 			Purpose: "Optional: Andere Server liefern nur noch verschlüsselt an dich aus."},
 		{Key: "mta-sts-cname", Type: "CNAME", Name: "mta-sts." + n + ".", Value: host + ".", Title: "MTA-STS-Adresse", Purpose: "Optional: gehört zu MTA-STS."},
 		{Key: "tlsrpt", Type: "TXT", Name: "_smtp._tls." + n + ".", Value: "v=TLSRPTv1; rua=mailto:postmaster@" + n, Title: "TLS-Berichte",
@@ -734,6 +734,9 @@ func validateSettings(c, old *store.Settings) error {
 		if d < 0 || d > 3650 {
 			return invalid("Aufbewahrung für Papierkorb und Spam: 0 (nie leeren) bis 3650 Tage")
 		}
+	}
+	if err := validateCleanup(&c.Server.Retention); err != nil {
+		return err
 	}
 	if c.Spam.JunkThreshold <= 0 {
 		return invalid("Spam-Schwelle muss größer als 0 sein")

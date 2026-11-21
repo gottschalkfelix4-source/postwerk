@@ -21,6 +21,9 @@ type Desired struct {
 	MergeSPF bool
 	// Manual forces manual handling with this reason.
 	Manual string
+	// Remove deletes the matching records instead of setting one (e.g. the
+	// TXT record of a deleted DKIM key). Nothing is planned if none exists.
+	Remove bool
 
 	spfExtra string
 }
@@ -55,6 +58,13 @@ type Options struct {
 	// ExtraDKIM lists further DKIM keys to publish besides the primary one
 	// (pending keys of a rotation, the Ed25519 key for dual signing).
 	ExtraDKIM []DKIMRecord
+	// MTASTSID is the id of the current MTA-STS policy. When set, an
+	// existing _mta-sts record with another id is updated so senders fetch
+	// the changed policy; otherwise an existing record is kept.
+	MTASTSID string
+	// RemoveDKIM lists selectors of deleted DKIM keys whose TXT records
+	// should be removed.
+	RemoveDKIM []string
 }
 
 // DKIMRecord is an additional DKIM key record.
@@ -92,7 +102,7 @@ func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string, op
 		Desired{Key: "spf", Record: Record{Name: domain, Type: "TXT", Value: MergeSPF("", opt.SPFInclude)}, Purpose: "SPF: erlaubte Absender", Required: true, Match: "v=spf1", MergeSPF: true, spfExtra: opt.SPFInclude},
 		Desired{Key: "dkim", Record: Record{Name: dkimSelector + "._domainkey." + domain, Type: "TXT", Value: dkimValue}, Purpose: "DKIM-Schlüssel", Required: true, Match: "v=DKIM1"},
 		Desired{Key: "dmarc", Record: Record{Name: "_dmarc." + domain, Type: "TXT", Value: "v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:postmaster@" + domain}, Purpose: "DMARC-Richtlinie", Required: true, Match: "v=DMARC1", CreateOnly: true},
-		Desired{Key: "mta-sts-txt", Record: Record{Name: "_mta-sts." + domain, Type: "TXT", Value: "v=STSv1; id=" + mtaSTSID()}, Purpose: "MTA-STS aktivieren", Match: "v=STSv1", CreateOnly: true},
+		mtaSTSRecord(domain, opt.MTASTSID),
 		Desired{Key: "mta-sts-cname", Record: Record{Name: "mta-sts." + domain, Type: "CNAME", Value: hostDot}, Purpose: "MTA-STS-Policy über HTTPS"},
 		Desired{Key: "tlsrpt", Record: Record{Name: "_smtp._tls." + domain, Type: "TXT", Value: "v=TLSRPTv1; rua=mailto:postmaster@" + domain}, Purpose: "TLS-Berichte", Match: "v=TLSRPTv1", CreateOnly: true},
 		Desired{Key: "srv-submissions", Record: Record{Name: "_submissions._tcp." + domain, Type: "SRV", Value: "1 465 " + hostDot}, Purpose: "Autokonfiguration: Versand (TLS)"},
@@ -109,10 +119,28 @@ func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string, op
 		d = append(d, Desired{Key: "dkim-" + k.Selector, Record: Record{Name: k.Selector + "._domainkey." + domain, Type: "TXT", Value: k.Value},
 			Purpose: k.Purpose, Required: k.Required, Match: "v=DKIM1"})
 	}
+	for _, sel := range opt.RemoveDKIM {
+		d = append(d, Desired{Key: RemoveDKIMKey(sel), Record: Record{Name: sel + "._domainkey." + domain, Type: "TXT"},
+			Purpose: "Alter DKIM-Schlüssel (gelöscht)", Match: "v=DKIM1", Remove: true})
+	}
 	return d
 }
 
+// RemoveDKIMKey is the plan key of the removal of a deleted DKIM key's record.
+func RemoveDKIMKey(selector string) string { return "dkim-remove-" + selector }
+
 var mtaSTSID = func() string { return strconv.FormatInt(timeNow().Unix(), 10) }
+
+func mtaSTSRecord(domain, id string) Desired {
+	d := Desired{Key: "mta-sts-txt", Record: Record{Name: "_mta-sts." + domain, Type: "TXT"}, Purpose: "MTA-STS aktivieren", Match: "v=STSv1"}
+	if id == "" {
+		d.Record.Value = "v=STSv1; id=" + mtaSTSID()
+		d.CreateOnly = true
+	} else {
+		d.Record.Value = "v=STSv1; id=" + id
+	}
+	return d
+}
 
 // display renders a record value for humans.
 func display(r Record) string {
@@ -214,6 +242,24 @@ func MakePlan(ctx context.Context, p Provider, info Info, domain string, desired
 			c.Action = "manual"
 			c.Reason = &reason
 			plan.Changes = append(plan.Changes, c)
+		}
+		if d.Remove {
+			if len(matching) == 0 {
+				continue
+			}
+			c.Desired = ""
+			if !inZone || !supported[want.Type] {
+				manual(fmt.Sprintf("Bitte %s von Hand beim DNS-Anbieter löschen.", undot(fq)))
+				continue
+			}
+			c.Action = "delete"
+			w := "Der Eintrag wird gelöscht – der Schlüssel wird nicht mehr verwendet."
+			c.Warning = &w
+			for _, r := range matching {
+				c.ops = append(c.ops, Op{Kind: OpDelete, Old: r})
+			}
+			plan.Changes = append(plan.Changes, c)
+			continue
 		}
 		switch {
 		case d.Manual != "":

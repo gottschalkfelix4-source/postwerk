@@ -172,3 +172,46 @@ func TestLegacyCalendarMigration(t *testing.T) {
 		t.Fatalf("range query = %d", len(inRange))
 	}
 }
+
+func TestPruneDAVTombstones(t *testing.T) {
+	st, a := davTestStore(t)
+	ctx := context.Background()
+	cals, _ := st.ListCollections(ctx, a.ID, KindCalendar)
+	c := cals[0]
+	for _, uid := range []string{"a", "b"} {
+		data := []byte(strings.Replace(strings.Replace(icsTask, "task-1", uid, 1), "%s", uid, 1))
+		if _, _, err := st.PutObject(ctx, c, uid+".ics", data, PutOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldToken := c.SyncSeq
+	if err := st.DeleteObject(ctx, c, "a.ics", ""); err != nil {
+		t.Fatal(err)
+	}
+	newToken := c.SyncSeq
+	if err := st.DeleteObject(ctx, c, "b.ics", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Only the first tombstone is old enough.
+	if _, err := st.DB.ExecContext(ctx, `UPDATE dav_tombstones SET deleted_at = ? WHERE name = 'a.ics'`, time.Now().Add(-100*24*time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.PruneDAVTombstones(ctx, 90*24*time.Hour)
+	if err != nil || n != 1 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	if _, _, err := st.DAVChanges(ctx, c, oldToken); !errors.Is(err, ErrInvalidSyncToken) {
+		t.Fatalf("token before the pruned range: %v", err)
+	}
+	_, deleted, err := st.DAVChanges(ctx, c, newToken)
+	if err != nil || len(deleted) != 1 || deleted[0] != "b.ics" {
+		t.Fatalf("token after the pruned range = %v, %v", deleted, err)
+	}
+	if _, _, err := st.DAVChanges(ctx, c, 0); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+	// Nothing left to prune.
+	if n, err := st.PruneDAVTombstones(ctx, 90*24*time.Hour); err != nil || n != 0 {
+		t.Fatalf("second prune %d, %v", n, err)
+	}
+}

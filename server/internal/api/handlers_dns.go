@@ -73,12 +73,48 @@ func (s *Server) dnsPlan(r *http.Request, ctx context.Context) (dnsprov.Provider
 	cfg := s.Settings.Get()
 	opts := s.dnsOptions(cfg)
 	opts.ExtraDKIM = s.extraDKIMDesired(ctx, d)
+	opts.MTASTSID = s.mtaSTSID(cfg)
+	opts.RemoveDKIM = s.dkimDNSRemovals(ctx, d)
 	desired := dnsprov.DesiredRecords(d.Name, cfg.Server.Hostname, d.DKIMSelector, dkim, ipv4, ipv6, opts)
 	plan, err := dnsprov.MakePlan(ctx, p, info, d.Name, desired)
 	if err != nil {
 		return nil, nil, nil, dnsErr(err)
 	}
+	// Records of deleted keys that are no longer in the zone are done.
+	planned := map[string]bool{}
+	for _, c := range plan.Changes {
+		planned[c.Key] = true
+	}
+	for _, sel := range opts.RemoveDKIM {
+		if !planned[dnsprov.RemoveDKIMKey(sel)] {
+			s.Store.ForgetDKIMDNSCleanup(ctx, d.Name, sel)
+		}
+	}
 	return p, plan, &req, nil
+}
+
+// dkimDNSRemovals lists the selectors of deleted DKIM keys whose records may
+// be removed, skipping selectors that are in use again.
+func (s *Server) dkimDNSRemovals(ctx context.Context, d *store.Domain) []string {
+	sels := s.Store.DKIMDNSCleanup(ctx, d.Name)
+	if len(sels) == 0 {
+		return nil
+	}
+	used := map[string]bool{strings.ToLower(d.DKIMSelector): true}
+	if keys, err := s.Store.ListDKIMKeys(ctx, d.Name); err == nil {
+		for _, k := range keys {
+			used[strings.ToLower(k.Selector)] = true
+		}
+	} else {
+		return nil
+	}
+	var out []string
+	for _, sel := range sels {
+		if !used[strings.ToLower(sel)] {
+			out = append(out, sel)
+		}
+	}
+	return out
 }
 
 func (s *Server) domainDNSPlan(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
@@ -103,6 +139,12 @@ func (s *Server) domainDNSApply(w http.ResponseWriter, r *http.Request, u *store
 		"applied", strings.Join(res.Applied, ","), "failed", len(res.Failed), "by", u.Email)
 	for _, f := range res.Failed {
 		s.Log.Warn("dns record failed", "component", "dns", "domain", r.PathValue("name"), "key", f.Key, "err", f.Error)
+	}
+	for _, k := range res.Applied {
+		if sel, ok := strings.CutPrefix(k, "dkim-remove-"); ok {
+			s.Store.ForgetDKIMDNSCleanup(ctx, r.PathValue("name"), sel)
+			s.Log.Info("dns record of deleted dkim key removed", "component", "dns", "domain", r.PathValue("name"), "selector", sel)
+		}
 	}
 	return res, nil
 }

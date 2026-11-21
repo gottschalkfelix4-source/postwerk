@@ -1,7 +1,7 @@
 // API and types for sender authentication: DKIM key rotation, implicit
 // postmaster/abuse aliases and received DMARC/TLS reports.
 import { http } from "./client";
-import type { Ok } from "./types";
+import type { MtaStsStatus, Ok } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -19,8 +19,16 @@ export interface DkimKey {
   retiredAt: string | null;
   /** Retired keys: when the DNS record may be removed. */
   removableAt: string | null;
+  /** Retired keys: when housekeeping deletes the key (null = automatic cleanup off). */
+  autoDeleteAt?: string | null;
   dnsName: string;
   dnsValue: string;
+}
+
+/** TXT record of a deleted DKIM key that may still be published. */
+export interface DkimDnsCleanup {
+  selector: string;
+  dnsName: string;
 }
 
 export interface DkimPublication {
@@ -140,6 +148,12 @@ export const mailAuthApi = {
   activateDkimKey: (domain: string, id: number, force = false) =>
     http.post<DkimKey[]>(`/api/admin/domains/${enc(domain)}/dkim/${id}/activate`, { force }),
   deleteDkimKey: (domain: string, id: number) => http.delete<Ok>(`/api/admin/domains/${enc(domain)}/dkim/${id}`),
+  dkimDnsCleanup: (domain: string) => http.get<DkimDnsCleanup[]>(`/api/admin/domains/${enc(domain)}/dkim-dns-cleanup`),
+  dkimDnsCleanupDone: (domain: string, selector: string) =>
+    http.delete<Ok>(`/api/admin/domains/${enc(domain)}/dkim-dns-cleanup/${enc(selector)}`),
+
+  /** Our MTA-STS policy and whether the certificates for "enforce" are in place. */
+  mtaStsStatus: () => http.get<MtaStsStatus>("/api/admin/mta-sts"),
 
   systemAliases: () => http.get<SystemAlias[]>("/api/admin/aliases/system"),
 

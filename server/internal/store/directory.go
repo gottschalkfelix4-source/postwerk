@@ -262,18 +262,25 @@ func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
 		if a.Source == "" {
 			a.Source = SourceLocal
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO accounts(email, name, password_hash, role, quota_bytes, must_change_password, source, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-			Normalize(a.Email), a.Name, a.PasswordHash, a.Role, a.QuotaBytes, a.MustChangePassword, a.Source, now())
+		id, err := nextID(ctx, tx, "accounts")
 		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(id, email, name, password_hash, role, quota_bytes, must_change_password, source, created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, Normalize(a.Email), a.Name, a.PasswordHash, a.Role, a.QuotaBytes, a.MustChangePassword, a.Source, now()); err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				return ErrConflict
 			}
 			return err
 		}
-		a.ID, _ = res.LastInsertId()
+		a.ID = id
 		for _, mb := range DefaultMailboxes {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO mailboxes(account_id, name, role, uid_validity, created_at) VALUES (?,?,?,?,?)`,
-				a.ID, mb.Name, mb.Role, now(), now()); err != nil {
+			mbID, err := nextID(ctx, tx, "mailboxes")
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO mailboxes(id, account_id, name, role, uid_validity, created_at) VALUES (?,?,?,?,?,?)`,
+				mbID, a.ID, mb.Name, mb.Role, now(), now()); err != nil {
 				return err
 			}
 		}

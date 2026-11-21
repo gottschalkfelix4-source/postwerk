@@ -134,8 +134,12 @@ func ensureDefaults(ctx context.Context, tx *sql.Tx, accountID int64) error {
 		if n > 0 {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO dav_collections(account_id, kind, slug, name, color, components, sync_seq, created_at)
-			VALUES (?,?,?,?,?,?,1,?)`, accountID, d.kind, "default", d.name, d.color, d.comps, now()); err != nil {
+		id, err := nextID(ctx, tx, "dav_collections")
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO dav_collections(id, account_id, kind, slug, name, color, components, sync_seq, created_at)
+			VALUES (?,?,?,?,?,?,?,1,?)`, id, accountID, d.kind, "default", d.name, d.color, d.comps, now()); err != nil {
 			return err
 		}
 	}
@@ -194,15 +198,23 @@ func (s *Store) CreateCollection(ctx context.Context, c *Collection) error {
 	if c.Kind == KindCalendar && c.Color == "" {
 		c.Color = DefaultCalendarColor
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO dav_collections(account_id, kind, slug, name, description, color, components, sync_seq, created_at)
-		VALUES (?,?,?,?,?,?,?,1,?)`, c.AccountID, c.Kind, c.Slug, c.Name, c.Description, c.Color, strings.Join(c.Components, ","), now())
+	var id int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if id, err = nextID(ctx, tx, "dav_collections"); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO dav_collections(id, account_id, kind, slug, name, description, color, components, sync_seq, created_at)
+			VALUES (?,?,?,?,?,?,?,?,1,?)`, id, c.AccountID, c.Kind, c.Slug, c.Name, c.Description, c.Color, strings.Join(c.Components, ","), now())
+		return err
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return ErrConflict
 		}
 		return err
 	}
-	c.ID, _ = res.LastInsertId()
+	c.ID = id
 	c.SyncSeq = 1
 	c.CreatedAt = time.Now().UTC()
 	return nil
@@ -462,16 +474,33 @@ func (s *Store) DeleteObject(ctx context.Context, c *Collection, name, ifMatch s
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+objTable(c.Kind)+` WHERE collection_id = ? AND name = ?`, c.ID, name); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO dav_tombstones(collection_id, name, modseq) VALUES (?,?,?)
-			ON CONFLICT(collection_id, name) DO UPDATE SET modseq = excluded.modseq`, c.ID, name, seq)
+		_, err = tx.ExecContext(ctx, `INSERT INTO dav_tombstones(collection_id, name, modseq, deleted_at) VALUES (?,?,?,?)
+			ON CONFLICT(collection_id, name) DO UPDATE SET modseq = excluded.modseq, deleted_at = excluded.deleted_at`, c.ID, name, seq, now())
 		c.SyncSeq = seq
 		return err
 	})
 }
 
+// ErrInvalidSyncToken is returned by DAVChanges for a sync token older than
+// the tombstones still kept for the collection; the client has to start a
+// full synchronisation (RFC 6578 DAV:valid-sync-token).
+var ErrInvalidSyncToken = errors.New("sync token too old")
+
 // DAVChanges returns the objects changed and the resource names deleted after
 // sequence number since (0: everything, no deletions).
 func (s *Store) DAVChanges(ctx context.Context, c *Collection, since int64) ([]*DavObject, []string, error) {
+	if since > 0 {
+		var floor int64
+		if err := s.DB.QueryRowContext(ctx, `SELECT tombstone_floor FROM dav_collections WHERE id = ?`, c.ID).Scan(&floor); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil, ErrNotFound
+			}
+			return nil, nil, err
+		}
+		if since < floor {
+			return nil, nil, ErrInvalidSyncToken
+		}
+	}
 	changed, err := s.queryObjs(ctx, c.Kind, `collection_id = ? AND modseq > ? ORDER BY modseq`, c.ID, since)
 	if err != nil {
 		return nil, nil, err
@@ -495,6 +524,29 @@ func (s *Store) DAVChanges(ctx context.Context, c *Collection, since int64) ([]*
 		}
 	}
 	return changed, deleted, nil
+}
+
+// PruneDAVTombstones forgets deleted resources older than maxAge. Each
+// collection remembers the highest pruned sequence number, so older sync
+// tokens are rejected instead of silently missing deletions.
+func (s *Store) PruneDAVTombstones(ctx context.Context, maxAge time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-maxAge).Unix()
+	var n int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE dav_collections SET tombstone_floor = MAX(tombstone_floor,
+				(SELECT MAX(modseq) FROM dav_tombstones t WHERE t.collection_id = dav_collections.id AND t.deleted_at < ?))
+			WHERE id IN (SELECT collection_id FROM dav_tombstones WHERE deleted_at < ?)`, cutoff, cutoff); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM dav_tombstones
+			WHERE modseq <= (SELECT tombstone_floor FROM dav_collections c WHERE c.id = dav_tombstones.collection_id)`)
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
+	return n, err
 }
 
 // ListCalendarObjects returns the account's objects of one component type

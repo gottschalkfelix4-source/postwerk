@@ -544,6 +544,9 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/admin/domains/{name}/dkim/{id}/check", s.admin(s.checkDKIMKey))
 	m.HandleFunc("POST /api/admin/domains/{name}/dkim/{id}/activate", s.admin(s.activateDKIMKey))
 	m.HandleFunc("DELETE /api/admin/domains/{name}/dkim/{id}", s.admin(s.deleteDKIMKey))
+	m.HandleFunc("GET /api/admin/domains/{name}/dkim-dns-cleanup", s.admin(s.listDKIMDNSCleanup))
+	m.HandleFunc("DELETE /api/admin/domains/{name}/dkim-dns-cleanup/{selector}", s.admin(s.doneDKIMDNSCleanup))
+	m.HandleFunc("GET /api/admin/mta-sts", s.admin(s.mtaSTSStatusHandler))
 	m.HandleFunc("GET /api/admin/accounts", s.admin(s.listAccounts))
 	m.HandleFunc("POST /api/admin/accounts", s.admin(s.createAccount))
 	m.HandleFunc("GET /api/admin/accounts/{id}", s.admin(s.getAccount))
@@ -624,8 +627,8 @@ func background() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Minute)
 }
 
-// mtaSTS serves the MTA-STS policy (RFC 8461). It starts in "testing" mode so
-// misconfigured TLS never blocks delivery; switch to "enforce" once reports look good.
+// mtaSTS serves the MTA-STS policy (RFC 8461) in the configured mode. The
+// default "testing" never blocks delivery; "enforce" once reports look good.
 func (s *Server) mtaSTS(w http.ResponseWriter, r *http.Request) {
 	host := strings.ToLower(r.Host)
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -640,7 +643,7 @@ func (s *Server) mtaSTS(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "max-age=3600")
-	fmt.Fprintf(w, "version: STSv1\r\nmode: testing\r\nmx: %s\r\nmax_age: 604800\r\n", s.Settings.Get().Server.Hostname)
+	_, _ = io.WriteString(w, s.mtaSTSPolicy(s.Settings.Get()))
 }
 
 // autoconfig serves the Thunderbird autoconfiguration document.

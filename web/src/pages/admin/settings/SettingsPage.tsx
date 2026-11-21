@@ -22,6 +22,8 @@ import {
   WebSection,
 } from "./sections";
 import { MailAuthCard } from "./MailAuthCard";
+import { MtaStsCard } from "./MtaStsCard";
+import { CleanupCard } from "./CleanupCard";
 
 const icons: Record<SettingsSectionId, LucideIcon> = {
   server: ServerCog,
@@ -113,7 +115,10 @@ export default function SettingsPage() {
               <ErrorState error={q.error} onRetry={() => void q.refetch()} />
             </Card>
           ) : id === "server" ? (
-            <ServerSection key={id} {...props} />
+            <>
+              <ServerSection key={id} {...props} />
+              <CleanupCard {...props} />
+            </>
           ) : id === "dyndns" ? (
             <DynDNSSection key={id} {...props} />
           ) : id === "relay" ? (
@@ -121,7 +126,10 @@ export default function SettingsPage() {
           ) : id === "web" ? (
             <WebSection key={id} {...props} />
           ) : id === "tls" ? (
-            <TlsSection key={id} {...props} />
+            <>
+              <TlsSection key={id} {...props} />
+              <MtaStsCard {...props} />
+            </>
           ) : id === "spam" ? (
             <>
               <SpamSection key={id} {...props} />

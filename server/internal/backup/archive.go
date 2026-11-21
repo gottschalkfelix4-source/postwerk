@@ -266,18 +266,55 @@ func Open(r io.Reader, password string) (io.Reader, bool, error) {
 		if password == "" {
 			return nil, true, ErrNeedPassword
 		}
-		if _, err := br.Discard(len(magic)); err != nil {
-			return nil, true, err
-		}
 		dr, err := NewDecryptReader(br, password)
 		return dr, true, err
 	}
 	return nil, false, errors.New("keine Postwerk-Sicherung (unbekanntes Format)")
 }
 
+// ExtractLimits bounds what a restore may write to disk.
+type ExtractLimits struct {
+	// MaxBytes caps the total size of extracted files. 0 means the free
+	// space at the destination minus a safety margin (or DefaultMaxRestoreBytes
+	// where free space cannot be determined).
+	MaxBytes int64
+	// MaxFiles caps the number of extracted entries. 0 means DefaultMaxRestoreFiles.
+	MaxFiles int
+}
+
+const (
+	DefaultMaxRestoreBytes = 1 << 40
+	DefaultMaxRestoreFiles = 20_000_000
+	restoreDiskReserve     = 512 << 20
+)
+
+var errRestoreTooLarge = errors.New("archiv ist größer als der freie Speicherplatz oder das Limit für Wiederherstellungen")
+
+func (l ExtractLimits) resolve(dest string) ExtractLimits {
+	if l.MaxFiles <= 0 {
+		l.MaxFiles = DefaultMaxRestoreFiles
+	}
+	if l.MaxBytes <= 0 {
+		l.MaxBytes = DefaultMaxRestoreBytes
+		if free, ok := freeDiskSpace(dest); ok {
+			l.MaxBytes = max(int64(free)-restoreDiskReserve, 0)
+		}
+	}
+	return l
+}
+
 // Extract unpacks an archive into dest (dest/data/... and the manifest) and
 // checks that the database inside is intact.
 func Extract(ctx context.Context, r io.Reader, password, dest string) (*Manifest, error) {
+	return ExtractWithLimits(ctx, r, password, dest, ExtractLimits{})
+}
+
+// ExtractWithLimits is Extract with explicit size and file count limits.
+// File modes from the archive are masked to 0640 (files) and 0750 (dirs).
+func ExtractWithLimits(ctx context.Context, r io.Reader, password, dest string, lim ExtractLimits) (*Manifest, error) {
+	lim = lim.resolve(dest)
+	remaining := lim.MaxBytes
+	files := 0
 	plain, _, err := Open(r, password)
 	if err != nil {
 		return nil, err
@@ -320,6 +357,12 @@ func Extract(ctx context.Context, r io.Reader, password, dest string) (*Manifest
 			return nil, fmt.Errorf("ungültiger Pfad im Archiv: %q", h.Name)
 		}
 		target := filepath.Join(dest, filepath.FromSlash(name))
+		if files++; files > lim.MaxFiles {
+			return nil, fmt.Errorf("archiv enthält mehr als %d Dateien", lim.MaxFiles)
+		}
+		if h.Typeflag == tar.TypeReg && h.Size > remaining {
+			return nil, errRestoreTooLarge
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o750); err != nil {
@@ -329,12 +372,19 @@ func Extract(ctx context.Context, r io.Reader, password, dest string) (*Manifest
 			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return nil, err
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fs.FileMode(h.Mode&0o777)|0o600)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fs.FileMode(h.Mode)&0o640|0o600)
 			if err != nil {
 				return nil, err
 			}
-			_, err = io.Copy(f, tr)
+			n, err := io.Copy(f, io.LimitReader(tr, remaining+1))
+			remaining -= n
+			if err == nil && remaining < 0 {
+				err = errRestoreTooLarge
+			}
 			cerr := f.Close()
+			if errors.Is(err, errRestoreTooLarge) {
+				return nil, err
+			}
 			if err != nil {
 				if errors.Is(err, ErrPassword) {
 					return nil, err

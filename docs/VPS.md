@@ -117,6 +117,36 @@ nicht beim DNS-Anbieter der Domain:
 
 Der Setup-Assistent zeigt im System-Check an, ob der Eintrag passt.
 
+## IPv6
+
+Hat das Docker-Netz des Containers kein IPv6, nimmt Docker eingehende IPv6-Verbindungen auf den
+veröffentlichten Ports trotzdem an und reicht sie über den `docker-proxy` per IPv4 weiter. Postwerk
+sieht dann nicht die echte Adresse des Gegenübers, sondern die Gateway-Adresse des Docker-Netzes
+(z. B. `172.18.0.1`). Die Folgen: SPF-Prüfungen gehen schief, Sperrlisten und Greylisting greifen
+nicht, und die Sperre nach Fehlanmeldungen trifft alle IPv6-Nutzer auf einmal. Wähle deshalb eine der
+beiden Varianten:
+
+**Variante A – Mail nur über IPv4 (am einfachsten):**
+
+1. Für den Mail-Hostnamen (`mail.deinedomain.de`) **keinen AAAA-Record** anlegen. Andere Mailserver
+   und Mailprogramme verbinden sich dann per IPv4.
+2. Die Ports in der `docker-compose.yml` nur auf IPv4 veröffentlichen, damit Docker gar nicht erst
+   auf IPv6 lauscht – vor jede Portzeile `0.0.0.0:` setzen, z. B. `"0.0.0.0:25:2525"` und
+   `"0.0.0.0:993:9930"`.
+
+**Variante B – IPv6 durchreichen:**
+
+1. Docker 27 oder neuer verwenden (`docker version`); dort ist `ip6tables` standardmäßig aktiv.
+   Bei älteren Versionen in `/etc/docker/daemon.json` `{"experimental": true, "ip6tables": true}`
+   eintragen und Docker neu starten (`systemctl restart docker`).
+2. In der `docker-compose.yml` unten beim Netz `mail` den IPv6-Block einkommentieren
+   (`enable_ipv6` mit dem privaten Subnetz `fd00:5057:6b::/64`) und `docker compose up -d` ausführen.
+3. Prüfen: Nach einer Verbindung per IPv6 (z. B. IMAP vom Handy im Mobilfunknetz) muss im Log
+   (`docker compose logs postwerk`) die echte IPv6-Adresse stehen, nicht `172.x.x.x`.
+4. Postwerk stellt dann auch **ausgehend per IPv6** zu. Dafür braucht die IPv6-Adresse ebenfalls
+   einen PTR-Eintrag auf `mail.deinedomain.de` (siehe oben), einen AAAA-Record und einen Platz im
+   SPF-Eintrag (`mx` oder `ip6:…`). Fehlt der PTR, lehnen große Anbieter wie Gmail die Mails ab.
+
 ## Handy und Mailprogramm einrichten
 
 iPhone, Android, Outlook und Thunderbird verbinden sich per **IMAP**. Ordner, Gelesen-Status und

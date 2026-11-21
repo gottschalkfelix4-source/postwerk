@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"postwerk/internal/migrate"
@@ -130,11 +131,26 @@ func (s *Server) deleteMigration(w http.ResponseWriter, r *http.Request, u *stor
 	return ok(), nil
 }
 
-const maxImportSize = 2 << 30
+const (
+	maxImportSize      = 1 << 30
+	maxAdminImportSize = 2 << 30
+)
+
+// runningImports holds the IDs of accounts with an import in progress.
+var runningImports sync.Map
 
 // importFile streams an uploaded .mbox/.eml/.zip to a temp file and imports it.
+// Only one import per account runs at a time.
 func (s *Server) importFile(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxImportSize+1<<20)
+	if _, busy := runningImports.LoadOrStore(u.ID, struct{}{}); busy {
+		return nil, errf(409, "conflict", "Es läuft bereits ein Import für dieses Konto. Bitte warte, bis er abgeschlossen ist.")
+	}
+	defer runningImports.Delete(u.ID)
+	limit := int64(maxImportSize)
+	if u.Role == "admin" {
+		limit = maxAdminImportSize
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit+1<<20)
 	mr, err := r.MultipartReader()
 	if err != nil {
 		return nil, invalid("multipart/form-data erwartet")

@@ -1,0 +1,14 @@
+//go:build linux || darwin || freebsd || netbsd || openbsd
+
+package backup
+
+import "golang.org/x/sys/unix"
+
+// freeDiskSpace reports the bytes available to unprivileged users at dir.
+func freeDiskSpace(dir string) (uint64, bool) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		return 0, false
+	}
+	return uint64(st.Bavail) * uint64(st.Bsize), true
+}

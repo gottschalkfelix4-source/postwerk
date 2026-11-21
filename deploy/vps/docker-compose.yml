@@ -105,3 +105,9 @@ volumes:
 
 networks:
   mail:
+    # IPv6 durchreichen (docs/VPS.md → IPv6, Variante B; braucht Docker 27+ oder ip6tables):
+    # Ohne IPv6 im Docker-Netz sieht Postwerk bei IPv6-Verbindungen nur die Gateway-Adresse.
+    # enable_ipv6: true
+    # ipam:
+    #   config:
+    #     - subnet: fd00:5057:6b::/64

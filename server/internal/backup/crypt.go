@@ -16,23 +16,45 @@ import (
 
 // Encrypted archives:
 //
-//	magic "PWBACKUP1\n" | salt (16) | records...
+//	v2: magic "PWBACKUP2\n" | log2(N) (1) | r (1) | p (1) | salt (16) | records...
+//	v1: magic "PWBACKUP1\n" | salt (16) | records...   (scrypt N=2^15, r=8, p=1; read only)
 //	record = uint32 big-endian (ciphertext length | finalFlag) | ciphertext
 //
 // The key comes from scrypt(password, salt). Every record is sealed with
 // AES-256-GCM; the nonce is the record counter and the AAD carries the final
 // flag, so reordered, dropped or truncated records are detected.
 const (
-	magic     = "PWBACKUP1\n"
+	magic     = "PWBACKUP2\n"
+	magicV1   = "PWBACKUP1\n"
 	saltLen   = 16
 	chunkSize = 64 << 10
 	finalFlag = 1 << 31
 )
 
+// kdfParams are the scrypt cost parameters.
+type kdfParams struct {
+	LogN, R, P uint8
+}
+
+var (
+	// kdfDefault is used for new archives (N=2^17 needs 128 MB of memory).
+	kdfDefault = kdfParams{LogN: 17, R: 8, P: 1}
+	kdfV1      = kdfParams{LogN: 15, R: 8, P: 1}
+)
+
+// valid rejects parameters from a hostile header that would exhaust memory or CPU.
+func (k kdfParams) valid() bool {
+	if k.LogN < 10 || k.LogN > 22 || k.R < 1 || k.R > 32 || k.P < 1 || k.P > 16 {
+		return false
+	}
+	// Memory: 128 * r * N bytes, at most 1 GB.
+	return 128*uint64(k.R)<<k.LogN <= 1<<30
+}
+
 var ErrPassword = errors.New("falsches Passwort oder beschädigtes Archiv")
 
-func deriveKey(password string, salt []byte) (cipher.AEAD, error) {
-	key, err := scrypt.Key([]byte(password), salt, 1<<15, 8, 1, 32)
+func deriveKey(password string, salt []byte, k kdfParams) (cipher.AEAD, error) {
+	key, err := scrypt.Key([]byte(password), salt, 1<<k.LogN, int(k.R), int(k.P), 32)
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +93,15 @@ func NewEncryptWriter(w io.Writer, password string) (io.WriteCloser, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	aead, err := deriveKey(password, salt)
+	k := kdfDefault
+	aead, err := deriveKey(password, salt, k)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := io.WriteString(w, magic); err != nil {
+		return nil, err
+	}
+	if _, err := w.Write([]byte{k.LogN, k.R, k.P}); err != nil {
 		return nil, err
 	}
 	if _, err := w.Write(salt); err != nil {
@@ -138,14 +164,34 @@ type decReader struct {
 	done    bool
 }
 
-// NewDecryptReader reads an archive written by NewEncryptWriter. The magic
-// header must already have been consumed.
+// NewDecryptReader reads an archive written by NewEncryptWriter, including
+// its magic header (PWBACKUP2 or the older PWBACKUP1).
 func NewDecryptReader(r io.Reader, password string) (io.Reader, error) {
+	head := make([]byte, len(magic))
+	if _, err := io.ReadFull(r, head); err != nil {
+		return nil, fmt.Errorf("archiv zu kurz: %w", err)
+	}
+	var k kdfParams
+	switch string(head) {
+	case magic:
+		var p [3]byte
+		if _, err := io.ReadFull(r, p[:]); err != nil {
+			return nil, fmt.Errorf("archiv zu kurz: %w", err)
+		}
+		k = kdfParams{LogN: p[0], R: p[1], P: p[2]}
+		if !k.valid() {
+			return nil, errors.New("archiv hat ungültige Schlüsselparameter")
+		}
+	case magicV1:
+		k = kdfV1
+	default:
+		return nil, errors.New("keine verschlüsselte Postwerk-Sicherung")
+	}
 	salt := make([]byte, saltLen)
 	if _, err := io.ReadFull(r, salt); err != nil {
 		return nil, fmt.Errorf("archiv zu kurz: %w", err)
 	}
-	aead, err := deriveKey(password, salt)
+	aead, err := deriveKey(password, salt, k)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +248,7 @@ func Sniff(r io.Reader) (Format, *bufio.Reader, error) {
 		return FormatUnknown, br, err
 	}
 	switch {
-	case bytes.Equal(head, []byte(magic)):
+	case bytes.Equal(head, []byte(magic)) || bytes.Equal(head, []byte(magicV1)):
 		return FormatEncrypted, br, nil
 	case len(head) >= 2 && head[0] == 0x1f && head[1] == 0x8b:
 		return FormatGzip, br, nil

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"postwerk/internal/backup"
 	"postwerk/internal/store"
@@ -153,11 +154,13 @@ func (s *Server) backupTest(w http.ResponseWriter, r *http.Request, u *store.Acc
 		return nil, err
 	}
 	cur := s.Settings.Get().Backup.Target
-	if req.WebDAV.Password == mask {
-		req.WebDAV.Password = cur.WebDAV.Password
-	}
-	if req.SMB.Password == mask {
-		req.SMB.Password = cur.SMB.Password
+	for _, sc := range []maskedSecret{
+		{&req.WebDAV.Password, cur.WebDAV.Password, req.WebDAV.URL, cur.WebDAV.URL, webdavSecretMsg},
+		{&req.SMB.Password, cur.SMB.Password, req.SMB.Host, cur.SMB.Host, smbSecretMsg},
+	} {
+		if err := sc.restore(); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -170,7 +173,11 @@ func (s *Server) backupTest(w http.ResponseWriter, r *http.Request, u *store.Acc
 	return res, nil
 }
 
-func validateBackup(b *store.BackupSettings) error {
+const minBackupPassword = 12
+
+// validateBackup checks backup settings; old is the stored state, so a short
+// password from before the current minimum keeps working until it is changed.
+func validateBackup(b, old *store.BackupSettings) error {
 	switch b.Target.Type {
 	case "local", "webdav", "smb":
 	default:
@@ -192,8 +199,11 @@ func validateBackup(b *store.BackupSettings) error {
 	if b.Keep < 0 || b.Keep > 1000 {
 		return invalid("Aufbewahrung: 0 bis 1000 Sicherungen")
 	}
-	if b.Encrypt && len(b.Password) < 8 {
-		return invalid("Das Backup-Passwort muss mindestens 8 Zeichen haben")
+	if b.Encrypt && b.Password == "" {
+		return invalid("Bitte ein Backup-Passwort angeben")
+	}
+	if b.Encrypt && (!old.Encrypt || b.Password != old.Password) && utf8.RuneCountInString(b.Password) < minBackupPassword {
+		return invalid(fmt.Sprintf("Das Backup-Passwort muss mindestens %d Zeichen haben", minBackupPassword))
 	}
 	if b.Target.SMB.Port == 0 {
 		b.Target.SMB.Port = 445

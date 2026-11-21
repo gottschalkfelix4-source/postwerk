@@ -83,13 +83,11 @@ func (w *webdavTarget) do(ctx context.Context, method, target string, body io.Re
 }
 
 func statusErr(op string, res *http.Response) error {
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 300))
-	msg := strings.TrimSpace(string(b))
-	if len(msg) > 200 || strings.Contains(msg, "<") {
-		msg = ""
-	}
-	if msg != "" {
-		return fmt.Errorf("WebDAV %s: HTTP %d – %s", op, res.StatusCode, msg)
+	// The response body is not echoed: it may come from any host the admin
+	// entered and must not turn the target test into a way to read it.
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
+	if txt := http.StatusText(res.StatusCode); txt != "" {
+		return fmt.Errorf("WebDAV %s: HTTP %d %s", op, res.StatusCode, txt)
 	}
 	return fmt.Errorf("WebDAV %s: HTTP %d", op, res.StatusCode)
 }

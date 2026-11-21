@@ -6,11 +6,12 @@ import { errorMessage } from "@/api/client";
 import type { ImportResult } from "@/api/types";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { qk, useMailboxes } from "@/lib/queries";
+import { useMe } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Badge, Button, Card, CardBody, CardHeader, Field, Notice, Progress, Select, useToast } from "@/components/ui";
 
 const ACCEPTED = [".mbox", ".eml", ".zip"];
-const MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const GB = 1024 * 1024 * 1024;
 
 type Phase = { kind: "idle" } | { kind: "uploading"; progress: number } | { kind: "processing" } | { kind: "done"; result: ImportResult } | { kind: "error"; message: string };
 
@@ -37,6 +38,8 @@ const guides = [
 /** Self-service import of .mbox/.eml/.zip files into the own mailbox. */
 export function ImportCard() {
   const qc = useQueryClient();
+  const me = useMe();
+  const maxGB = me.role === "admin" ? 2 : 1;
   const toast = useToast();
   const mailboxes = useMailboxes();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -57,9 +60,9 @@ export function ImportCard() {
       setFileError("Nur .mbox-, .eml- oder .zip-Dateien werden unterstützt.");
       return;
     }
-    if (f.size > MAX_BYTES) {
+    if (f.size > maxGB * GB) {
       setFile(null);
-      setFileError(`Die Datei ist zu groß (${formatBytes(f.size)}). Maximal 2 GB.`);
+      setFileError(`Die Datei ist zu groß (${formatBytes(f.size)}). Maximal ${maxGB} GB.`);
       return;
     }
     setFileError(null);
@@ -162,7 +165,7 @@ export function ImportCard() {
           <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
             {dragging ? "Datei hier ablegen" : "Datei hierher ziehen oder klicken zum Auswählen"}
           </p>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">.mbox, .eml oder .zip (mit .eml/.mbox) · max. 2 GB</p>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">.mbox, .eml oder .zip (mit .eml/.mbox) · max. {maxGB} GB</p>
         </div>
 
         {fileError && (

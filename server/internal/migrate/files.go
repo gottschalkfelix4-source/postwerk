@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,9 +40,48 @@ type FileImporter struct {
 	// MailboxID is the fixed target; 0 means inbox (and zip subfolders become folders).
 	MailboxID int64
 	MaxSize   int
+	// MaxLine bounds a single mbox line; longer lines make the message fail.
+	// 0 means DefaultMaxLine.
+	MaxLine int
+	// MaxTotal caps the bytes decompressed from a ZIP archive. 0 means
+	// min(ZipExpansion × archive size, MaxTotalCap).
+	MaxTotal int64
+	// MaxEntries caps the number of entries in a ZIP archive. 0 means DefaultMaxEntries.
+	MaxEntries int
 
-	keys map[int64]map[string]bool
-	res  ImportResult
+	keys      map[int64]map[string]bool
+	res       ImportResult
+	remaining int64 // decompression budget left for the current ZIP
+}
+
+const (
+	DefaultMaxLine    = 4 << 20
+	DefaultMaxEntries = 100_000
+	MaxTotalCap       = 20 << 30
+	// ZipExpansion is the allowed ratio of decompressed to compressed bytes;
+	// plain-text mail rarely compresses better than 1:8 with deflate.
+	ZipExpansion = 10
+)
+
+// errBudget is returned once a ZIP archive decompresses to more than allowed.
+var errBudget = errors.New("entpackte Datenmenge überschreitet das Limit")
+
+// budgetReader charges every byte read against the importer's ZIP budget.
+type budgetReader struct {
+	r  io.Reader
+	fi *FileImporter
+}
+
+func (b *budgetReader) Read(p []byte) (int, error) {
+	if b.fi.remaining <= 0 {
+		return 0, errBudget
+	}
+	if int64(len(p)) > b.fi.remaining {
+		p = p[:b.fi.remaining]
+	}
+	n, err := b.r.Read(p)
+	b.fi.remaining -= int64(n)
+	return n, err
 }
 
 // ImportFile detects the format by name and content.
@@ -70,8 +110,22 @@ func (fi *FileImporter) ImportFile(ctx context.Context, filePath, name string) (
 		if err != nil {
 			return nil, fmt.Errorf("ZIP-Datei unlesbar: %w", err)
 		}
+		maxEntries := fi.MaxEntries
+		if maxEntries <= 0 {
+			maxEntries = DefaultMaxEntries
+		}
+		if len(zr.File) > maxEntries {
+			return nil, fmt.Errorf("ZIP-Datei enthält zu viele Einträge (%d, erlaubt sind %d)", len(zr.File), maxEntries)
+		}
+		fi.remaining = fi.MaxTotal
+		if fi.remaining <= 0 {
+			fi.remaining = min(ZipExpansion*st.Size(), MaxTotalCap)
+		}
 		if err := fi.importZip(ctx, zr); err != nil {
-			return nil, err
+			if !errors.Is(err, errBudget) {
+				return nil, err
+			}
+			fi.res.fail("Import abgebrochen: %v", err)
 		}
 	case strings.HasSuffix(lower, ".eml"):
 		raw, err := io.ReadAll(io.LimitReader(f, int64(fi.MaxSize)+1))
@@ -169,8 +223,11 @@ func (fi *FileImporter) importZip(ctx context.Context, zr *zip.Reader) error {
 				fi.res.fail("%s: %v", zf.Name, err)
 				continue
 			}
-			raw, err := io.ReadAll(io.LimitReader(rc, int64(fi.MaxSize)+1))
+			raw, err := io.ReadAll(io.LimitReader(&budgetReader{rc, fi}, int64(fi.MaxSize)+1))
 			rc.Close()
+			if errors.Is(err, errBudget) {
+				return err
+			}
 			if err != nil {
 				fi.res.fail("%s: %v", zf.Name, err)
 				continue
@@ -189,7 +246,7 @@ func (fi *FileImporter) importZip(ctx context.Context, zr *zip.Reader) error {
 				fi.res.fail("%s: %v", zf.Name, err)
 				continue
 			}
-			err = fi.importMbox(ctx, rc, mb, zf.Name)
+			err = fi.importMbox(ctx, &budgetReader{rc, fi}, mb, zf.Name)
 			rc.Close()
 			if err != nil {
 				return err
@@ -199,45 +256,60 @@ func (fi *FileImporter) importZip(ctx context.Context, zr *zip.Reader) error {
 	return nil
 }
 
-// importMbox splits an mbox (mboxo/mboxrd) stream into messages.
+// importMbox splits an mbox (mboxo/mboxrd) stream into messages. Memory use is
+// bounded: overlong lines are discarded and make their message fail.
 func (fi *FileImporter) importMbox(ctx context.Context, r io.Reader, mb int64, label string) error {
+	maxLine := fi.MaxLine
+	if maxLine <= 0 {
+		maxLine = DefaultMaxLine
+	}
 	br := bufio.NewReaderSize(r, 64<<10)
 	var cur bytes.Buffer
 	var date time.Time
 	started := false
+	longLine := false
 	prevBlank := true
 	n := 0
 	flush := func() {
 		if started {
 			n++
-			fi.store(ctx, mb, cur.Bytes(), date, false, false, fmt.Sprintf("%s #%d", label, n))
+			lbl := fmt.Sprintf("%s #%d", label, n)
+			if longLine {
+				fi.res.fail("%s: Zeile länger als %d KB, Nachricht übersprungen", lbl, maxLine>>10)
+			} else {
+				fi.store(ctx, mb, cur.Bytes(), date, false, false, lbl)
+			}
 		}
 		cur.Reset()
+		longLine = false
 	}
+	var buf []byte
 	for {
-		line, err := br.ReadBytes('\n')
-		if len(line) > 0 {
-			if bytes.HasPrefix(line, []byte("From ")) && prevBlank {
-				flush()
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				started = true
-				date = fromLineDate(string(bytes.TrimRight(line, "\r\n")))
-				prevBlank = false
-				continue
+		line, tooLong, err := readLine(br, buf[:0], maxLine)
+		buf = line
+		switch {
+		case tooLong:
+			started = true
+			longLine = true
+			prevBlank = false
+		case len(line) > 0 && prevBlank && bytes.HasPrefix(line, []byte("From ")):
+			flush()
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			if !started {
-				// Not an mbox: treat whole input as a single message.
-				started = true
-			}
+			started = true
+			date = fromLineDate(string(bytes.TrimRight(line, "\r\n")))
+			prevBlank = false
+		case len(line) > 0:
+			// Without a leading "From " line the whole input is a single message.
+			started = true
 			trimmed := bytes.TrimRight(line, "\r\n")
 			prevBlank = len(trimmed) == 0
 			// mboxrd/mboxo unescaping: ">From " -> "From ", ">>From " -> ">From "
 			if bytes.HasPrefix(bytes.TrimLeft(trimmed, ">"), []byte("From ")) && bytes.HasPrefix(trimmed, []byte(">")) {
 				line = line[1:]
 			}
-			if cur.Len() < fi.MaxSize+1 {
+			if !longLine && cur.Len() < fi.MaxSize+1 {
 				cur.Write(line)
 			}
 		}
@@ -251,6 +323,27 @@ func (fi *FileImporter) importMbox(ctx context.Context, r io.Reader, mb int64, l
 	// The blank line before the next "From " belongs to the separator, not the message.
 	flush()
 	return nil
+}
+
+// readLine reads one line (including its newline) into dst. If the line is
+// longer than max bytes, the rest of it is consumed and discarded and tooLong
+// is reported; the returned slice then holds no usable data.
+func readLine(br *bufio.Reader, dst []byte, max int) (line []byte, tooLong bool, err error) {
+	for {
+		frag, e := br.ReadSlice('\n')
+		if !tooLong {
+			if len(dst)+len(frag) > max {
+				tooLong = true
+				dst = dst[:0]
+			} else {
+				dst = append(dst, frag...)
+			}
+		}
+		if e == bufio.ErrBufferFull {
+			continue
+		}
+		return dst, tooLong, e
+	}
 }
 
 func fromLineDate(line string) time.Time {

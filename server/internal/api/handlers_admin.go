@@ -58,6 +58,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request, u *store.Acco
 		"version":       s.Version,
 		"uptimeSeconds": int64(time.Since(s.Started).Seconds()),
 		"ai":            map[string]any{"enabled": cfg.Enabled, "reachable": reachable, "model": cfg.ChatModel},
+		"warnings":      s.dashboardWarnings(ctx),
 	}, nil
 }
 
@@ -347,6 +348,13 @@ func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request, u *store.A
 	if p.PasswordHash != nil || (req.Disabled != nil && *req.Disabled) {
 		_ = s.Store.DeleteAccountSessions(r.Context(), id)
 	}
+	if p.PasswordHash != nil {
+		// A password reset must also lock out mail clients using app passwords.
+		if err := s.Store.DeleteAccountAppPasswords(r.Context(), id); err != nil {
+			return nil, err
+		}
+		s.Log.Info("password reset by admin, sessions and app passwords revoked", "component", "admin", "account", id, "by", u.Email)
+	}
 	return s.Store.GetAccount(r.Context(), id)
 }
 
@@ -492,6 +500,37 @@ func (s *Server) unban(w http.ResponseWriter, r *http.Request, u *store.Account)
 
 const mask = "••••"
 
+const (
+	webdavSecretMsg = "WebDAV: Die URL wurde geändert – bitte das Passwort erneut eingeben."
+	smbSecretMsg    = "SMB: Der Server wurde geändert – bitte das Passwort erneut eingeben."
+)
+
+// maskedSecret ties a secret to the endpoint it is sent to.
+type maskedSecret struct {
+	cur                    *string
+	old                    string
+	endpoint, oldEndpoint  string
+	changedEndpointMessage string
+}
+
+// restore replaces the mask with the stored secret if the endpoint is
+// unchanged. A changed endpoint requires the secret to be entered again.
+func (m maskedSecret) restore() error {
+	if *m.cur != mask {
+		return nil
+	}
+	if m.old != "" && !sameEndpoint(m.endpoint, m.oldEndpoint) {
+		return invalid(m.changedEndpointMessage)
+	}
+	*m.cur = m.old
+	return nil
+}
+
+func sameEndpoint(a, b string) bool {
+	norm := func(s string) string { return strings.TrimRight(strings.ToLower(strings.TrimSpace(s)), "/") }
+	return norm(a) == norm(b)
+}
+
 func (s *Server) maskedSettings() store.Settings {
 	cur := s.Settings.Get()
 	if cur.AI.APIKey != "" {
@@ -531,6 +570,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 		return nil, err
 	}
 	cur := s.Settings.Get()
+	old := s.Settings.Get()
 	oldKey, oldToken, oldACME := cur.AI.APIKey, cur.DMS.Paperless.Token, cur.TLS.ACME
 	oldEmbedKey := cur.AI.EmbeddingAPIKey
 	oldDyn, oldRelay := cur.DynDNS.Password, cur.Relay.Password
@@ -549,35 +589,24 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 			return nil, invalid("Abschnitt " + k + ": " + err.Error())
 		}
 	}
-	if cur.AI.APIKey == mask {
-		cur.AI.APIKey = oldKey
-	}
-	if cur.AI.EmbeddingAPIKey == mask {
-		cur.AI.EmbeddingAPIKey = oldEmbedKey
-	}
-	if cur.DynDNS.Password == mask {
-		cur.DynDNS.Password = oldDyn
-	}
-	if cur.Relay.Password == mask {
-		cur.Relay.Password = oldRelay
-	}
-	if cur.DMS.Paperless.Token == mask {
-		cur.DMS.Paperless.Token = oldToken
-	}
-	for _, p := range []struct {
-		cur *string
-		old string
-	}{
-		{&cur.Backup.Password, oldBackup.Password},
-		{&cur.Backup.Target.WebDAV.Password, oldBackup.Target.WebDAV.Password},
-		{&cur.Backup.Target.SMB.Password, oldBackup.Target.SMB.Password},
+	// A masked secret keeps its stored value only while it still goes to the
+	// same endpoint; otherwise it would be sent to a host the admin just entered.
+	for _, sc := range []maskedSecret{
+		{&cur.AI.APIKey, oldKey, cur.AI.BaseURL, old.AI.BaseURL, "KI: Die Server-URL wurde geändert – bitte den API-Schlüssel erneut eingeben."},
+		{&cur.AI.EmbeddingAPIKey, oldEmbedKey, cur.AI.EmbeddingBaseURL, old.AI.EmbeddingBaseURL, "KI: Die Embedding-URL wurde geändert – bitte den Embedding-API-Schlüssel erneut eingeben."},
+		{&cur.DynDNS.Password, oldDyn, cur.DynDNS.UpdateURL, old.DynDNS.UpdateURL, "DynDNS: Die Update-URL wurde geändert – bitte das Passwort erneut eingeben."},
+		{&cur.Relay.Password, oldRelay, cur.Relay.Host, old.Relay.Host, "Relay: Der Server wurde geändert – bitte das Passwort erneut eingeben."},
+		{&cur.DMS.Paperless.Token, oldToken, cur.DMS.Paperless.URL, old.DMS.Paperless.URL, "Paperless: Die URL wurde geändert – bitte das Token erneut eingeben."},
+		{&cur.Backup.Password, oldBackup.Password, "", "", ""},
+		{&cur.Backup.Target.WebDAV.Password, oldBackup.Target.WebDAV.Password, cur.Backup.Target.WebDAV.URL, oldBackup.Target.WebDAV.URL, webdavSecretMsg},
+		{&cur.Backup.Target.SMB.Password, oldBackup.Target.SMB.Password, cur.Backup.Target.SMB.Host, oldBackup.Target.SMB.Host, smbSecretMsg},
 	} {
-		if *p.cur == mask {
-			*p.cur = p.old
+		if err := sc.restore(); err != nil {
+			return nil, err
 		}
 	}
 	cur.TLS.Status = ""
-	if err := validateSettings(&cur); err != nil {
+	if err := validateSettings(&cur, &old); err != nil {
 		return nil, err
 	}
 	if err := s.Settings.Save(r.Context(), cur); err != nil {
@@ -606,8 +635,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	return s.maskedSettings(), nil
 }
 
-func validateSettings(c *store.Settings) error {
-	if err := validateBackup(&c.Backup); err != nil {
+func validateSettings(c, old *store.Settings) error {
+	if err := validateBackup(&c.Backup, &old.Backup); err != nil {
 		return err
 	}
 	switch c.AI.AutoFile.Mode {
@@ -633,6 +662,11 @@ func validateSettings(c *store.Settings) error {
 	}
 	if c.Server.MaxMessageSize < 1<<20 {
 		return invalid("Maximale Nachrichtengröße muss mindestens 1 MB sein")
+	}
+	for _, d := range []int{c.Server.Retention.TrashDays, c.Server.Retention.JunkDays} {
+		if d < 0 || d > 3650 {
+			return invalid("Aufbewahrung für Papierkorb und Spam: 0 (nie leeren) bis 3650 Tage")
+		}
 	}
 	if c.Spam.JunkThreshold <= 0 {
 		return invalid("Spam-Schwelle muss größer als 0 sein")

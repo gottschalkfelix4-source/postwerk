@@ -199,7 +199,7 @@ func (u *Updater) publicIP(ctx context.Context, checkURL string) (string, error)
 	ip := strings.TrimSpace(string(b))
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.To4() == nil {
-		return "", fmt.Errorf("unerwartete Antwort %q", ip)
+		return "", fmt.Errorf("unerwartete Antwort (HTTP %d, keine IPv4-Adresse)", resp.StatusCode)
 	}
 	return ip, nil
 }
@@ -228,7 +228,7 @@ func (u *Updater) update(ctx context.Context, cfg store.DynDNSSettings, ip strin
 	ok, msg, pause := interpret(resp.StatusCode, body)
 	now := time.Now().UTC()
 	u.mu.Lock()
-	u.lastRes = body
+	u.lastRes = shortReason(body)
 	if ok {
 		u.lastIP, u.lastOK, u.lastErr = ip, &now, ""
 	} else {
@@ -242,7 +242,7 @@ func (u *Updater) update(ctx context.Context, cfg store.DynDNSSettings, ip strin
 		u.Log.Info("dyndns updated", "hosts", strings.Join(cfg.Hostnames, ","), "ip", ip, "result", body)
 		return nil
 	}
-	u.Log.Warn("dyndns update failed", "hosts", strings.Join(cfg.Hostnames, ","), "result", body, "err", msg)
+	u.Log.Warn("dyndns update failed", "hosts", strings.Join(cfg.Hostnames, ","), "status", resp.StatusCode, "err", msg)
 	return fmt.Errorf("%s", msg)
 }
 
@@ -272,7 +272,7 @@ func interpret(status int, body string) (ok bool, msg string, pause time.Duratio
 		case "dnserr", "911":
 			return false, code + " – Störung beim Anbieter, neuer Versuch später", 30 * time.Minute
 		default:
-			return false, "unbekannte Antwort: " + line, 30 * time.Minute
+			return false, "unbekannte Antwort: " + shortReason(line), 30 * time.Minute
 		}
 	}
 	return true, "", 0
@@ -313,4 +313,26 @@ func (u *Updater) Status(ctx context.Context) Status {
 		st.DNSIPs[h] = addrs
 	}
 	return st
+}
+
+// shortReason reduces a provider response to a short, printable first line so
+// arbitrary response bodies are never shown in the UI or logs.
+func shortReason(s string) string {
+	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
+	s = strings.TrimSpace(s)
+	if strings.ContainsAny(s, "<>{}") {
+		return "(Antwort nicht darstellbar)"
+	}
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		out = append(out, r)
+		if len(out) >= 60 {
+			out = append(out, '…')
+			break
+		}
+	}
+	return string(out)
 }

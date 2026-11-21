@@ -8,6 +8,12 @@
 #
 # Konfiguration über .env (Vorlage: .env.example).
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postwerk:
     image: ghcr.io/gottschalkfelix4-source/postwerk:latest
@@ -35,6 +41,7 @@ services:
       # Hinter einem Reverse-Proxy: dessen Zertifikate schreibgeschützt einbinden
       # (Setup-Assistent → Reverse-Proxy → Zertifikat übernehmen), z. B.:
       # - ./npm/letsencrypt:/certs:ro
+    logging: *logging
     networks: [mail]
 
   clamav:
@@ -44,6 +51,7 @@ services:
     restart: unless-stopped
     volumes:
       - clamav-db:/var/lib/clamav
+    logging: *logging
     networks: [mail]
 
   ollama:
@@ -53,6 +61,7 @@ services:
     restart: unless-stopped
     volumes:
       - ollama-models:/root/.ollama
+    logging: *logging
     networks: [mail]
     # Für NVIDIA-GPUs auskommentieren (benötigt nvidia-container-toolkit):
     # deploy:
@@ -71,6 +80,7 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${AI_CHAT_MODEL:-qwen2.5:7b} && ollama pull ${AI_EMBED_MODEL:-nomic-embed-text}"]
+    logging: *logging
     networks: [mail]
     restart: "no"
 

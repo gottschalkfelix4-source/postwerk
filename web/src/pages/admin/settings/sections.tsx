@@ -170,6 +170,7 @@ export function ServerSection({ settings, save, saving }: SectionProps) {
   const { draft, setDraft, dirty, reset } = useDraft(settings.server);
   if (!draft) return null;
   const mb = draft.maxMessageSize / (1024 * 1024);
+  const retention = retentionOf(draft);
   return (
     <Shell
       title="Server"
@@ -198,8 +199,44 @@ export function ServerSection({ settings, save, saving }: SectionProps) {
           )}
         </Field>
       </FormSection>
+      <FormSection
+        title="Aufbewahrung"
+        description="Papierkorb und Spam-Ordner aller Konten werden automatisch geleert. Gezählt wird ab dem Zeitpunkt, an dem eine Nachricht im Ordner gelandet ist. 0 = nie automatisch leeren."
+      >
+        <Field label="Papierkorb leeren nach" help="Nachrichten im Papierkorb werden nach dieser Zeit endgültig gelöscht.">
+          {(id) => (
+            <NumberInput
+              id={id}
+              value={retention.trashDays}
+              min={0}
+              max={3650}
+              step={1}
+              suffix="Tagen"
+              onChange={(v) => setDraft((d) => ({ ...d, retention: { ...retentionOf(d), trashDays: Math.max(0, Math.round(v)) } }))}
+            />
+          )}
+        </Field>
+        <Field label="Spam-Ordner leeren nach" help="Nachrichten im Spam-Ordner werden nach dieser Zeit endgültig gelöscht.">
+          {(id) => (
+            <NumberInput
+              id={id}
+              value={retention.junkDays}
+              min={0}
+              max={3650}
+              step={1}
+              suffix="Tagen"
+              onChange={(v) => setDraft((d) => ({ ...d, retention: { ...retentionOf(d), junkDays: Math.max(0, Math.round(v)) } }))}
+            />
+          )}
+        </Field>
+      </FormSection>
     </Shell>
   );
+}
+
+/** Retention values with defaults for settings saved by older versions. */
+function retentionOf(s: Settings["server"]): NonNullable<Settings["server"]["retention"]> {
+  return s.retention ?? { trashDays: 30, junkDays: 30 };
 }
 
 export function WebSection({ settings, save, saving }: SectionProps) {

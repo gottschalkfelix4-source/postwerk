@@ -52,8 +52,9 @@ func Forward(ctx context.Context, cfg store.PaperlessSettings, filename, content
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
-		return fmt.Errorf("paperless: %s %s", resp.Status, string(b))
+		// Only the status is reported; the body is not echoed.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("paperless: HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 	return nil
 }

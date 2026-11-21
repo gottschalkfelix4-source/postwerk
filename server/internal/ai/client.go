@@ -96,7 +96,7 @@ func (c *Client) do(ctx context.Context, cfg store.AISettings, method, url strin
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		return &apiError{Status: resp.StatusCode, Msg: fmt.Sprintf("ai endpoint %s: %s", resp.Status, truncate(errorText(data), 300))}
+		return &apiError{Status: resp.StatusCode, Msg: fmt.Sprintf("ai endpoint HTTP %d: %s", resp.StatusCode, truncate(errorText(data), 160))}
 	}
 	return json.Unmarshal(data, out)
 }
@@ -109,9 +109,22 @@ func errorText(data []byte) string {
 		} `json:"error"`
 	}
 	if json.Unmarshal(data, &e) == nil && e.Error.Message != "" {
-		return e.Error.Message
+		return printable(e.Error.Message)
 	}
-	return string(data)
+	// Anything else is not echoed: the endpoint is configurable and the
+	// error text must not reveal arbitrary response bodies.
+	return "(keine Fehlermeldung des Anbieters)"
+}
+
+// printable keeps a single line of printable characters.
+func printable(s string) string {
+	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // ---- endpoints and headers ----

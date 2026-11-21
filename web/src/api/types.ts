@@ -69,6 +69,16 @@ export interface Dashboard {
   recentEvents: LogEntry[];
   version: string; uptimeSeconds: number;
   ai: { enabled: boolean; reachable: boolean; model: string };
+  /** Operational problems (certificate, queue, backup, blocklists, PTR). */
+  warnings?: DashboardWarning[];
+}
+
+export interface DashboardWarning {
+  id: string;
+  severity: "warning" | "error";
+  title: string;
+  detail: string;
+  link?: string; // route in the web interface
 }
 
 export type HttpPortMode = "open" | "redirect" | "auto-close";
@@ -79,7 +89,12 @@ export interface TlsIssueResult {
 }
 
 export interface Settings {
-  server: { hostname: string; maxMessageSize: number; };
+  server: {
+    hostname: string;
+    maxMessageSize: number;
+    /** Days until Trash/Junk are emptied automatically (0 = never). Missing in old settings. */
+    retention?: { trashDays: number; junkDays: number };
+  };
   web: {
     publicUrl: string;            // e.g. "https://mail.example.com" (empty = unknown)
     behindProxy: boolean;

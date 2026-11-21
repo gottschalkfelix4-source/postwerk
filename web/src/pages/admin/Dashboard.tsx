@@ -26,14 +26,15 @@ import {
   Sparkles,
   Bug,
   Ban,
+  TriangleAlert,
   Users,
 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { Dashboard as DashboardData, LogEntry } from "@/api/types";
+import type { Dashboard as DashboardData, DashboardWarning, LogEntry } from "@/api/types";
 import { useTheme } from "@/lib/theme";
 import { formatBytes, formatDuration, formatHourLabel, formatNumber, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Badge, Card, CardBody, CardHeader, EmptyState, ErrorState, PageHeader, Skeleton, StatTile } from "@/components/ui";
+import { Badge, Card, CardBody, CardHeader, EmptyState, ErrorState, Notice, PageHeader, Skeleton, StatTile } from "@/components/ui";
 import { LevelBadge } from "./shared";
 
 // Categorical slots 1–3 of the validated reference palette, stepped per mode.
@@ -92,6 +93,7 @@ function DashboardContent({ data }: { data: DashboardData }) {
   const neutralTone = "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400";
   return (
     <div className="space-y-6">
+      <Warnings warnings={data.warnings ?? []} />
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <StatTile label="Konten" value={formatNumber(s.accounts)} icon={tileIcon(Users, neutralTone)} />
         <StatTile label="Domains" value={formatNumber(s.domains)} icon={tileIcon(Globe, neutralTone)} />
@@ -132,6 +134,29 @@ function DashboardContent({ data }: { data: DashboardData }) {
 
       <RecentEvents events={data.recentEvents} />
     </div>
+  );
+}
+
+function Warnings({ warnings }: { warnings: DashboardWarning[] }) {
+  if (warnings.length === 0) return null;
+  // Errors first, then warnings.
+  const sorted = [...warnings].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1));
+  return (
+    <section aria-label="Warnungen" className="space-y-2">
+      {sorted.map((w) => (
+        <Notice key={w.id} tone={w.severity === "error" ? "error" : "warning"} icon={TriangleAlert} title={w.title}>
+          {w.detail}
+          {w.link && (
+            <>
+              {" "}
+              <Link to={w.link} className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline">
+                Ansehen <ArrowRight className="h-3 w-3" />
+              </Link>
+            </>
+          )}
+        </Notice>
+      ))}
+    </section>
   );
 }
 

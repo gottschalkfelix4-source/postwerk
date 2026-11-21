@@ -152,6 +152,11 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	svc := &delivery.Service{Store: st, Settings: settings, Auth: authn, Spam: spamFilter, AI: aiWorker, Queue: q, Log: log.With("component", "delivery")}
 	q.Bounce = svc.Bounce
+	q.Delay = delayNotifier(st, svc, q, hostname, log)
+	q.STS = queue.NewMTASTS(st, log.With("component", "queue"))
+	if q.DANE = queue.NewSystemDANE(); q.DANE == nil {
+		log.Info("dane disabled: no resolv.conf", "component", "queue")
+	}
 	migrations := migrate.NewManager(st, svc, log)
 	dyn := dyndns.New(settings, log)
 	go dyn.Run(ctx)
@@ -162,7 +167,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	go q.Run(ctx)
 	go aiWorker.Run(ctx)
-	go housekeeping(ctx, st)
+	go housekeeping(ctx, st, settings, tp, log)
 
 	maxSize := func() int64 { return settings.Get().Server.MaxMessageSize }
 	smtpLog := log.With("component", "smtp")
@@ -366,11 +371,22 @@ func adminEmails(ctx context.Context, st *store.Store) []string {
 	return out
 }
 
-func housekeeping(ctx context.Context, st *store.Store) {
+// housekeeping purges expired sessions hourly and runs the daily cleanup
+// (Trash/Junk retention, vacation replies, orphaned blobs). It also
+// registers the operational metrics.
+func housekeeping(ctx context.Context, st *store.Store, settings *store.SettingsCache, tp *tlsutil.Dynamic, log *slog.Logger) {
+	metrics.RegisterOps(opsSources(st, tp))
+	log = log.With("component", "housekeeping")
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
+	// The first daily run happens about an hour after start, not during boot.
+	lastDaily := time.Now().Add(-23 * time.Hour)
 	for {
 		st.PurgeExpired(ctx)
+		if time.Since(lastDaily) >= 24*time.Hour {
+			lastDaily = time.Now()
+			dailyCleanup(ctx, st, settings.Get().Server.Retention, log)
+		}
 		select {
 		case <-ctx.Done():
 			return

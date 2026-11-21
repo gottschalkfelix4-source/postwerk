@@ -85,8 +85,15 @@ type RelaySettings struct {
 }
 
 type ServerSettings struct {
-	Hostname       string `json:"hostname"`
-	MaxMessageSize int64  `json:"maxMessageSize"`
+	Hostname       string            `json:"hostname"`
+	MaxMessageSize int64             `json:"maxMessageSize"`
+	Retention      RetentionSettings `json:"retention"`
+}
+
+// RetentionSettings empty Trash and Junk automatically (0 = never).
+type RetentionSettings struct {
+	TrashDays int `json:"trashDays"`
+	JunkDays  int `json:"junkDays"`
 }
 
 // WebSettings describe how the web interface is reached (reverse proxy).
@@ -214,6 +221,7 @@ func DefaultSettings(hostname string) Settings {
 	var s Settings
 	s.Server.Hostname = hostname
 	s.Server.MaxMessageSize = 50 << 20
+	s.Server.Retention = RetentionSettings{TrashDays: 30, JunkDays: 30}
 	s.TLS.ACME.DirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 	s.TLS.ACME.Domains = []string{}
 	s.TLS.Mode = "selfsigned"

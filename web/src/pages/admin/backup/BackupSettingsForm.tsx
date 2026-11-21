@@ -25,6 +25,8 @@ import {
 import { NumberInput, SecretInput } from "@/pages/admin/settings/sections";
 
 const MASK = "••••";
+// Must match minBackupPassword on the server.
+const MIN_PASSWORD = 12;
 
 const targetMeta: Record<BackupTargetType, { name: string; text: string; icon: LucideIcon }> = {
   local: { name: "Lokal", text: "Ordner im Container, z. B. ein eingebundenes Laufwerk.", icon: HardDrive },
@@ -136,7 +138,7 @@ export function BackupSettingsForm() {
   const setSmb = (patch: Partial<BackupSettings["target"]["smb"]>) => setTarget({ smb: { ...t.smb, ...patch } });
   const setSchedule = (patch: Partial<BackupSettings["schedule"]>) => set((d) => ({ ...d, schedule: { ...d.schedule, ...patch } }));
 
-  const passwordMissing = draft.encrypt && draft.password !== MASK && draft.password.length < 8;
+  const passwordMissing = draft.encrypt && draft.password !== MASK && [...draft.password].length < MIN_PASSWORD;
   const webdavInvalid = t.type === "webdav" && !/^https?:\/\/\S+/.test(t.webdav.url.trim());
   const smbInvalid = t.type === "smb" && (!t.smb.host.trim() || !t.smb.share.trim() || !t.smb.username.trim());
   const valid = !passwordMissing && !webdavInvalid && !smbInvalid;
@@ -294,9 +296,15 @@ export function BackupSettingsForm() {
 
           <FormSection title="Verschlüsselung" description="AES-256 mit einem Passwort. Empfohlen, sobald Archive auf einem fremden Speicher liegen.">
             <SwitchRow label="Archive verschlüsseln" checked={draft.encrypt} onChange={(v) => set((d) => ({ ...d, encrypt: v }))} />
+            {!draft.encrypt && t.type !== "local" && (
+              <Notice tone="warning" icon={ShieldAlert} title="Unverschlüsselt auf fremdem Speicher">
+                Die Archive enthalten alle Mails, Passwort-Hashes und Schlüssel dieses Servers. Wer Zugriff auf das{" "}
+                {t.type === "webdav" ? "WebDAV-Ziel" : "SMB-Share"} hat, kann sie lesen. Verschlüsselung einschalten wird dringend empfohlen.
+              </Notice>
+            )}
             {draft.encrypt && (
               <>
-                <Field label="Backup-Passwort" required error={passwordMissing ? "Mindestens 8 Zeichen" : undefined}>
+                <Field label="Backup-Passwort" required error={passwordMissing ? `Mindestens ${MIN_PASSWORD} Zeichen` : undefined}>
                   {(id) => <SecretInput id={id} value={draft.password} onChange={(v) => set((d) => ({ ...d, password: v }))} />}
                 </Field>
                 <Notice tone="warning" icon={ShieldAlert} title="Passwort sicher aufbewahren">

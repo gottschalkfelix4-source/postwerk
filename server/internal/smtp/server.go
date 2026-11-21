@@ -526,10 +526,10 @@ func (ss *session) handleData() bool {
 		return true
 	}
 	switch res {
-	case dataBareNewline:
+	case dataBareCR:
 		ss.resetTxn()
-		ss.log.Info("message rejected: bare LF/CR")
-		ss.replyR(NewReply(554, "5.5.2", "Bare LF/CR not allowed, use CRLF line endings"))
+		ss.log.Info("message rejected: bare CR")
+		ss.replyR(NewReply(554, "5.5.2", "Bare CR not allowed, use CRLF line endings"))
 		return false
 	case dataLineTooLong:
 		ss.resetTxn()

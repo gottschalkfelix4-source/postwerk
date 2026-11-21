@@ -12,7 +12,7 @@ type dataResult int
 const (
 	dataOK dataResult = iota
 	dataTooBig
-	dataBareNewline
+	dataBareCR
 	dataLineTooLong
 )
 
@@ -21,11 +21,16 @@ var errLineTooLong = errors.New("line too long")
 // readData reads a dot-stuffed message body up to the end-of-data marker.
 //
 // Only the exact sequence CRLF "." CRLF terminates the data, where the leading
-// CRLF may be the one ending the DATA command itself. Lines ending in a bare LF
-// or containing a bare CR mark the message as invalid but never end it, which
-// prevents SMTP smuggling via ambiguous terminators. Lines are delimited by LF
-// only, so a fragment returned because the read buffer was full is never
-// treated as the start of a new line.
+// CRLF may be the one ending the DATA command itself. This prevents SMTP
+// smuggling via ambiguous terminators such as LF "." LF.
+//
+// Bare LF line endings are normalized to CRLF (like Postfix's
+// smtpd_forbid_bare_newline = normalize). A "." line that is not enclosed in
+// CRLF on both sides is not a terminator and is kept as a literal "." line.
+// A bare CR (not followed by LF) marks the message as invalid.
+//
+// Lines are delimited by LF only, so a fragment returned because the read
+// buffer was full is never treated as the start of a new line.
 //
 // Memory use is bounded: at most maxSize bytes of message plus one line of at
 // most maxLine bytes are held. Once a limit is exceeded the rest of the
@@ -35,11 +40,11 @@ func readData(r *bufio.Reader, maxSize int64, maxLine int) ([]byte, dataResult, 
 	var (
 		buf       []byte
 		line      []byte
-		overflow  bool // current line exceeded maxLine, rest of it is discarded
-		prevCR    bool // previous fragment of the current line ended in CR
-		lineStart = true
+		overflow  bool   // current line exceeded maxLine, rest of it is discarded
+		prevCR    bool   // previous fragment of the current line ended in CR
+		afterCRLF = true // previous line ended in CRLF (or data just started)
 		tooBig    bool
-		bareNL    bool
+		bareCR    bool
 		longLine  bool
 	)
 	for {
@@ -77,16 +82,19 @@ func readData(r *bufio.Reader, maxSize int64, maxLine int) ([]byte, dataResult, 
 			if endsCRLF {
 				content = content[:len(content)-1]
 			}
-			if lineStart && endsCRLF && len(content) == 1 && content[0] == '.' {
+			isDot := len(content) == 1 && content[0] == '.'
+			if isDot && afterCRLF && endsCRLF {
 				break
 			}
-			if !endsCRLF || bytes.IndexByte(content, '\r') >= 0 {
-				bareNL = true
+			if bytes.IndexByte(content, '\r') >= 0 {
+				bareCR = true
 			}
-			if lineStart && len(content) > 0 && content[0] == '.' {
+			// Undo dot-stuffing, except for a lone "." that did not qualify
+			// as terminator: it is kept as content.
+			if !isDot && len(content) > 0 && content[0] == '.' {
 				content = content[1:]
 			}
-			if !tooBig && !bareNL && !longLine {
+			if !tooBig && !bareCR && !longLine {
 				buf = append(buf, content...)
 				buf = append(buf, '\r', '\n')
 				if int64(len(buf)) > maxSize {
@@ -94,16 +102,16 @@ func readData(r *bufio.Reader, maxSize int64, maxLine int) ([]byte, dataResult, 
 				}
 			}
 		}
-		if tooBig || bareNL || longLine {
+		if tooBig || bareCR || longLine {
 			buf = nil
 		}
 		overflow = false
 		line = line[:0]
-		lineStart = endsCRLF
+		afterCRLF = endsCRLF
 	}
 	switch {
-	case bareNL:
-		return nil, dataBareNewline, nil
+	case bareCR:
+		return nil, dataBareCR, nil
 	case longLine:
 		return nil, dataLineTooLong, nil
 	case tooBig:

@@ -174,23 +174,55 @@ func TestNullSenderIsEmpty(t *testing.T) {
 	}
 }
 
-func TestSmugglingTerminatorsRejected(t *testing.T) {
-	cases := map[string]string{
-		"LF.LF":     "hello\n.\n",
-		"CRLF.LF":   "hello\r\n.\n",
-		"LF.CRLF":   "hello\n.\r\n",
-		"CR.CR":     "hello\r.\r",
-		"dot-CRCR":  "hello\r\n.\r\r\n",
-		"bare-CR":   "hel\rlo\r\n",
-		"bare-LF-1": "hello\nworld\r\n",
+const smuggled = "MAIL FROM:<evil@attacker.test>\r\nRCPT TO:<victim@example.com>\r\nDATA\r\nsmuggled\r\n"
+
+func TestSmugglingBareLFNormalized(t *testing.T) {
+	// Bare LF line endings are normalized to CRLF, but a "." line that is
+	// not enclosed in CRLF never ends the data; it is kept as content.
+	cases := map[string]struct{ payload, stored string }{
+		"LF.LF":    {"hello\n.\n", "hello\r\n.\r\n"},
+		"CRLF.LF":  {"hello\r\n.\n", "hello\r\n.\r\n"},
+		"LF.CRLF":  {"hello\n.\r\n", "hello\r\n.\r\n"},
+		"bare-LF":  {"hello\nworld\r\n", "hello\r\nworld\r\n"},
+		"stuffed":  {"hello\n..x\n", "hello\r\n.x\r\n"},
+		"LF-start": {".\n", ".\r\n"},
 	}
-	for name, payload := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, be, addr := startServer(t, nil)
 			c := startData(t, addr)
 			// If the server treated the bogus sequence as end of data, the
 			// following lines would be executed as commands.
-			c.send(payload + "MAIL FROM:<evil@attacker.test>\r\nRCPT TO:<victim@example.com>\r\nDATA\r\nsmuggled\r\n.\r\n")
+			c.send(tc.payload + smuggled + ".\r\n")
+			c.expect("250")
+			// Exactly one transaction happened: no second 250/354 is pending.
+			c.cmd("NOOP", "250")
+			c.cmd("QUIT", "221")
+			msgs := be.delivered()
+			if len(msgs) != 1 {
+				t.Fatalf("expected exactly 1 message, got %d", len(msgs))
+			}
+			if msgs[0].from != "sender@example.org" || len(msgs[0].rcpts) != 1 || msgs[0].rcpts[0] != "user@example.com" {
+				t.Fatalf("envelope changed: %+v", msgs[0])
+			}
+			if want := tc.stored + smuggled; string(msgs[0].data) != want {
+				t.Fatalf("data = %q, want %q", msgs[0].data, want)
+			}
+		})
+	}
+}
+
+func TestSmugglingBareCRRejected(t *testing.T) {
+	cases := map[string]string{
+		"CR.CR":    "hello\r.\r",
+		"dot-CRCR": "hello\r\n.\r\r\n",
+		"bare-CR":  "hel\rlo\r\n",
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, be, addr := startServer(t, nil)
+			c := startData(t, addr)
+			c.send(payload + smuggled + ".\r\n")
 			c.expect("554 5.5.2")
 			// The transaction is reset and the session is usable.
 			c.cmd("RCPT TO:<user@example.com>", "503")
@@ -204,12 +236,10 @@ func TestSmugglingTerminatorsRejected(t *testing.T) {
 }
 
 func TestBufferBoundaryIsNotLineStart(t *testing.T) {
-	smuggle := "MAIL FROM:<evil@attacker.test>\r\nRCPT TO:<victim@example.com>\r\nDATA\r\nsmuggled\r\n"
-
 	t.Run("default line limit", func(t *testing.T) {
 		_, be, addr := startServer(t, nil)
 		c := startData(t, addr)
-		c.send(strings.Repeat("a", 4096) + ".\r\n" + smuggle + ".\r\n")
+		c.send(strings.Repeat("a", 4096) + ".\r\n" + smuggled + ".\r\n")
 		c.expect("552")
 		c.cmd("NOOP", "250")
 		if n := len(be.delivered()); n != 0 {
@@ -221,14 +251,14 @@ func TestBufferBoundaryIsNotLineStart(t *testing.T) {
 		_, be, addr := startServer(t, func(s *Server) { s.MaxLineLength = 10000 })
 		c := startData(t, addr)
 		long := strings.Repeat("a", 4096)
-		c.send(long + ".\r\n" + smuggle + ".\r\n")
+		c.send(long + ".\r\n" + smuggled + ".\r\n")
 		c.expect("250")
 		c.cmd("QUIT", "221")
 		msgs := be.delivered()
 		if len(msgs) != 1 {
 			t.Fatalf("expected exactly 1 message, got %d", len(msgs))
 		}
-		if want := long + ".\r\n" + smuggle; string(msgs[0].data) != want {
+		if want := long + ".\r\n" + smuggled; string(msgs[0].data) != want {
 			t.Fatalf("smuggled commands not kept as message content")
 		}
 		if msgs[0].from != "sender@example.org" {

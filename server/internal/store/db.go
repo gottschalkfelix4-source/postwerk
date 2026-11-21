@@ -13,6 +13,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"postwerk/internal/vault"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -21,6 +23,8 @@ var ErrConflict = errors.New("conflict")
 type Store struct {
 	DB    *sql.DB
 	Blobs *BlobStore
+	// Vault is the master key protecting secrets at rest.
+	Vault *vault.Key
 
 	changes changeHub
 }
@@ -44,7 +48,17 @@ func Open(dataDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{DB: db, Blobs: blobs}, nil
+	key, err := vault.Load(dataDir)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("master key: %w", err)
+	}
+	s := &Store{DB: db, Blobs: blobs, Vault: key}
+	if err := s.initSecrets(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.DB.Close() }
@@ -329,6 +343,36 @@ var migrations = []string{
 	CREATE INDEX jmap_submissions_account ON jmap_submissions(account_id);`,
 	`ALTER TABLE accounts ADD COLUMN source TEXT NOT NULL DEFAULT 'local';
 	ALTER TABLE sessions ADD COLUMN method TEXT NOT NULL DEFAULT 'password';`,
+	// Encryption at rest: per-account public key for stored mail, and
+	// GDPR data exports.
+	`CREATE TABLE mail_encryption (
+		account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+		kind TEXT NOT NULL,
+		public_key TEXT NOT NULL,
+		fingerprint TEXT NOT NULL DEFAULT '',
+		description TEXT NOT NULL DEFAULT '',
+		algorithm TEXT NOT NULL DEFAULT '',
+		expires_at INTEGER,
+		hide_subject INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE TABLE data_exports (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		requested_by INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		phase TEXT NOT NULL DEFAULT '',
+		done INTEGER NOT NULL DEFAULT 0,
+		total INTEGER NOT NULL DEFAULT 0,
+		file TEXT NOT NULL DEFAULT '',
+		size INTEGER NOT NULL DEFAULT 0,
+		error TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		finished_at INTEGER,
+		expires_at INTEGER
+	);
+	CREATE INDEX data_exports_account ON data_exports(account_id, created_at DESC);`,
 }
 
 func migrate(db *sql.DB) error {

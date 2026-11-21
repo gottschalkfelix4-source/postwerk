@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"postwerk/internal/store"
+	"postwerk/internal/vault"
 )
 
 var ErrBusy = errors.New("es läuft bereits eine Sicherung oder Wiederherstellung")
@@ -65,12 +66,50 @@ type Status struct {
 	Last    *Result    `json:"last"`
 	Target  string     `json:"target"`
 	NextRun *time.Time `json:"nextRun"`
+	// MasterKey tells the admin what a restore needs besides the archive.
+	MasterKey *MasterKeyInfo `json:"masterKey,omitempty"`
+}
+
+// MasterKeyInfo describes where the master key lives and whether archives
+// carry it. A key in the data directory (master.key) is always archived,
+// because a restore without it would lose every encrypted secret; a key from
+// POSTWERK_MASTER_KEY or a file outside the data directory is never archived
+// and must be provided again for a restore.
+type MasterKeyInfo struct {
+	Source      string `json:"source"` // env | env-file | data-file
+	InArchive   bool   `json:"inArchive"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func (m *Manager) masterKeyInfo() *MasterKeyInfo {
+	if m.Store == nil || m.Store.Vault == nil {
+		return nil
+	}
+	k := m.Store.Vault
+	return &MasterKeyInfo{Source: k.Source, InArchive: k.InDataDir, Fingerprint: k.Fingerprint()}
+}
+
+// archiveExcludes lists data-dir paths that never go into an archive: the
+// local backup folder and a stale master.key while the key comes from
+// elsewhere.
+func (m *Manager) archiveExcludes(t Target) []string {
+	return append([]string{LocalDir(t)}, KeyExcludes(m.Store, m.DataDir)...)
+}
+
+// KeyExcludes returns the stale data-dir master.key while the active key
+// comes from POSTWERK_MASTER_KEY or a file elsewhere: such archives must
+// not carry a key at all.
+func KeyExcludes(st *store.Store, dataDir string) []string {
+	if st != nil && st.Vault != nil && st.Vault.Source != vault.SourceDataFile {
+		return []string{filepath.Join(dataDir, vault.KeyFileName)}
+	}
+	return nil
 }
 
 func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	st := Status{}
+	st := Status{MasterKey: m.masterKeyInfo()}
 	if m.job != nil {
 		j := *m.job
 		st.Job = &j
@@ -186,7 +225,7 @@ func (m *Manager) writeArchive(ctx context.Context, t Target, cfg store.BackupSe
 	man := Manifest{Version: m.Version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC()}
 	man.Domains, man.Accounts, man.Messages, _ = m.Store.BackupCounts(ctx)
 	src := Source{
-		DataDir: m.DataDir, DB: m.Store.DB, Manifest: man, Exclude: []string{LocalDir(t)},
+		DataDir: m.DataDir, DB: m.Store.DB, Manifest: man, Exclude: m.archiveExcludes(t),
 		Progress: func(done, total int64) {
 			m.update(func(j *Job) { j.Done, j.Total = done, total })
 		},

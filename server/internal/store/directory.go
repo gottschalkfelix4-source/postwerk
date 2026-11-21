@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -82,6 +83,11 @@ func (s *Store) ListDomains(ctx context.Context) ([]Domain, error) {
 		if err := rows.Scan(&d.Name, &ca, &d.DKIMSelector, &d.DKIMPrivateKey, &created, &d.AccountCount, &d.AliasCount); err != nil {
 			return nil, err
 		}
+		key, err := s.Vault.Decrypt(d.DKIMPrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("domain %s: dkim key: %w", d.Name, err)
+		}
+		d.DKIMPrivateKey = key
 		d.CatchAll = nullStr(ca)
 		d.CreatedAt = ts(created)
 		out = append(out, d)
@@ -111,7 +117,7 @@ func (s *Store) DomainExists(ctx context.Context, name string) (bool, error) {
 
 func (s *Store) CreateDomain(ctx context.Context, name, selector, privKeyPEM string) error {
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO domains(name, dkim_selector, dkim_private_key, created_at) VALUES (?,?,?,?)`,
-		Normalize(name), selector, privKeyPEM, now())
+		Normalize(name), selector, s.Vault.Encrypt(privKeyPEM), now())
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrConflict
 	}
@@ -191,6 +197,9 @@ func (s *Store) ListAccounts(ctx context.Context, q string, limit, offset int) (
 	var out []*Account
 	for rows.Next() {
 		a, err := scanAccount(rows)
+		if err == nil {
+			err = s.openAccount(a)
+		}
 		if err != nil {
 			rows.Close()
 			return nil, 0, err
@@ -212,6 +221,9 @@ func (s *Store) GetAccount(ctx context.Context, id int64) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := s.openAccount(a); err != nil {
+		return nil, err
+	}
 	return a, s.fillAliases(ctx, []*Account{a})
 }
 
@@ -221,6 +233,9 @@ func (s *Store) GetAccountByEmail(ctx context.Context, email string) (*Account, 
 		return nil, ErrNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := s.openAccount(a); err != nil {
 		return nil, err
 	}
 	return a, s.fillAliases(ctx, []*Account{a})
@@ -290,7 +305,7 @@ func (s *Store) UpdateAccount(ctx context.Context, id int64, p AccountPatch) err
 		add("disabled", *p.Disabled)
 	}
 	if p.TOTPSecret != nil {
-		add("totp_secret", *p.TOTPSecret)
+		add("totp_secret", s.Vault.Encrypt(*p.TOTPSecret))
 	}
 	if p.TOTPEnabled != nil {
 		add("totp_enabled", *p.TOTPEnabled)

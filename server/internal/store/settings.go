@@ -5,9 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 )
 
+// Settings are persisted as JSON. String fields tagged `secret:"true"` are
+// encrypted with the master key in the database (vault.EncryptFields) and
+// decrypted transparently on load; add the tag to every new secret field.
 type Settings struct {
 	Server    ServerSettings    `json:"server"`
 	Web       WebSettings       `json:"web"`
@@ -32,7 +36,7 @@ type BackupSettings struct {
 	Keep int `json:"keep"`
 	// Encrypt protects archives with Password (AES-256-GCM, key via scrypt).
 	Encrypt  bool   `json:"encrypt"`
-	Password string `json:"password"`
+	Password string `json:"password" secret:"true"`
 }
 
 type BackupTarget struct {
@@ -41,7 +45,7 @@ type BackupTarget struct {
 	WebDAV    struct {
 		URL           string `json:"url"`
 		Username      string `json:"username"`
-		Password      string `json:"password"`
+		Password      string `json:"password" secret:"true"`
 		SkipTLSVerify bool   `json:"skipTlsVerify"`
 	} `json:"webdav"`
 	SMB struct {
@@ -50,7 +54,7 @@ type BackupTarget struct {
 		Share    string `json:"share"`
 		Path     string `json:"path"`
 		Username string `json:"username"`
-		Password string `json:"password"`
+		Password string `json:"password" secret:"true"`
 		Domain   string `json:"domain"`
 	} `json:"smb"`
 }
@@ -69,7 +73,7 @@ type DynDNSSettings struct {
 	UpdateURL       string   `json:"updateUrl"`
 	Hostnames       []string `json:"hostnames"`
 	Username        string   `json:"username"`
-	Password        string   `json:"password"`
+	Password        string   `json:"password" secret:"true"`
 	IPCheckURL      string   `json:"ipCheckUrl"`
 	IntervalMinutes int      `json:"intervalMinutes"`
 }
@@ -82,7 +86,7 @@ type RelaySettings struct {
 	Port       int    `json:"port"`
 	Security   string `json:"security"`
 	Username   string `json:"username"`
-	Password   string `json:"password"`
+	Password   string `json:"password" secret:"true"`
 	SPFInclude string `json:"spfInclude"`
 }
 
@@ -173,13 +177,13 @@ type AISettings struct {
 	// (Anthropic Messages API and compatible services).
 	Provider       string `json:"provider"`
 	BaseURL        string `json:"baseUrl"`
-	APIKey         string `json:"apiKey"`
+	APIKey         string `json:"apiKey" secret:"true"`
 	ChatModel      string `json:"chatModel"`
 	EmbeddingModel string `json:"embeddingModel"`
 	// Optional separate OpenAI-compatible endpoint for embeddings. Required
 	// for semantic search with the anthropic provider (it has no embeddings).
 	EmbeddingBaseURL string     `json:"embeddingBaseUrl"`
-	EmbeddingAPIKey  string     `json:"embeddingApiKey"`
+	EmbeddingAPIKey  string     `json:"embeddingApiKey" secret:"true"`
 	MaxTokens        int        `json:"maxTokens"` // anthropic: max_tokens per request
 	TimeoutSeconds   int        `json:"timeoutSeconds"`
 	Features         AIFeatures `json:"features"`
@@ -206,7 +210,7 @@ type DMSSettings struct {
 type PaperlessSettings struct {
 	Enabled     bool     `json:"enabled"`
 	URL         string   `json:"url"`
-	Token       string   `json:"token"`
+	Token       string   `json:"token" secret:"true"`
 	AutoForward bool     `json:"autoForward"`
 	Categories  []string `json:"categories"`
 }
@@ -290,6 +294,10 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 			return nil, err
 		}
 	}
+	plain, err := s.Vault.DecryptFields(&cur)
+	if err != nil {
+		return nil, fmt.Errorf("settings secrets: %w", err)
+	}
 	if cur.TLS.Mode == "" {
 		// Settings from before the TLS mode existed.
 		cur.TLS.Mode = "selfsigned"
@@ -313,7 +321,8 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 		cur.Web.TrustedProxies = []string{}
 	}
 	c := &SettingsCache{cur: cur, st: s}
-	if raw == "" {
+	// Save also encrypts secrets that are still stored in plaintext.
+	if raw == "" || plain > 0 {
 		if err := c.Save(ctx, cur); err != nil {
 			return nil, err
 		}
@@ -341,6 +350,9 @@ func (c *SettingsCache) Reload(ctx context.Context) error {
 	if err := json.Unmarshal([]byte(raw), &cur); err != nil {
 		return err
 	}
+	if _, err := c.st.Vault.DecryptFields(&cur); err != nil {
+		return fmt.Errorf("settings secrets: %w", err)
+	}
 	c.mu.Lock()
 	c.cur = cur
 	c.mu.Unlock()
@@ -348,8 +360,17 @@ func (c *SettingsCache) Reload(ctx context.Context) error {
 }
 
 func (c *SettingsCache) Save(ctx context.Context, s Settings) error {
+	// Encrypt secrets in a deep copy; the cache keeps the plaintext.
 	b, err := json.Marshal(s)
 	if err != nil {
+		return err
+	}
+	var enc Settings
+	if err := json.Unmarshal(b, &enc); err != nil {
+		return err
+	}
+	c.st.Vault.EncryptFields(&enc)
+	if b, err = json.Marshal(enc); err != nil {
 		return err
 	}
 	if _, err := c.st.DB.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES('settings', ?)

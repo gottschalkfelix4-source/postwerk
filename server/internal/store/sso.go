@@ -31,7 +31,7 @@ type LDAPSettings struct {
 	// BindDN/BindPassword is the service account used to search users
 	// (empty BindDN = anonymous search).
 	BindDN       string `json:"bindDn"`
-	BindPassword string `json:"bindPassword"`
+	BindPassword string `json:"bindPassword" secret:"true"`
 	BaseDN       string `json:"baseDn"`
 	// UserFilter finds a user by email address; %s is replaced by the
 	// escaped address.
@@ -57,7 +57,7 @@ type OIDCSettings struct {
 	Enabled      bool     `json:"enabled"`
 	IssuerURL    string   `json:"issuerUrl"`
 	ClientID     string   `json:"clientId"`
-	ClientSecret string   `json:"clientSecret"`
+	ClientSecret string   `json:"clientSecret" secret:"true"`
 	Scopes       []string `json:"scopes"`
 	ButtonLabel  string   `json:"buttonLabel"`
 	EmailClaim   string   `json:"emailClaim"`

@@ -32,6 +32,9 @@ services:
       TZ: Europe/Berlin
       # Optional: Token, mit dem Prometheus /metrics abfragen darf
       # POSTWERK_METRICS_TOKEN: ein-langes-zufaelliges-token
+      # Optional: Master-Schlüssel (openssl rand -base64 32). Ohne Angabe wird /data/master.key
+      # erzeugt und mitgesichert; mit Variable ist er in keinem Backup und muss sicher verwahrt werden.
+      # POSTWERK_MASTER_KEY: ""
       # Erstes Admin-Konto: leer lassen = Einrichtung über den Setup-Assistenten (empfohlen)
       POSTWERK_ADMIN_EMAIL: ""
       POSTWERK_ADMIN_PASSWORD: ""

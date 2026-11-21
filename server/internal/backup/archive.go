@@ -56,11 +56,12 @@ type Source struct {
 
 // skipTop reports whether a top-level entry of the data directory stays out
 // of archives: the live database (a snapshot is added instead), backups,
-// restore leftovers and temporary files.
+// data exports, restore leftovers and temporary files. master.key is kept
+// on purpose (see MasterKeyInfo): without it a restore loses all secrets.
 func skipTop(name string) bool {
 	switch name {
 	case dbName, dbName + "-wal", dbName + "-shm", dbName + "-journal",
-		"backups", "restore-staging", pendingFile, "setup-token.txt":
+		"backups", "restore-staging", pendingFile, "setup-token.txt", "exports":
 		return true
 	}
 	return strings.HasPrefix(name, "pre-restore-") || strings.HasPrefix(name, ".backup-") ||

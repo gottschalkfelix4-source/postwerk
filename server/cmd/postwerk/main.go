@@ -21,12 +21,14 @@ import (
 
 	"postwerk/internal/ai"
 	"postwerk/internal/api"
+	"postwerk/internal/atrest"
 	"postwerk/internal/auth"
 	"postwerk/internal/backup"
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
 	"postwerk/internal/dms"
 	"postwerk/internal/dyndns"
+	"postwerk/internal/export"
 	"postwerk/internal/httpport"
 	"postwerk/internal/imapd"
 	"postwerk/internal/jmap"
@@ -166,6 +168,11 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		Restart: func() { restart = true; cancel() }}
 	go backups.Run(ctx)
 
+	logMasterKey(st, log)
+	atRest := &atrest.Manager{Store: st, Log: log}
+	exports := &export.Manager{Store: st, DataDir: cfg.DataDir, Log: log}
+	go exports.Run(ctx)
+
 	go q.Run(ctx)
 	go aiWorker.Run(ctx)
 	go housekeeping(ctx, st, settings, tp, log)
@@ -216,6 +223,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
 		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn, Backups: backups,
 		JMAP: jmapSrv,
+		AtRest: atRest, Exports: exports,
 	}
 	handler := apiSrv.Handler()
 	httpCtl := &httpport.Controller{

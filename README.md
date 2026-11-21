@@ -8,6 +8,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
   ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre
 - **Identität:** LDAP-Verzeichnis als Kontenquelle (OpenLDAP, Active Directory, lldap …) und Single
   Sign-on per OpenID Connect für die Weboberfläche (Authentik, Keycloak …), siehe [docs/SSO.md](docs/SSO.md)
+  ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre, verschlüsselte Geheimnisse (Master-Schlüssel),
+  Verschlüsselung gespeicherter Mails mit dem eigenen OpenPGP-/S/MIME-Schlüssel, DSGVO-Datenexport
 - **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung und automatischem Eintragen der
   DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
@@ -128,6 +130,28 @@ docker compose restart postwerk
 docker compose exec postwerk postwerk reset-password admin@example.com 'neues-langes-passwort'
 ```
 
+### Verschlüsselung im Ruhezustand und Datenexport
+
+Passwörter, API-Schlüssel und Tokens aus den Einstellungen, TOTP-Geheimnisse und DKIM-Schlüssel liegen
+mit AES-256-GCM verschlüsselt in der Datenbank. Der Master-Schlüssel kommt aus `POSTWERK_MASTER_KEY`
+(base64, 32 Byte – `openssl rand -base64 32`), aus der Datei in `POSTWERK_MASTER_KEY_FILE` oder wird
+beim ersten Start als `/data/master.key` erzeugt.
+
+- **`master.key` im Datenverzeichnis** (Standard): Der Schlüssel ist in jedem Backup enthalten, sonst wären
+  nach einer Wiederherstellung alle Geheimnisse verloren. Ein unverschlüsseltes Backup schützt die
+  Geheimnisse daher nicht – Backup-Verschlüsselung einschalten.
+- **`POSTWERK_MASTER_KEY` bzw. Datei außerhalb von `/data`**: Der Schlüssel ist in keinem Backup. Für jede
+  Wiederherstellung muss derselbe Schlüssel gesetzt sein, sonst startet Postwerk nicht. Zum Umstellen den
+  Inhalt von `/data/master.key` als `POSTWERK_MASTER_KEY` setzen und die Datei danach löschen.
+
+Unter **Einstellungen → Sicherheit** lassen sich zusätzlich alle Nachrichten-Dateien auf der Festplatte
+mit dem Master-Schlüssel verschlüsseln (Standard aus; sinnvoll nur mit Schlüssel außerhalb von `/data`).
+Benutzer können unter **Konto & Sicherheit → Verschlüsselung im Ruhezustand** ihren öffentlichen
+OpenPGP-Schlüssel oder ihr S/MIME-Zertifikat hinterlegen: Neue Mails werden dann so verschlüsselt
+gespeichert, dass nur ihr Mail-Programm mit dem privaten Schlüssel sie lesen kann (Suche, Vorschau und
+KI entfallen für diese Mails). Unter **Meine Daten exportieren** gibt es alle eigenen Daten als ZIP
+(mbox je Ordner, Kalender als .ics, Kontodaten); Admins exportieren beliebige Konten in der Kontoansicht.
+
 ## Entwicklung
 
 Voraussetzungen: Go ≥ 1.26, Node.js ≥ 20.
@@ -184,6 +208,8 @@ web/                   React-Oberfläche (Verwaltung + Webmail)
 | `POSTWERK_TLS_CERT` / `POSTWERK_TLS_KEY` | – | Eigenes Zertifikat (überschreibt die Einstellung) |
 | `POSTWERK_CERTS_DIR` | `/certs` | Ordner mit Zertifikaten des Reverse-Proxys |
 | `POSTWERK_RELAY_HOST` / `_USER` / `_PASSWORD` | – | Smarthost |
+| `POSTWERK_MASTER_KEY` | – | Master-Schlüssel für Geheimnisse im Ruhezustand (base64, 32 Byte); ohne: `/data/master.key` |
+| `POSTWERK_MASTER_KEY_FILE` | – | Alternativ: Datei mit dem Master-Schlüssel (z. B. Docker-Secret) |
 | `POSTWERK_METRICS_TOKEN` | – | Bearer-Token für `/metrics` über 80/443; ohne Token gibt es `/metrics` nur intern am Health-Port (`127.0.0.1:8099/metrics` im Container) |
 | `POSTWERK_SECURE_COOKIES` | `false` | Cookie nur über HTTPS |
 | `POSTWERK_TRUST_PROXY` | `false` | Proxy-Auswertung erzwingen (sonst im Setup-Assistenten) |

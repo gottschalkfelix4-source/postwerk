@@ -129,7 +129,7 @@ func createBackup(ctx context.Context, cfg *config.Config, dir string) error {
 	}
 	man := backup.Manifest{Version: version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC()}
 	man.Domains, man.Accounts, man.Messages, _ = st.BackupCounts(ctx)
-	n, err := backup.Create(ctx, f, backup.Source{DataDir: cfg.DataDir, DB: st.DB, Manifest: man, Exclude: []string{dir}}, password)
+	n, err := backup.Create(ctx, f, backup.Source{DataDir: cfg.DataDir, DB: st.DB, Manifest: man, Exclude: append([]string{dir}, backup.KeyExcludes(st, cfg.DataDir)...)}, password)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

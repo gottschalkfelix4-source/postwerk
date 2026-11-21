@@ -135,6 +135,8 @@ type messageDetail struct {
 	Auth        store.AuthResults    `json:"auth"`
 	Virus       *string              `json:"virus"`
 	AI          aiDetail             `json:"ai"`
+	// Encrypted marks messages stored encrypted with the user's key.
+	Encrypted bool `json:"encrypted"`
 }
 
 type aiDetail struct {
@@ -170,6 +172,7 @@ func (s *Server) detail(m *store.Message) (*messageDetail, error) {
 	if d.Auth.SPF == "" {
 		d.Auth = store.AuthResults{SPF: "none", DKIM: "none", DMARC: "none"}
 	}
+	markEncrypted(d, raw)
 	return d, nil
 }
 

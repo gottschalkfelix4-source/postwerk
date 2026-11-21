@@ -26,7 +26,8 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | Backup im Web-Interface: Archive lokal, per WebDAV oder SMB, Zeitplan, Aufbewahrung, AES-256-Verschlüsselung, Download/Upload, Wiederherstellung per Klick | ✅ |
 | | Backup-/Restore-Befehl, Notfall-Passwort-Reset | ✅ |
 | | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus „testing“) | ✅ |
-| Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen | ✅ |
+| | JMAP (RFC 8620/8621) als zusätzliche Client-API, siehe [API.md](API.md#jmap-rfc-8620--rfc-8621) | ✅ |
+| Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen (über die REST-API) | ✅ |
 | | Abwesenheitsnotiz | ✅ |
 | Einrichtung | Setup-Assistent mit Setup-Token, Live-DNS-Prüfung und System-Check (PTR, Port 25, ClamAV, KI) | ✅ |
 | | DNS-Einträge automatisch beim Anbieter setzen: IONOS, Hetzner, Cloudflare, netcup, INWX, deSEC (offizielle APIs), STRATO (inoffiziell, TXT/CNAME) | ✅ |
@@ -46,9 +47,10 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 ## Meilenstein 2 – Clients und Filterregeln
 
-- ⏳ IMAP CONDSTORE/QRESYNC für schnelleren Abgleich großer Postfächer
+- ⏳ IMAP CONDSTORE/QRESYNC für schnelleren Abgleich großer Postfächer (das JMAP-Änderungsprotokoll führt bereits eine Modseq pro Konto)
 - ⏳ Sieve (RFC 5228) mit ManageSieve, Regel-Editor im Webmail; Abwesenheitsnotiz wandert auf Sieve `vacation`
-- ⏳ JMAP Core + Mail (RFC 8620/8621) als moderne API, Webmail auf JMAP umstellen
+- ✅ JMAP Core + Mail + Submission (RFC 8620/8621) mit Push per EventSource, Upload/Download und Änderungsprotokoll
+- ⏳ Webmail auf JMAP umstellen (das Webmail nutzt weiterhin die REST-API)
 - ⏳ Autoconfig/Autodiscover-Endpunkte für Mailclients
 
 ## Meilenstein 3 – Groupware und Zustellbarkeit

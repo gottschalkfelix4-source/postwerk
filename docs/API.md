@@ -641,3 +641,102 @@ interface AutoFile {
 
 Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
 `categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.
+
+## JMAP (RFC 8620 / RFC 8621)
+
+Neben der REST-API spricht Postwerk JMAP für Mailclients und eigene Skripte. Das Webmail nutzt
+weiterhin `/api`; JMAP ist eine zusätzliche Schnittstelle auf denselben Daten (Änderungen über
+IMAP, Webmail und JMAP sind sofort überall sichtbar).
+
+### Endpunkte
+
+| Methode | Pfad | Zweck |
+|---|---|---|
+| GET | `/.well-known/jmap` (auch `/jmap/session`) | Session-Objekt mit Capabilities, Konto und URLs |
+| POST | `/jmap/api` | Methodenaufrufe (`application/json`) |
+| POST | `/jmap/upload/{accountId}/` | Blob hochladen, Body = Rohdaten, `Content-Type` = Medientyp |
+| GET | `/jmap/download/{accountId}/{blobId}/{name}?type={type}` | Blob herunterladen (immer `Content-Disposition: attachment`, `nosniff`) |
+| GET | `/jmap/eventsource?types={types}&closeafter={closeafter}&ping={ping}` | Push per Server-Sent Events (`StateChange`) |
+
+Capabilities: `urn:ietf:params:jmap:core`, `urn:ietf:params:jmap:mail`, `urn:ietf:params:jmap:submission`.
+Die Kontokennung hat die Form `A<id>` und steht in `primaryAccounts`.
+
+### Anmeldung
+
+- **HTTP Basic** mit E-Mail-Adresse und Kontopasswort oder App-Passwort (bei aktiver 2FA nur App-Passwort),
+  gleiche Prüfung und Brute-Force-Sperre wie IMAP/SMTP. **Nur über HTTPS** (oder hinter einem
+  vertrauenswürdigen Proxy mit `X-Forwarded-Proto: https`); über HTTP antwortet der Server mit `403`.
+  Für Tests ohne TLS gilt `POSTWERK_ALLOW_INSECURE_AUTH=true`.
+  Geprüfte Zugangsdaten werden bis zu 2 Minuten im Speicher gehalten; ein geändertes Passwort oder ein
+  widerrufenes App-Passwort wirkt deshalb spätestens nach 2 Minuten.
+- **Session-Cookie** der Weboberfläche (`pw_session`): für `POST` ist wie bei `/api` der Header
+  `X-Postwerk: 1` Pflicht (CSRF-Schutz). `GET` (Session, Download, EventSource) geht ohne Header.
+- Bearer-Token werden nicht unterstützt.
+
+### Methoden
+
+| Typ | Methoden |
+|---|---|
+| Core | `Core/echo` |
+| Mailbox | `get`, `changes`, `query`, `queryChanges`¹, `set` |
+| Thread | `get`, `changes` |
+| Email | `get`, `changes`, `query`, `queryChanges`¹, `set`, `import`, `parse` |
+| SearchSnippet | `get` |
+| Identity | `get`, `changes`² |
+| EmailSubmission | `get`, `changes`, `query`, `set` (mit `onSuccessUpdateEmail` / `onSuccessDestroyEmail`) |
+
+¹ liefert immer `cannotCalculateChanges` – der Client führt die Abfrage einfach neu aus.
+² Identitäten sind die Kontoadresse und die Aliase, die auf das Konto zeigen; bei Änderungen `cannotCalculateChanges`.
+
+Unterstützt werden Rückverweise (`#ids` mit `resultOf`/`name`/`path` inkl. `/*`), Erzeugungs-IDs
+(`#c1` in `ids`, `mailboxIds`, `emailId`, `parentId`, `onSuccessUpdateEmail`), `createdIds` und die
+Standardfehler (`unknownMethod`, `invalidArguments`, `invalidResultReference`, `accountNotFound`,
+`requestTooLarge`, `stateMismatch`, `cannotCalculateChanges`, `anchorNotFound`, `unsupportedFilter`,
+`unsupportedSort` …). Limits stehen im Session-Objekt (`maxCallsInRequest` 32, `maxObjectsInGet`/`maxObjectsInSet` 500,
+`maxSizeRequest` 10 MB, `maxSizeUpload` = maximale Nachrichtengröße, `maxConcurrentUpload` 4).
+
+### Hinweise für Clients
+
+- **Eine Mailbox je E-Mail** (`maxMailboxesPerEmail: 1`). Verschieben per Patch
+  `{"mailboxIds/<alt>": null, "mailboxIds/<neu>": true}`; mehrere Mailboxen ergeben `invalidProperties`.
+- **Ordnerhierarchie** über `/` im Namen (wie IMAP): `Kunden/2024` erscheint als `2024` mit `parentId` von `Kunden`.
+  Ordner mit Rolle (`inbox`, `drafts`, `sent`, `archive`, `junk`, `trash`) können nicht gelöscht werden,
+  der Posteingang kann auch nicht umbenannt werden.
+- **Keywords**: `$seen`, `$flagged`, `$answered`, `$draft` entsprechen den IMAP-Flags, weitere Keywords
+  (z. B. `$forwarded`, `$junk`) werden als IMAP-Keywords gespeichert (klein geschrieben).
+- **Email/query**: Filter `inMailbox`, `inMailboxOtherThan`, `before`, `after`, `minSize`, `maxSize`,
+  `hasKeyword`, `notKeyword`, `all/some/noneInThreadHaveKeyword`, `hasAttachment`, `text`, `body`, `from`, `to`,
+  `cc`, `bcc`, `subject`, `header` sowie `AND`/`OR`/`NOT`; Sortierung `receivedAt`, `sentAt` (= Empfangszeit), `size`,
+  `from`, `to`, `subject`, `hasKeyword`; `collapseThreads`, `position`/`anchor`/`limit` (höchstens 1000 IDs).
+  `header`- und `bcc`-Filter lesen die Nachrichten und sind auf Konten mit bis zu 20 000 Nachrichten begrenzt.
+- **Blob-IDs**: `G<sha256>` für ganze Nachrichten und Uploads, `G<sha256>_<teil>_<teil>` für MIME-Teile
+  (auch Teile angehängter Nachrichten). Uploads verfallen nach 24 Stunden, wenn sie nicht verwendet werden.
+- **Entwürfe** entstehen mit `Email/set` `create` aus `textBody`/`htmlBody`/`attachments` (Anhänge per
+  hochgeladener `blobId`) oder `bodyStructure`; fertige Nachrichten kommen per `Email/import` aus einem Upload.
+- **Senden** mit `EmailSubmission/set`: Der Server nimmt die gespeicherte E-Mail, entfernt `Bcc`, prüft den
+  Absender (From/Sender müssen zum Konto gehören, sonst `forbiddenFrom`), signiert per DKIM und stellt lokal zu
+  bzw. legt die Nachricht in die Warteschlange. Ohne `envelope` ergeben sich die Empfänger aus To/Cc/Bcc.
+  Die Ablage in „Gesendet“ erledigt `onSuccessUpdateEmail`, z. B.
+  `{"#s1": {"mailboxIds/<Entwürfe>": null, "mailboxIds/<Gesendet>": true, "keywords/$draft": null}}`.
+  Verzögertes Senden und Zurückholen gibt es nicht (`undoStatus` ist immer `final`).
+- **Änderungen**: Jede Änderung an Ordnern, Nachrichten und Threads erhöht eine fortlaufende Nummer pro Konto
+  (Grundlage für `state` und `/changes`). Gelöschte Objekte werden 30 Tage gemerkt (höchstens 100 000 je Konto
+  und Typ); ältere Zustände ergeben `cannotCalculateChanges`, dann lädt der Client neu.
+- **Push**: Die EventSource sendet `event: state` mit `{"@type":"StateChange","changed":{"A1":{"Email":"42",…}}}`
+  für die Typen `Mailbox`, `Email`, `Thread`, `EmailDelivery` (neue eingehende Mail) und `EmailSubmission`;
+  `ping` (10–600 s) sendet `event: ping`, `closeafter=state` beendet nach dem ersten Ereignis.
+  Hinter nginx o. Ä. die Pufferung für `/jmap/eventsource` abschalten (der Server sendet `X-Accel-Buffering: no`).
+- CORS-Header werden nicht gesendet: Web-Clients müssen unter derselben Adresse laufen (oder über einen Proxy).
+
+Beispiel (curl):
+
+```sh
+curl -u anna@example.org:APP-PASSWORT https://mail.example.org/.well-known/jmap
+curl -u anna@example.org:APP-PASSWORT -H 'Content-Type: application/json' https://mail.example.org/jmap/api -d '{
+  "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+  "methodCalls": [
+    ["Email/query", {"accountId": "A1", "filter": {"inMailbox": "M1"}, "sort": [{"property": "receivedAt", "isAscending": false}], "limit": 10}, "q"],
+    ["Email/get", {"accountId": "A1", "#ids": {"resultOf": "q", "name": "Email/query", "path": "/ids"},
+                   "properties": ["subject", "from", "receivedAt", "keywords", "preview"]}, "g"]
+  ]}'
+```

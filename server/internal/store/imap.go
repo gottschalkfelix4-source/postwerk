@@ -105,6 +105,9 @@ func (s *Store) IMAPMailboxByID(ctx context.Context, accountID, id int64) (*IMAP
 
 func (s *Store) SetMailboxSubscribed(ctx context.Context, accountID, id int64, on bool) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE mailboxes SET subscribed = ? WHERE id = ? AND account_id = ?`, on, id, accountID)
+	if err == nil {
+		s.logMailbox(ctx, accountID, id, 'u')
+	}
 	return err
 }
 
@@ -168,6 +171,7 @@ func (s *Store) SetIMAPFlags(ctx context.Context, accountID, id int64, f IMAPFla
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	s.logMessageUpdate(ctx, accountID, id, 0)
 	s.notify(accountID)
 	return nil
 }
@@ -214,6 +218,7 @@ func (s *Store) CopyMessage(ctx context.Context, accountID, id, destMailboxID in
 	}
 	if kw != "[]" {
 		_, _ = s.DB.ExecContext(ctx, `UPDATE messages SET keywords_json = ? WHERE id = ?`, kw, cp.ID)
+		s.logMessageUpdate(ctx, accountID, cp.ID, 0)
 	}
 	return &cp, nil
 }

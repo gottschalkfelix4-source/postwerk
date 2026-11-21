@@ -201,7 +201,8 @@ func (s *Store) PurgeVacationReplies(ctx context.Context, maxAge time.Duration) 
 // blobReferenced reports whether a message or queue entry uses the blob.
 func (s *Store) blobReferenced(ctx context.Context, hash string) (bool, error) {
 	var n int
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE blob_hash = ?) OR EXISTS(SELECT 1 FROM queue WHERE blob_hash = ?)`, hash, hash).Scan(&n)
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE blob_hash = ?) OR EXISTS(SELECT 1 FROM queue WHERE blob_hash = ?)
+		OR EXISTS(SELECT 1 FROM jmap_uploads WHERE blob_hash = ?)`, hash, hash, hash).Scan(&n)
 	return n != 0, err
 }
 

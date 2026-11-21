@@ -285,6 +285,48 @@ var migrations = []string{
 		until INTEGER NOT NULL,
 		failures INTEGER NOT NULL
 	);`,
+	// JMAP: per-account modseq with a change log for Mailbox/Email/Thread
+	// state, uploaded blobs and email submissions.
+	`CREATE TABLE jmap_state (
+		account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+		modseq INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE jmap_changes (
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		type TEXT NOT NULL,
+		obj_id INTEGER NOT NULL,
+		modseq INTEGER NOT NULL,
+		created_modseq INTEGER NOT NULL DEFAULT 0,
+		destroyed INTEGER NOT NULL DEFAULT 0,
+		changed_at INTEGER NOT NULL,
+		PRIMARY KEY (account_id, type, obj_id)
+	);
+	CREATE INDEX jmap_changes_seq ON jmap_changes(account_id, type, modseq);
+	CREATE TABLE jmap_floors (
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		type TEXT NOT NULL,
+		floor INTEGER NOT NULL,
+		PRIMARY KEY (account_id, type)
+	);
+	CREATE TABLE jmap_uploads (
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		blob_hash TEXT NOT NULL,
+		type TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (account_id, blob_hash)
+	);
+	CREATE INDEX jmap_uploads_hash ON jmap_uploads(blob_hash);
+	CREATE TABLE jmap_submissions (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		identity_id TEXT NOT NULL,
+		email_id INTEGER NOT NULL,
+		thread_id INTEGER NOT NULL,
+		envelope_json TEXT NOT NULL,
+		send_at INTEGER NOT NULL
+	);
+	CREATE INDEX jmap_submissions_account ON jmap_submissions(account_id);`,
 }
 
 func migrate(db *sql.DB) error {

@@ -28,6 +28,7 @@ import (
 	"postwerk/internal/delivery"
 	"postwerk/internal/dyndns"
 	"postwerk/internal/httpport"
+	"postwerk/internal/jmap"
 	"postwerk/internal/logx"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
@@ -68,6 +69,8 @@ type Server struct {
 	DynDNS     *dyndns.Updater
 	HTTPPort   *httpport.Controller
 	Backups    *backup.Manager
+	// JMAP serves /.well-known/jmap and /jmap/* (optional).
+	JMAP *jmap.Server
 
 	setupMu sync.Mutex
 }
@@ -207,7 +210,7 @@ func (s *Server) bodyLimit(r *http.Request) int64 {
 // streamingUpload reports endpoints that read large multipart bodies with
 // their own limits.
 func streamingUpload(r *http.Request) bool {
-	return r.URL.Path == "/api/mail/import" || r.URL.Path == "/api/admin/backups/upload"
+	return r.URL.Path == "/api/mail/import" || r.URL.Path == "/api/admin/backups/upload" || strings.HasPrefix(r.URL.Path, "/jmap/upload/")
 }
 
 // bodyReadTimeout bounds how long reading a request body may take, so slow
@@ -343,6 +346,16 @@ func (s *Server) secureCookie(r *http.Request) bool {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes(mux)
+	if s.JMAP != nil {
+		// JMAP lives outside /api/ and authenticates itself (Basic auth or
+		// the session cookie plus the CSRF header).
+		s.JMAP.ClientInfo = func(r *http.Request) (string, bool) {
+			c := s.resolveClient(r)
+			return c.client, c.https
+		}
+		s.JMAP.CookieAuth = s.currentUser
+		s.JMAP.Register(mux)
+	}
 
 	mux.HandleFunc("GET /.well-known/mta-sts.txt", s.mtaSTS)
 	mux.HandleFunc("GET /mail/config-v1.1.xml", s.autoconfig)

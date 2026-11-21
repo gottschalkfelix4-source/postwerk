@@ -142,6 +142,7 @@ func (s *Store) CreateMailbox(ctx context.Context, accountID int64, name string)
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
+	s.logMailbox(ctx, accountID, id, 'c')
 	return &Mailbox{ID: id, Name: name}, nil
 }
 
@@ -149,6 +150,9 @@ func (s *Store) RenameMailbox(ctx context.Context, accountID, id int64, name str
 	_, err := s.DB.ExecContext(ctx, `UPDATE mailboxes SET name = ? WHERE id = ? AND account_id = ?`, name, id, accountID)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrConflict
+	}
+	if err == nil {
+		s.logMailbox(ctx, accountID, id, 'u')
 	}
 	return err
 }
@@ -162,9 +166,12 @@ func (s *Store) DeleteMailbox(ctx context.Context, accountID, id int64) error {
 		return ErrConflict
 	}
 	hashes := s.blobHashes(ctx, `SELECT blob_hash FROM messages WHERE mailbox_id = ?`, id)
+	refs := s.mailboxMessageRefs(ctx, id)
 	if _, err := s.DB.ExecContext(ctx, `DELETE FROM mailboxes WHERE id = ?`, id); err != nil {
 		return err
 	}
+	s.logMessagesDeleted(ctx, accountID, refs, objChange{TypeMailbox, id, 'd'})
+	s.notify(accountID)
 	for _, h := range hashes {
 		s.releaseBlob(ctx, h)
 	}
@@ -267,6 +274,7 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 	}); err != nil {
 		return err
 	}
+	s.logMessageInsert(ctx, m)
 	s.notify(m.AccountID)
 	return nil
 }
@@ -409,10 +417,12 @@ func (s *Store) UpdateMessage(ctx context.Context, accountID, id int64, p Messag
 		sets = append(sets, "tags_json = ?")
 		args = append(args, js(*p.Tags))
 	}
+	var oldMailbox int64
 	if p.MailboxID != nil {
 		if _, err := s.MailboxOwned(ctx, accountID, *p.MailboxID); err != nil {
 			return err
 		}
+		oldMailbox = s.messageMailbox(ctx, accountID, id)
 		sets = append(sets, "mailbox_id = ?", "uid = (SELECT uid_next FROM mailboxes WHERE id = ?)")
 		args = append(args, *p.MailboxID, *p.MailboxID)
 	}
@@ -433,6 +443,7 @@ func (s *Store) UpdateMessage(ctx context.Context, accountID, id int64, p Messag
 		return err
 	})
 	if err == nil {
+		s.logMessageUpdate(ctx, accountID, id, oldMailbox)
 		s.notify(accountID)
 	}
 	return err
@@ -502,6 +513,7 @@ func (s *Store) DeleteMessage(ctx context.Context, accountID, id int64) error {
 		return err
 	}
 	s.releaseBlob(ctx, m.BlobHash)
+	s.logMessagesDeleted(ctx, accountID, []msgRef{{m.ID, m.MailboxID, m.ThreadID}})
 	s.notify(accountID)
 	return nil
 }
@@ -521,10 +533,12 @@ func (s *Store) blobHashes(ctx context.Context, q string, args ...any) []string 
 	return out
 }
 
-// releaseBlob deletes a blob once neither messages nor the queue reference it.
+// releaseBlob deletes a blob once neither messages, the queue nor JMAP
+// uploads reference it.
 func (s *Store) releaseBlob(ctx context.Context, hash string) {
 	var n int
-	if err := s.DB.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM messages WHERE blob_hash = ?) + (SELECT COUNT(*) FROM queue WHERE blob_hash = ?)`, hash, hash).Scan(&n); err == nil && n == 0 {
+	if err := s.DB.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM messages WHERE blob_hash = ?) + (SELECT COUNT(*) FROM queue WHERE blob_hash = ?)
+		+ (SELECT COUNT(*) FROM jmap_uploads WHERE blob_hash = ?)`, hash, hash, hash).Scan(&n); err == nil && n == 0 {
 		_ = s.Blobs.Delete(hash)
 	}
 }

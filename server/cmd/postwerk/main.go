@@ -29,6 +29,7 @@ import (
 	"postwerk/internal/dyndns"
 	"postwerk/internal/httpport"
 	"postwerk/internal/imapd"
+	"postwerk/internal/jmap"
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
@@ -209,9 +210,12 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 
+	jmapSrv := &jmap.Server{Store: st, Auth: authn, Delivery: svc, MaxSize: maxSize, Log: log.With("component", "jmap"), AllowInsecureAuth: cfg.AllowInsecureAuth}
+	go jmapSrv.Run(ctx)
 	apiSrv := &api.Server{
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
 		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn, Backups: backups,
+		JMAP: jmapSrv,
 	}
 	handler := apiSrv.Handler()
 	httpCtl := &httpport.Controller{

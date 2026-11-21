@@ -336,7 +336,7 @@ func (ss *session) Append(name string, r imap.LiteralReader, options *imap.Appen
 		ReceivedAt: options.Time, Seen: f.Seen, Flagged: f.Flagged, Answered: f.Answered, SkipAI: mb.Role != "inbox",
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "Quota") {
+		if errors.Is(err, store.ErrQuota) || strings.Contains(err.Error(), "Quota") {
 			return nil, errNo(imap.ResponseCodeOverQuota, "Quota exceeded")
 		}
 		return nil, err

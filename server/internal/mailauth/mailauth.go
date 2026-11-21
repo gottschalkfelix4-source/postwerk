@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	mrand "math/rand/v2"
 	"net"
 	"strings"
 	"time"
@@ -28,10 +29,18 @@ type Result struct {
 	SPFDomain   string
 	DKIM        string // pass, fail, none
 	DKIMDomains []string
-	DMARC       string // pass, fail, none
-	DMARCPolicy string // none, quarantine, reject
+	DMARC       string // pass, fail, none, temperror
+	// DMARCPolicy is the policy to apply on failure after sp= (subdomains)
+	// and pct= have been taken into account: none, quarantine, reject.
+	DMARCPolicy string
 	FromDomain  string
 }
+
+// Hooks for tests.
+var (
+	lookupDMARC = dmarc.Lookup
+	randPercent = func() int { return mrand.IntN(100) }
+)
 
 // Check runs SPF, DKIM and DMARC for an inbound message.
 func Check(ctx context.Context, ip net.IP, helo, mailFrom, fromDomain string, raw []byte) Result {
@@ -69,20 +78,50 @@ func Check(ctx context.Context, ip net.IP, helo, mailFrom, fromDomain string, ra
 	if fromDomain == "" {
 		return r
 	}
-	rec, err := dmarc.Lookup(fromDomain)
+	rec, err := lookupDMARC(fromDomain)
+	viaOrg := false
 	if errors.Is(err, dmarc.ErrNoPolicy) {
 		if org := orgDomain(fromDomain); org != fromDomain {
-			rec, err = dmarc.Lookup(org)
+			rec, err = lookupDMARC(org)
+			viaOrg = true
 		}
 	}
 	if err != nil || rec == nil {
+		if err != nil && dmarc.IsTempFail(err) {
+			r.DMARC = "temperror"
+		}
 		return r
 	}
-	r.DMARCPolicy = string(rec.Policy)
-	spfAligned := r.SPF == "pass" && aligned(r.SPFDomain, fromDomain, rec.SPFAlignment)
+	evaluateDMARC(&r, rec, viaOrg)
+	return r
+}
+
+// evaluateDMARC sets DMARC and DMARCPolicy from a policy record. viaOrg is
+// true when the record was found at the organizational domain, in which case
+// sp= applies to the (sub)domain of the From header.
+func evaluateDMARC(r *Result, rec *dmarc.Record, viaOrg bool) {
+	policy := rec.Policy
+	if viaOrg && rec.SubdomainPolicy != "" {
+		policy = rec.SubdomainPolicy
+	}
+	if policy == "" {
+		policy = dmarc.PolicyNone
+	}
+	// pct=: messages outside the sampled percentage get the next less strict
+	// policy (RFC 7489 section 6.6.4).
+	if rec.Percent != nil && *rec.Percent < 100 && randPercent() >= *rec.Percent {
+		switch policy {
+		case dmarc.PolicyReject:
+			policy = dmarc.PolicyQuarantine
+		case dmarc.PolicyQuarantine:
+			policy = dmarc.PolicyNone
+		}
+	}
+	r.DMARCPolicy = string(policy)
+	spfAligned := r.SPF == "pass" && aligned(r.SPFDomain, r.FromDomain, rec.SPFAlignment)
 	dkimAligned := false
 	for _, d := range r.DKIMDomains {
-		if aligned(d, fromDomain, rec.DKIMAlignment) {
+		if aligned(d, r.FromDomain, rec.DKIMAlignment) {
 			dkimAligned = true
 			break
 		}
@@ -92,7 +131,29 @@ func Check(ctx context.Context, ip net.IP, helo, mailFrom, fromDomain string, ra
 	} else {
 		r.DMARC = "fail"
 	}
-	return r
+}
+
+// within reports whether d equals domain or is a subdomain of it.
+func within(d, domain string) bool {
+	d, domain = strings.ToLower(strings.TrimSuffix(d, ".")), strings.ToLower(strings.TrimSuffix(domain, "."))
+	return d != "" && domain != "" && (d == domain || strings.HasSuffix(d, "."+domain))
+}
+
+// AuthenticatedFor reports whether the message is authenticated for domain:
+// SPF passed for a MAIL FROM within domain, or a valid DKIM signature of
+// domain (or one of its subdomains) is present. Unlike relaxed DMARC
+// alignment this does not rely on the public suffix list, so a sibling
+// domain under a shared parent cannot vouch for a hosted domain.
+func (r Result) AuthenticatedFor(domain string) bool {
+	if r.SPF == "pass" && within(r.SPFDomain, domain) {
+		return true
+	}
+	for _, d := range r.DKIMDomains {
+		if within(d, domain) {
+			return true
+		}
+	}
+	return false
 }
 
 func aligned(d, from string, mode dmarc.AlignmentMode) bool {
@@ -155,6 +216,15 @@ func DNSValue(privPEM string) (string, error) {
 	return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der), nil
 }
 
+// SignedHeaders lists the header fields covered by our DKIM signatures.
+// From, Subject, To, Date and Message-ID appear twice (oversigning): the
+// second, non-existent instance makes the signature break if anyone adds
+// another copy of these fields later.
+var SignedHeaders = []string{
+	"From", "From", "Subject", "Subject", "To", "To", "Date", "Date", "Message-ID", "Message-ID",
+	"Cc", "Reply-To", "In-Reply-To", "References", "MIME-Version", "Content-Type", "Content-Transfer-Encoding",
+}
+
 // Sign prepends a DKIM-Signature header to raw.
 func Sign(raw []byte, domain, selector, privPEM string) ([]byte, error) {
 	k, err := parseKey(privPEM)
@@ -167,7 +237,7 @@ func Sign(raw []byte, domain, selector, privPEM string) ([]byte, error) {
 		Signer:                 crypto.Signer(k),
 		HeaderCanonicalization: dkim.CanonicalizationRelaxed,
 		BodyCanonicalization:   dkim.CanonicalizationRelaxed,
-		HeaderKeys:             []string{"From", "To", "Cc", "Subject", "Date", "Message-ID", "In-Reply-To", "References", "MIME-Version", "Content-Type", "Content-Transfer-Encoding"},
+		HeaderKeys:             SignedHeaders,
 	}
 	var out bytes.Buffer
 	if err := dkim.Sign(&out, bytes.NewReader(raw), opts); err != nil {

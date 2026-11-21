@@ -132,11 +132,12 @@ export interface Settings {
   antivirus: { enabled: boolean; clamdAddress: string; action: "reject" | "quarantine" };
   ai: {
     enabled: boolean;
-    /** Wire protocol of baseUrl: OpenAI-compatible (Ollama, OpenAI, …) or Anthropic Messages API. */
+    /** Wire protocol of baseUrl: OpenAI-compatible (Ollama, OpenAI, …), Anthropic Messages API, or "chatgpt"
+     *  (ChatGPT subscription via device-code sign-in; baseUrl/apiKey unused, see adminApi.chatgpt*). */
     provider: AiProvider;
     baseUrl: string; apiKey: string /* masked "••••" when set */;
     chatModel: string; embeddingModel: string; timeoutSeconds: number;
-    /** Optional separate OpenAI-compatible endpoint for embeddings (needed with "anthropic"). */
+    /** Optional separate OpenAI-compatible endpoint for embeddings (needed with "anthropic" and "chatgpt"). */
     embeddingBaseUrl: string; embeddingApiKey: string /* masked */;
     maxTokens: number;            // anthropic: max_tokens per request
     features: { spamCheck: boolean; classify: boolean; priority: boolean; summarize: boolean;
@@ -419,7 +420,36 @@ export interface UpdateAccountRequest {
   name?: string; password?: string; role?: Role; quotaBytes?: number; disabled?: boolean; resetTotp?: boolean; source?: AccountSource;
 }
 
-export type AiProvider = "openai" | "anthropic";
+export type AiProvider = "openai" | "anthropic" | "chatgpt";
+
+/** Device-code sign-in with a ChatGPT subscription (runs on the server). */
+export interface ChatGptLogin {
+  id: string;
+  status: "pending" | "success" | "expired" | "denied" | "failed" | "canceled";
+  userCode: string;
+  verificationUrl: string;
+  expiresAt: string;
+  interval: number;
+  error?: string;
+  email?: string;
+  plan?: string;
+}
+
+/** State of the ChatGPT sign-in; tokens never leave the server. */
+export interface ChatGptStatus {
+  connected: boolean;
+  email?: string;
+  plan?: string;
+  expiresAt?: string;
+  connectedAt?: string;
+  /** Set when the sign-in was lost (refresh failed). */
+  error?: string;
+  /** Active usage limit of the plan. */
+  limit?: string;
+  limitUntil?: string;
+  /** Sign-in currently waiting for the code to be entered. */
+  login?: ChatGptLogin;
+}
 
 export interface AiTestResult {
   ok: boolean; latencyMs: number; models: string[]; error?: string;

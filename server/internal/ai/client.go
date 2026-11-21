@@ -1,8 +1,9 @@
 // Package ai talks to a language model for classification, summaries,
-// drafts, extraction and embeddings. Two wire protocols are supported:
-// OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, OpenAI, OpenRouter,
-// Mistral, ...) and the Anthropic Messages API (plus compatible services).
-// Embeddings always use an OpenAI-compatible endpoint.
+// drafts, extraction and embeddings. Supported are OpenAI-compatible
+// endpoints (Ollama, LM Studio, vLLM, OpenAI, OpenRouter, Mistral, ...), the
+// Anthropic Messages API (plus compatible services) and a ChatGPT
+// subscription via "Sign in with ChatGPT" (chatgpt.go). Embeddings always use
+// an OpenAI-compatible endpoint.
 package ai
 
 import (
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -25,15 +27,18 @@ const (
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
 
-	anthropicVersion  = "2023-06-01"
-	defaultMaxTokens  = 16000
-	jsonOnlyAnthropic = "\n\nAntworte ausschließlich mit einem einzigen gültigen JSON-Objekt – ohne Markdown-Codeblock und ohne Text davor oder danach."
+	anthropicVersion    = "2023-06-01"
+	defaultMaxTokens    = 16000
+	jsonOnlyInstruction = "\n\nAntworte ausschließlich mit einem einzigen gültigen JSON-Objekt – ohne Markdown-Codeblock und ohne Text davor oder danach."
 )
 
 // Provider normalizes the configured provider ("" means OpenAI-compatible).
 func Provider(cfg store.AISettings) string {
-	if strings.EqualFold(strings.TrimSpace(cfg.Provider), ProviderAnthropic) {
+	switch p := strings.TrimSpace(cfg.Provider); {
+	case strings.EqualFold(p, ProviderAnthropic):
 		return ProviderAnthropic
+	case strings.EqualFold(p, ProviderChatGPT):
+		return ProviderChatGPT
 	}
 	return ProviderOpenAI
 }
@@ -41,6 +46,16 @@ func Provider(cfg store.AISettings) string {
 type Client struct {
 	Settings *store.SettingsCache
 	HTTP     *http.Client
+	Log      *slog.Logger // optional
+	// ChatGPTIssuer and ChatGPTBackend override the ChatGPT sign-in service
+	// and API (tests); empty means the official endpoints.
+	ChatGPTIssuer  string
+	ChatGPTBackend string
+	// OnChatGPTChange is called after a ChatGPT sign-in, a logout and when
+	// the sign-in was lost because the tokens could not be refreshed.
+	OnChatGPTChange func(connected bool)
+
+	cg chatGPTState
 }
 
 func NewClient(s *store.SettingsCache) *Client {
@@ -49,7 +64,7 @@ func NewClient(s *store.SettingsCache) *Client {
 
 func (c *Client) cfg() (store.AISettings, error) {
 	cfg := c.Settings.Get().AI
-	if !cfg.Enabled || cfg.BaseURL == "" {
+	if !cfg.Enabled || (cfg.BaseURL == "" && Provider(cfg) != ProviderChatGPT) {
 		return cfg, ErrDisabled
 	}
 	return cfg, nil
@@ -62,6 +77,11 @@ type apiError struct {
 }
 
 func (e *apiError) Error() string { return e.Msg }
+
+// Is makes HTTP 429 match ErrRateLimited for every provider.
+func (e *apiError) Is(target error) bool {
+	return target == ErrRateLimited && e.Status == http.StatusTooManyRequests
+}
 
 func (c *Client) do(ctx context.Context, cfg store.AISettings, method, url string, headers map[string]string, body any, out any) error {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
@@ -167,12 +187,7 @@ func (c *Client) Chat(ctx context.Context, system, user string, jsonMode bool) (
 	if err != nil {
 		return "", err
 	}
-	var text string
-	if Provider(cfg) == ProviderAnthropic {
-		text, err = c.chatAnthropic(ctx, cfg, system, user, jsonMode)
-	} else {
-		text, err = c.chatOpenAI(ctx, cfg, system, user, jsonMode)
-	}
+	text, err := c.chatProvider(ctx, cfg, system, user, jsonMode)
 	if err != nil {
 		return "", err
 	}
@@ -220,7 +235,7 @@ func (c *Client) chatOpenAI(ctx context.Context, cfg store.AISettings, system, u
 
 func (c *Client) chatAnthropic(ctx context.Context, cfg store.AISettings, system, user string, jsonMode bool) (string, error) {
 	if jsonMode {
-		system += jsonOnlyAnthropic
+		system += jsonOnlyInstruction
 	}
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
@@ -341,7 +356,14 @@ type TestResult struct {
 // test request. Services without a model list still pass via the chat test.
 func (c *Client) TestConnection(ctx context.Context) (*TestResult, error) {
 	cfg := c.Settings.Get().AI
-	if cfg.BaseURL == "" {
+	if Provider(cfg) == ProviderChatGPT {
+		if _, err := c.chatGPTModels(ctx); err != nil {
+			return nil, err
+		}
+		if cfg.ChatModel == "" {
+			cfg.ChatModel = ChatGPTDefaultModel
+		}
+	} else if cfg.BaseURL == "" {
 		return nil, errors.New("keine Basis-URL konfiguriert")
 	}
 	res := &TestResult{Models: []string{}}
@@ -383,10 +405,17 @@ func (c *Client) TestConnection(ctx context.Context) (*TestResult, error) {
 
 // chatWith sends a plain (non-JSON) chat with an explicit configuration.
 func (c *Client) chatWith(ctx context.Context, cfg store.AISettings, system, user string) (string, error) {
-	if Provider(cfg) == ProviderAnthropic {
-		return c.chatAnthropic(ctx, cfg, system, user, false)
+	return c.chatProvider(ctx, cfg, system, user, false)
+}
+
+func (c *Client) chatProvider(ctx context.Context, cfg store.AISettings, system, user string, jsonMode bool) (string, error) {
+	switch Provider(cfg) {
+	case ProviderAnthropic:
+		return c.chatAnthropic(ctx, cfg, system, user, jsonMode)
+	case ProviderChatGPT:
+		return c.chatChatGPT(ctx, cfg, system, user, jsonMode)
 	}
-	return c.chatOpenAI(ctx, cfg, system, user, false)
+	return c.chatOpenAI(ctx, cfg, system, user, jsonMode)
 }
 
 func (c *Client) models(ctx context.Context, cfg store.AISettings) ([]string, error) {
@@ -396,9 +425,12 @@ func (c *Client) models(ctx context.Context, cfg store.AISettings) ([]string, er
 		} `json:"data"`
 	}
 	var err error
-	if Provider(cfg) == ProviderAnthropic {
+	switch Provider(cfg) {
+	case ProviderChatGPT:
+		return c.chatGPTModels(ctx)
+	case ProviderAnthropic:
 		err = c.do(ctx, cfg, http.MethodGet, anthropicURL(cfg.BaseURL, "/models?limit=1000"), anthropicHeaders(cfg.APIKey), nil, &resp)
-	} else {
+	default:
 		err = c.do(ctx, cfg, http.MethodGet, openAIURL(cfg.BaseURL, "/models"), openAIHeaders(cfg.APIKey), nil, &resp)
 	}
 	if err != nil {

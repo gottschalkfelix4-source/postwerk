@@ -587,14 +587,14 @@ export function ProtectionStep({ onBack, onNext }: StepProps) {
         <div className="border-t border-zinc-100 dark:border-zinc-800" />
 
         <section className="space-y-4">
-          <SectionTitle icon={Bot} title="KI" text="Lokal über Ollama oder ein externer Dienst mit OpenAI- oder Anthropic-kompatibler API." />
+          <SectionTitle icon={Bot} title="KI" text="Lokal über Ollama, ein externer Dienst mit OpenAI- oder Anthropic-kompatibler API oder dein ChatGPT-Abo." />
           <SwitchRow label="KI-Funktionen aktivieren" description="Zusammenfassungen, Kategorien, Antwortentwürfe und semantische Suche." checked={draft.ai.enabled} onChange={(v) => setAi({ enabled: v })} />
           {draft.ai.enabled && (
             <div className="animate-fade-in space-y-4">
               <AiProviderPicker value={draft.ai} onChange={setAi} />
               <AiConnectionFields value={draft.ai} onChange={setAi} />
               <div className="flex flex-wrap items-center gap-3">
-                <Button icon={PlugZap} loading={aiTest.isPending} disabled={!draft.ai.baseUrl.trim()} onClick={() => aiTest.mutate()}>
+                <Button icon={PlugZap} loading={aiTest.isPending} disabled={draft.ai.provider !== "chatgpt" && !draft.ai.baseUrl.trim()} onClick={() => aiTest.mutate()}>
                   Verbindung testen
                 </Button>
                 {!deepEqual(draft.ai, s.ai) && <span className="text-xs text-zinc-500 dark:text-zinc-400">Die KI-Einstellungen werden vor dem Test gespeichert.</span>}

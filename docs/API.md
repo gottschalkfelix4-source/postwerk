@@ -663,6 +663,56 @@ interface AutoFile {
 Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
 `categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.
 
+## KI: ChatGPT-Abo (Anmeldung mit ChatGPT)
+
+Mit `ai.provider = "chatgpt"` laufen die KI-Anfragen über das ChatGPT-Abo (Plus, Pro, …) des
+Admins statt über einen API-Schlüssel; `baseUrl` und `apiKey` werden dann nicht verwendet. Die
+Anmeldung nutzt den Gerätecode-Ablauf von `auth.openai.com`: Der Server fordert einen Code an, der
+Admin gibt ihn auf der Bestätigungsseite ein, der Server fragt im Hintergrund nach (Code 15 Minuten
+gültig) und speichert die Tokens mit dem Master-Schlüssel verschlüsselt außerhalb der Einstellungen.
+Tokens verlassen den Server nie – weder über `/api/admin/settings` noch über die Endpunkte unten.
+Das Access-Token wird kurz vor Ablauf und nach einer Ablehnung (HTTP 401) automatisch erneuert;
+scheitert die Erneuerung endgültig, gilt die Verbindung als getrennt und das Dashboard (und damit die
+Benachrichtigungen, Kategorie `system`) meldet `ai-chatgpt-auth`. Ein erreichtes Nutzungslimit des
+Abos (HTTP 429) erscheint als `ai-chatgpt-limit`; die Analyse neuer Mails pausiert bis zum
+Zurücksetzen und wird danach nachgeholt. Embeddings bietet das Abo nicht: Für die semantische Suche
+ist `ai.embeddingBaseUrl` (z. B. Ollama) nötig. Lehnt die Bestätigungsseite den Code ab, muss in
+ChatGPT unter Einstellungen → Sicherheit die Gerätecode-Anmeldung aktiviert werden.
+
+```ts
+interface ChatGptLogin {
+  id: string;
+  status: "pending" | "success" | "expired" | "denied" | "failed" | "canceled";
+  userCode: string;          // auf verificationUrl einzugeben
+  verificationUrl: string;   // https://auth.openai.com/codex/device
+  expiresAt: string;         // RFC 3339
+  interval: number;          // Abfrageintervall des Servers in Sekunden
+  error?: string;
+  email?: string; plan?: string;   // bei "success"
+}
+
+interface ChatGptStatus {
+  connected: boolean;
+  email?: string; plan?: string;   // z. B. "Plus"
+  expiresAt?: string;              // Ablauf des aktuellen Access-Tokens
+  connectedAt?: string;
+  error?: string;                  // Verbindung verloren (Erneuerung gescheitert)
+  limit?: string; limitUntil?: string;   // aktives Nutzungslimit
+  login?: ChatGptLogin;            // laufende Anmeldung
+}
+```
+
+| Methode | Pfad (`/api/admin`) | Body | Antwort |
+|---|---|---|---|
+| GET | `/ai/chatgpt` | – | `ChatGptStatus` |
+| POST | `/ai/chatgpt/login` | – | `ChatGptLogin` (startet die Anmeldung, bricht eine laufende ab) |
+| GET | `/ai/chatgpt/login/{id}` | – | `ChatGptLogin` (404, wenn die Anmeldung unbekannt ist) |
+| POST | `/ai/chatgpt/logout` | – | `{ ok }` (widerruft das Refresh-Token, löscht die Anmeldung) |
+
+Fehler beim Start: `chatgpt_error` (502) mit Meldung des Anmeldedienstes. `/settings/ai/test`
+prüft die Anmeldung und sendet eine kurze Testanfrage; `models` enthält dann die Modellliste des
+Codex-Katalogs (andere Modellnamen sind frei eintragbar).
+
 ## JMAP (RFC 8620 / RFC 8621)
 
 Neben der REST-API spricht Postwerk JMAP für Mailclients und eigene Skripte. Das Webmail nutzt

@@ -687,6 +687,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 		s.Log.Info("tls settings changed", "component", "tls", "status", s.TLS.Status())
 	}
 	if s.AIWorker != nil {
+		if patch["ai"] != nil {
+			s.AIWorker.Resume()
+		}
 		s.AIWorker.Notify()
 	}
 	if s.Backups != nil && patch["backup"] != nil {
@@ -834,6 +837,8 @@ func validateSettings(c, old *store.Settings) error {
 		c.AI.Provider = "openai"
 	case "anthropic":
 		c.AI.Provider = "anthropic"
+	case "chatgpt":
+		c.AI.Provider = "chatgpt"
 	default:
 		return invalid("Unbekannter KI-Anbieter: " + c.AI.Provider)
 	}

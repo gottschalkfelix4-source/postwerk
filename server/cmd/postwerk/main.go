@@ -171,6 +171,15 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	// immediate evaluation.
 	notifier := &notify.Service{Store: st, Settings: settings, Mailer: svc, Log: log}
 	svc.OnSendLimit = func(*store.Account, string, int) { notifier.Trigger() }
+	// A new ChatGPT sign-in resumes the AI analysis; a lost one is reported.
+	aiClient.Log = log
+	aiClient.OnChatGPTChange = func(connected bool) {
+		if connected {
+			aiWorker.Resume()
+			aiWorker.Notify()
+		}
+		notifier.Trigger()
+	}
 
 	backups := &backup.Manager{Store: st, Settings: settings, DataDir: cfg.DataDir, Version: version, Log: log,
 		Restart: func() { restart = true; cancel() }, OnFailure: notifier.Trigger}

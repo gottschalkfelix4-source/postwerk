@@ -234,6 +234,9 @@ func (s *Server) dashboardWarnings(ctx context.Context) []dashWarning {
 	// Accounts that ran into a send limit.
 	out = append(out, s.sendLimitWarnings(ctx)...)
 
+	// AI provider "chatgpt": lost sign-in, exhausted plan limit.
+	out = append(out, s.chatGPTWarnings(ctx, cfg.AI)...)
+
 	// Reputation of the own IP only matters when mail leaves directly.
 	if host != "" && s.Cfg.RelayHost == "" && !(cfg.Relay.Enabled && cfg.Relay.Host != "") {
 		out = append(out, opsNet.snapshot(host)...)

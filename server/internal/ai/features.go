@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -286,6 +287,59 @@ type Worker struct {
 	Hooks  Hooks
 	wake   chan struct{}
 	failed sync.Map // message id -> attempts
+
+	pauseMu     sync.Mutex
+	pausedUntil time.Time // set while a usage limit is exhausted
+}
+
+// Pause and backoff of the analysis loop after rate limits (HTTP 429, an
+// exhausted ChatGPT plan) or temporary failures: the messages are not
+// counted as failed and are processed once the pause is over.
+const (
+	defaultLimitPause = 15 * time.Minute
+	tempFailurePause  = 5 * time.Minute
+)
+
+// Resume ends a pause early, e.g. after the AI settings changed.
+func (w *Worker) Resume() {
+	w.pauseMu.Lock()
+	w.pausedUntil = time.Time{}
+	w.pauseMu.Unlock()
+}
+
+// PausedUntil returns the end of the current pause (zero if not paused).
+func (w *Worker) PausedUntil() time.Time {
+	w.pauseMu.Lock()
+	defer w.pauseMu.Unlock()
+	if time.Now().Before(w.pausedUntil) {
+		return w.pausedUntil
+	}
+	return time.Time{}
+}
+
+// backoff pauses the loop for errors that do not concern the message
+// itself and reports whether the loop has to stop.
+func (w *Worker) backoff(err error) bool {
+	var until time.Time
+	switch {
+	case errors.Is(err, ErrRateLimited):
+		until = RetryAt(err)
+		if !until.After(time.Now()) {
+			until = time.Now().Add(defaultLimitPause)
+		}
+	case errors.Is(err, ErrUnavailable):
+		until = time.Now().Add(tempFailurePause)
+	case errors.Is(err, ErrNotConnected):
+		// A new sign-in or changed settings end the pause early (Resume).
+		until = time.Now().Add(time.Hour)
+	default:
+		return false
+	}
+	w.pauseMu.Lock()
+	w.pausedUntil = until
+	w.pauseMu.Unlock()
+	w.Log.Warn("analysis paused", "until", until.Format(time.RFC3339), "err", err)
+	return true
 }
 
 func NewWorker(c *Client, st *store.Store, log *slog.Logger) *Worker {
@@ -326,7 +380,7 @@ func (w *Worker) fail(id int64) {
 
 func (w *Worker) process(ctx context.Context) {
 	cfg := w.Client.Settings.Get().AI
-	if !cfg.Enabled {
+	if !cfg.Enabled || !w.PausedUntil().IsZero() {
 		return
 	}
 	for {
@@ -344,6 +398,9 @@ func (w *Worker) process(ctx context.Context) {
 			}
 			progressed = true
 			if err := w.analyze(ctx, id); err != nil {
+				if w.backoff(err) {
+					return
+				}
 				w.fail(id)
 				w.Log.Warn("analysis failed", "message", id, "err", err)
 				if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "no such host") {
@@ -373,6 +430,9 @@ func (w *Worker) process(ctx context.Context) {
 			}
 			progressed = true
 			if err := w.embed(ctx, id); err != nil {
+				if w.backoff(err) {
+					return
+				}
 				w.fail(-id)
 				w.Log.Warn("embedding failed", "message", id, "err", err)
 				if strings.Contains(err.Error(), "connection refused") {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"postwerk/internal/ai"
 	"postwerk/internal/auth"
 	"postwerk/internal/av"
 	"postwerk/internal/mailauth"
@@ -315,9 +316,14 @@ func (s *Server) systemCheck(w http.ResponseWriter, r *http.Request, u *store.Ac
 		actx, acancel := context.WithTimeout(ctx, 8*time.Second)
 		models, err := s.AI.Models(actx)
 		acancel()
-		if err != nil {
+		switch {
+		case err != nil && ai.Provider(cfg.AI) == ai.ProviderChatGPT:
+			aiStatus, aiDetail = "error", err.Error()
+		case err != nil:
 			aiStatus, aiDetail = "error", "KI-Endpunkt nicht erreichbar: "+err.Error()
-		} else {
+		case ai.Provider(cfg.AI) == ai.ProviderChatGPT:
+			aiStatus, aiDetail = "ok", "Mit ChatGPT angemeldet"
+		default:
 			aiStatus, aiDetail = "ok", "Endpunkt erreichbar, "+itoa(len(models))+" Modelle verfügbar"
 		}
 	}

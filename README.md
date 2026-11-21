@@ -24,7 +24,7 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
   Zusammenfassungen, Antwortentwürfe, semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung,
   Schutz gegen versteckte Anweisungen in Mails (Prompt-Injection) – **lokal mit Ollama**
   oder über externe Dienste mit **OpenAI-kompatibler** (OpenAI, OpenRouter, Mistral, vLLM …) oder
-  **Anthropic-kompatibler** API (Claude)
+  **Anthropic-kompatibler** API (Claude) oder per **ChatGPT-Abo (Anmeldung mit ChatGPT)** ohne API-Schlüssel
 
 **Linux-VPS:** fertige Compose-Datei zum Kopieren, siehe [docs/VPS.md](docs/VPS.md):
 
@@ -191,7 +191,7 @@ server/
   internal/spam/       Spam-Scoring, Bayes, DNSBL, Greylisting
   internal/av/         ClamAV-Client
   internal/backup/     Archive, Verschlüsselung, Ziele (lokal, WebDAV, SMB), Zeitplan, Wiederherstellung
-  internal/ai/         KI-Client (OpenAI-/Anthropic-kompatibel), Analyse-Worker, Embeddings
+  internal/ai/         KI-Client (OpenAI-/Anthropic-kompatibel, ChatGPT-Abo), Analyse-Worker, Embeddings
   internal/dms/        Paperless-ngx
   internal/notify/     Benachrichtigungen bei Betriebswarnungen (Mail, Webhook)
   internal/migrate/    IMAP-Migration, mbox/eml/zip-Import

@@ -754,7 +754,7 @@ export function AiSection({ settings, save, saving }: SectionProps) {
   return (
     <Shell
       title="KI"
-      description="Lokales Modell über Ollama oder ein externer Dienst mit OpenAI- oder Anthropic-kompatibler API."
+      description="Lokales Modell über Ollama, ein externer Dienst mit OpenAI- oder Anthropic-kompatibler API oder ein ChatGPT-Abo."
       dirty={dirty}
       saving={saving}
       onReset={reset}

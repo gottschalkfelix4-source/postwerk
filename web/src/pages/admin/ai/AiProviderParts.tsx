@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Bot, Cloud, Cpu, Globe, Server, Sparkles, TriangleAlert } from "lucide-react";
+import { Bot, Cloud, Cpu, Globe, MessageCircle, Server, Sparkles, TriangleAlert } from "lucide-react";
 import type { AiProvider, AiTestResult, Settings } from "@/api/types";
 import { Badge, Field, Input, Notice, PasswordInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { CHATGPT_MODELS, ChatGptConnection } from "./ChatGptConnection";
 
 const MASK = "••••";
 
@@ -56,6 +57,15 @@ export const AI_PRESETS: Preset[] = [
     embeddingModel: "",
   },
   {
+    id: "chatgpt",
+    title: "ChatGPT-Abo (Anmeldung mit ChatGPT)",
+    text: "Eigenes Plus- oder Pro-Abo statt API-Schlüssel.",
+    icon: MessageCircle,
+    provider: "chatgpt",
+    chatModel: CHATGPT_MODELS[0],
+    embeddingModel: "",
+  },
+  {
     id: "openrouter",
     title: "OpenRouter",
     text: "Viele Modelle über eine OpenAI-kompatible API.",
@@ -83,6 +93,7 @@ export const AI_PRESETS: Preset[] = [
 const norm = (u: string) => u.trim().replace(/\/+$/, "").toLowerCase();
 
 export function activePreset(ai: Pick<Ai, "provider" | "baseUrl">): Preset {
+  if (ai.provider === "chatgpt") return AI_PRESETS.find((p) => p.id === "chatgpt")!;
   const provider: AiProvider = ai.provider === "anthropic" ? "anthropic" : "openai";
   const match = AI_PRESETS.find((p) => p.baseUrl && p.provider === provider && norm(p.baseUrl) === norm(ai.baseUrl ?? ""));
   if (match) return match;
@@ -184,77 +195,111 @@ export function AiProviderPicker({ value, onChange }: { value: Ai; onChange: (pa
 /** Address, key and models for the chosen provider, plus the embedding endpoint. */
 export function AiConnectionFields({ value, onChange }: { value: Ai; onChange: (patch: Partial<Ai>) => void }) {
   const anthropic = value.provider === "anthropic";
+  const chatgpt = value.provider === "chatgpt";
+  // Neither Anthropic nor the ChatGPT subscription offers embeddings.
+  const noEmbeddings = anthropic || chatgpt;
   const preset = activePreset(value);
   const [ownEmbed, setOwnEmbed] = useState(!!value.embeddingBaseUrl);
-  const showEmbedEndpoint = anthropic || ownEmbed || !!value.embeddingBaseUrl;
-  const external = isExternal(value.baseUrl);
+  const showEmbedEndpoint = noEmbeddings || ownEmbed || !!value.embeddingBaseUrl;
+  const external = !chatgpt && isExternal(value.baseUrl);
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field
-          label="Basis-URL"
-          help={
-            anthropic
-              ? "Mit oder ohne /v1, z. B. https://api.anthropic.com"
-              : preset.local
-                ? "Inklusive /v1. Ollama im selben Docker-Netz: http://ollama:11434/v1"
-                : "Inklusive /v1, z. B. https://api.openai.com/v1"
-          }
-        >
-          {(id) => (
-            <Input
-              id={id}
-              value={value.baseUrl}
-              onChange={(e) => onChange({ baseUrl: e.target.value })}
-              placeholder={anthropic ? "https://api.anthropic.com" : "http://ollama:11434/v1"}
-              className="font-mono text-[13px]"
-            />
-          )}
-        </Field>
-        <Field label="API-Schlüssel" help={preset.local ? "Für Ollama nicht erforderlich." : "Gespeicherte Schlüssel werden nicht wieder angezeigt."}>
-          {(id) => <SecretField id={id} value={value.apiKey} onChange={(v) => onChange({ apiKey: v })} placeholder={anthropic ? "sk-ant-…" : "sk-…"} />}
-        </Field>
-        <Field
-          label="Chat-Modell"
-          help={
-            anthropic
-              ? "z. B. claude-opus-5-5 oder das günstigere claude-haiku-5-5"
-              : preset.local
-                ? "z. B. qwen2.5:7b oder llama3.1:8b"
-                : "Nach „Verbindung testen“ aus der Liste wählbar."
-          }
-        >
-          {(id) => (
-            <Input
-              id={id}
-              value={value.chatModel}
-              onChange={(e) => onChange({ chatModel: e.target.value })}
-              placeholder={anthropic ? "claude-opus-5-5" : ""}
-              className="font-mono text-[13px]"
-            />
-          )}
-        </Field>
-        {anthropic ? (
-          <Field label="Maximale Antwortlänge" help="max_tokens pro Anfrage (Standard 16000).">
+      {chatgpt ? (
+        <>
+          <ChatGptConnection />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Chat-Modell" help="Ein Modell des Abos, z. B. gpt-6.2-sol. Leer = Standardmodell.">
+              {(id) => (
+                <>
+                  <Input
+                    id={id}
+                    list="chatgpt-models"
+                    value={value.chatModel}
+                    onChange={(e) => onChange({ chatModel: e.target.value })}
+                    placeholder={CHATGPT_MODELS[0]}
+                    className="font-mono text-[13px]"
+                  />
+                  <datalist id="chatgpt-models">
+                    {CHATGPT_MODELS.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                </>
+              )}
+            </Field>
+          </div>
+          <Notice tone="warning" icon={TriangleAlert} title="Externer Dienst">
+            Für die KI-Funktionen werden Inhalte eingehender Mails an ChatGPT (<span className="font-mono">chatgpt.com</span>) gesendet. Wer das nicht
+            möchte, nutzt Ollama auf dem eigenen Server oder schaltet einzelne Funktionen unten ab.
+          </Notice>
+        </>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Basis-URL"
+            help={
+              anthropic
+                ? "Mit oder ohne /v1, z. B. https://api.anthropic.com"
+                : preset.local
+                  ? "Inklusive /v1. Ollama im selben Docker-Netz: http://ollama:11434/v1"
+                  : "Inklusive /v1, z. B. https://api.openai.com/v1"
+            }
+          >
             {(id) => (
               <Input
                 id={id}
-                type="number"
-                min={256}
-                max={128000}
-                value={value.maxTokens || 16000}
-                onChange={(e) => onChange({ maxTokens: Number(e.target.value) || 16000 })}
+                value={value.baseUrl}
+                onChange={(e) => onChange({ baseUrl: e.target.value })}
+                placeholder={anthropic ? "https://api.anthropic.com" : "http://ollama:11434/v1"}
                 className="font-mono text-[13px]"
               />
             )}
           </Field>
-        ) : (
-          <Field label="Embedding-Modell" help="Für die semantische Suche, z. B. nomic-embed-text. Leer = aus.">
-            {(id) => <Input id={id} value={value.embeddingModel} onChange={(e) => onChange({ embeddingModel: e.target.value })} className="font-mono text-[13px]" />}
+          <Field label="API-Schlüssel" help={preset.local ? "Für Ollama nicht erforderlich." : "Gespeicherte Schlüssel werden nicht wieder angezeigt."}>
+            {(id) => <SecretField id={id} value={value.apiKey} onChange={(v) => onChange({ apiKey: v })} placeholder={anthropic ? "sk-ant-…" : "sk-…"} />}
           </Field>
-        )}
-      </div>
+          <Field
+            label="Chat-Modell"
+            help={
+              anthropic
+                ? "z. B. claude-opus-5-5 oder das günstigere claude-haiku-5-5"
+                : preset.local
+                  ? "z. B. qwen2.5:7b oder llama3.1:8b"
+                  : "Nach „Verbindung testen“ aus der Liste wählbar."
+            }
+          >
+            {(id) => (
+              <Input
+                id={id}
+                value={value.chatModel}
+                onChange={(e) => onChange({ chatModel: e.target.value })}
+                placeholder={anthropic ? "claude-opus-5-5" : ""}
+                className="font-mono text-[13px]"
+              />
+            )}
+          </Field>
+          {anthropic ? (
+            <Field label="Maximale Antwortlänge" help="max_tokens pro Anfrage (Standard 16000).">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={256}
+                  max={128000}
+                  value={value.maxTokens || 16000}
+                  onChange={(e) => onChange({ maxTokens: Number(e.target.value) || 16000 })}
+                  className="font-mono text-[13px]"
+                />
+              )}
+            </Field>
+          ) : (
+            <Field label="Embedding-Modell" help="Für die semantische Suche, z. B. nomic-embed-text. Leer = aus.">
+              {(id) => <Input id={id} value={value.embeddingModel} onChange={(e) => onChange({ embeddingModel: e.target.value })} className="font-mono text-[13px]" />}
+            </Field>
+          )}
+        </div>
+      )}
 
       {external && (
         <Notice tone="warning" icon={TriangleAlert} title="Externer Dienst">
@@ -268,14 +313,14 @@ export function AiConnectionFields({ value, onChange }: { value: Ai; onChange: (
           <div>
             <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Embeddings für die semantische Suche</div>
             <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-              {anthropic
-                ? "Anthropic bietet keine Embeddings. Gib dafür einen OpenAI-kompatiblen Endpunkt an, z. B. Ollama mit nomic-embed-text. Leer lassen schaltet die semantische Suche ab."
+              {noEmbeddings
+                ? `${chatgpt ? "Das ChatGPT-Abo" : "Anthropic"} bietet keine Embeddings. Gib dafür einen OpenAI-kompatiblen Endpunkt an, z. B. Ollama mit nomic-embed-text. Leer lassen schaltet die semantische Suche ab.`
                 : showEmbedEndpoint
                   ? "Embeddings laufen über einen eigenen OpenAI-kompatiblen Endpunkt."
                   : "Embeddings laufen über denselben Endpunkt wie der Chat."}
             </p>
           </div>
-          {!anthropic && (
+          {!noEmbeddings && (
             <button
               type="button"
               className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
@@ -304,7 +349,7 @@ export function AiConnectionFields({ value, onChange }: { value: Ai; onChange: (
             <Field label="Schlüssel" help="Optional">
               {(id) => <SecretField id={id} value={value.embeddingApiKey} onChange={(v) => onChange({ embeddingApiKey: v })} placeholder="sk-…" />}
             </Field>
-            {anthropic && (
+            {noEmbeddings && (
               <Field label="Embedding-Modell" help="z. B. nomic-embed-text">
                 {(id) => <Input id={id} value={value.embeddingModel} onChange={(e) => onChange({ embeddingModel: e.target.value })} className="font-mono text-[13px]" />}
               </Field>

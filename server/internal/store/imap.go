@@ -197,6 +197,9 @@ func (s *Store) CopyMessage(ctx context.Context, accountID, id, destMailboxID in
 	if err != nil {
 		return nil, err
 	}
+	if err := s.CheckQuota(ctx, accountID, m.Size); err != nil {
+		return nil, err
+	}
 	var deleted bool
 	var kw, searchText string
 	if err := s.DB.QueryRowContext(ctx, `SELECT deleted, keywords_json, search_text FROM messages WHERE id = ?`, id).Scan(&deleted, &kw, &searchText); err != nil {

@@ -3,6 +3,7 @@ package imapd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -483,6 +484,8 @@ func (v *view) expunge(w *imapserver.ExpungeWriter, uids *imap.UIDSet) error {
 
 // ---- COPY / MOVE ----
 
+var errOverQuota = errNo(imap.ResponseCodeOverQuota, "Quota exceeded")
+
 func (v *view) target(dest string) (*store.IMAPMailbox, error) {
 	mb, err := v.ss.lookup(dest)
 	if err != nil {
@@ -497,7 +500,22 @@ func (v *view) copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) {
 		return nil, err
 	}
 	data := &imap.CopyData{UIDValidity: mb.UIDValidity}
-	for _, i := range v.resolve(numSet) {
+	idx := v.resolve(numSet)
+	// Check the quota for the whole set first so a failing COPY leaves the
+	// destination mailbox unchanged.
+	var total int64
+	for _, i := range idx {
+		if !v.msgs[i].gone {
+			total += v.msgs[i].size
+		}
+	}
+	if err := v.ss.srv.Store.CheckQuota(v.ss.ctx, v.ss.acct.ID, total); err != nil {
+		if errors.Is(err, store.ErrQuota) {
+			return nil, errOverQuota
+		}
+		return nil, err
+	}
+	for _, i := range idx {
 		e := v.msgs[i]
 		if e.gone {
 			continue
@@ -506,6 +524,9 @@ func (v *view) copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) {
 		if err != nil {
 			if isNotFound(err) {
 				continue
+			}
+			if errors.Is(err, store.ErrQuota) {
+				return nil, errOverQuota
 			}
 			return nil, err
 		}

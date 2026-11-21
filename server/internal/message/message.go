@@ -6,11 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"mime"
 	"mime/quotedprintable"
+	netmail "net/mail"
 	"regexp"
 	"strings"
 	"time"
@@ -42,6 +44,70 @@ type Parsed struct {
 	HTML        string
 	Attachments []Attachment
 	Header      mail.Header
+	// FromAll holds every address of the From header; FromErr is set when
+	// the header is missing, duplicated or cannot be parsed.
+	FromAll []store.Address
+	FromErr error
+}
+
+// Errors returned by FromAddresses.
+var (
+	ErrFromMissing   = errors.New("missing From header")
+	ErrFromMultiple  = errors.New("multiple From headers")
+	ErrFromMalformed = errors.New("malformed From header")
+)
+
+// FromAddresses returns the addresses of the single From header field. It
+// fails when the field is missing, occurs more than once, cannot be parsed or
+// contains no address.
+func FromAddresses(h mail.Header) ([]store.Address, error) {
+	return singleAddrField(h, "From", ErrFromMissing, ErrFromMultiple)
+}
+
+// SenderAddress returns the Sender header address, or nil when the message
+// has no Sender header. A duplicated, unparseable or multi-address Sender
+// header is an error.
+func SenderAddress(h mail.Header) (*store.Address, error) {
+	if !h.Has("Sender") {
+		return nil, nil
+	}
+	l, err := singleAddrField(h, "Sender", errors.New("missing Sender header"), errors.New("multiple Sender headers"))
+	if err != nil {
+		return nil, err
+	}
+	if len(l) != 1 {
+		return nil, errors.New("Sender header must contain exactly one address")
+	}
+	return &l[0], nil
+}
+
+func singleAddrField(h mail.Header, key string, errMissing, errMultiple error) ([]store.Address, error) {
+	fields := h.FieldsByKey(key)
+	n := 0
+	for fields.Next() {
+		n++
+	}
+	switch {
+	case n == 0:
+		return nil, errMissing
+	case n > 1:
+		return nil, errMultiple
+	}
+	list, err := h.AddressList(key)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrFromMalformed, err)
+	}
+	out := make([]store.Address, 0, len(list))
+	for _, a := range list {
+		if a == nil || !strings.Contains(a.Address, "@") {
+			return nil, ErrFromMalformed
+		}
+		out = append(out, store.Address{Name: a.Name, Email: strings.ToLower(a.Address)})
+	}
+	if len(out) == 0 {
+		return nil, ErrFromMalformed
+	}
+	return out, nil
 }
 
 func addrs(h mail.Header, key string) []store.Address {
@@ -56,7 +122,55 @@ func addrs(h mail.Header, key string) []store.Address {
 	return out
 }
 
-func trimID(s string) string { return strings.Trim(strings.TrimSpace(s), "<>") }
+func trimID(s string) string { return CleanMessageID(s) }
+
+// CleanMessageID strips angle brackets and every character that is not
+// allowed in a msg-id (RFC 5322 dot-atom-text, "@" and domain literals), so a
+// foreign Message-ID can never inject header content when it is reused in
+// In-Reply-To or References.
+func CleanMessageID(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "<")
+	if i := strings.IndexByte(s, '>'); i >= 0 {
+		s = s[:i]
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			strings.IndexByte("!#$%&'*+-/=?^_`{|}~.@[]", c) >= 0 {
+			b.WriteByte(c)
+		}
+	}
+	out := b.String()
+	if len(out) > 250 {
+		out = out[:250]
+	}
+	return out
+}
+
+// SanitizeFilename removes control characters, Unicode bidi controls and path
+// separators from an attachment file name.
+func SanitizeFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == '/' || r == '\\':
+			b.WriteRune('_')
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			// C0 / C1 controls
+		case (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0x200e || r == 0x200f || r == 0x061c:
+			// bidi embeddings, overrides, isolates and direction marks
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	if r := []rune(out); len(r) > 200 {
+		out = string(r[:200])
+	}
+	return out
+}
 
 // Parse parses raw message bytes. With withData, attachment content is kept.
 func Parse(raw []byte, withData bool) (*Parsed, error) {
@@ -66,7 +180,10 @@ func Parse(raw []byte, withData bool) (*Parsed, error) {
 	}
 	p := &Parsed{Header: mr.Header}
 	p.Subject, _ = mr.Header.Subject()
-	if from := addrs(mr.Header, "From"); len(from) > 0 {
+	p.FromAll, p.FromErr = FromAddresses(mr.Header)
+	if len(p.FromAll) > 0 {
+		p.From = p.FromAll[0]
+	} else if from := addrs(mr.Header, "From"); len(from) > 0 {
 		p.From = from[0]
 	}
 	p.To = addrs(mr.Header, "To")
@@ -77,7 +194,9 @@ func Parse(raw []byte, withData bool) (*Parsed, error) {
 		p.InReplyTo = trimID(f[0])
 	}
 	for _, r := range strings.Fields(mr.Header.Get("References")) {
-		p.References = append(p.References, trimID(r))
+		if id := trimID(r); id != "" {
+			p.References = append(p.References, id)
+		}
 	}
 	p.Date, _ = mr.Header.Date()
 
@@ -121,6 +240,7 @@ func Parse(raw []byte, withData bool) (*Parsed, error) {
 }
 
 func att(id int64, name, ct string, body []byte, withData bool) Attachment {
+	name = SanitizeFilename(name)
 	if name == "" {
 		name = fmt.Sprintf("anhang-%d", id)
 	}
@@ -192,10 +312,58 @@ type Draft struct {
 }
 
 func fmtAddr(a store.Address) string {
+	if a.Email == "" {
+		return ""
+	}
 	if a.Name == "" {
 		return a.Email
 	}
-	return mime.QEncoding.Encode("utf-8", a.Name) + " <" + a.Email + ">"
+	// net/mail quotes or RFC 2047-encodes the display name as needed, so
+	// specials like '<' or ',' in a name cannot add further addresses.
+	return (&netmail.Address{Name: a.Name, Address: a.Email}).String()
+}
+
+// cleanHeaderValue replaces CR, LF and NUL so a value can never start a new
+// header line.
+func cleanHeaderValue(v string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', 0:
+			return ' '
+		}
+		return r
+	}, v)
+}
+
+func validHeaderName(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		if k[i] <= ' ' || k[i] > '~' || k[i] == ':' {
+			return false
+		}
+	}
+	return true
+}
+
+// attachmentHeaders returns safe Content-Type and Content-Disposition values
+// for an outgoing attachment.
+func attachmentHeaders(contentType, filename string) (ct, disp string) {
+	name := SanitizeFilename(filename)
+	if name == "" {
+		name = "anhang"
+	}
+	mt := "application/octet-stream"
+	if parsed, _, err := mime.ParseMediaType(contentType); err == nil && strings.Count(parsed, "/") == 1 {
+		mt = parsed
+	}
+	ct = mime.FormatMediaType(mt, map[string]string{"name": name})
+	if ct == "" {
+		ct = mime.FormatMediaType("application/octet-stream", map[string]string{"name": name})
+	}
+	disp = mime.FormatMediaType("attachment", map[string]string{"filename": name})
+	return ct, disp
 }
 
 func fmtList(l []store.Address) string {
@@ -235,26 +403,31 @@ func wrap76(s string) string {
 func Build(d Draft) []byte {
 	var h strings.Builder
 	w := func(k, v string) {
-		if v != "" {
+		v = strings.TrimSpace(cleanHeaderValue(v))
+		if v != "" && validHeaderName(k) {
 			h.WriteString(k + ": " + v + "\r\n")
 		}
+	}
+	id := func(s string) string {
+		if s = CleanMessageID(s); s == "" {
+			return ""
+		}
+		return "<" + s + ">"
 	}
 	w("From", fmtAddr(d.From))
 	w("To", fmtList(d.To))
 	w("Cc", fmtList(d.Cc))
 	w("Subject", mime.QEncoding.Encode("utf-8", d.Subject))
 	w("Date", time.Now().Format(time.RFC1123Z))
-	w("Message-ID", "<"+d.MessageID+">")
-	if d.InReplyTo != "" {
-		w("In-Reply-To", "<"+d.InReplyTo+">")
-	}
-	if len(d.References) > 0 {
-		refs := make([]string, len(d.References))
-		for i, r := range d.References {
-			refs[i] = "<" + r + ">"
+	w("Message-ID", id(d.MessageID))
+	w("In-Reply-To", id(d.InReplyTo))
+	var refs []string
+	for _, r := range d.References {
+		if r := id(r); r != "" {
+			refs = append(refs, r)
 		}
-		w("References", strings.Join(refs, " "))
 	}
+	w("References", strings.Join(refs, " "))
 	for k, v := range d.Extra {
 		w(k, v)
 	}
@@ -275,14 +448,10 @@ func Build(d Draft) []byte {
 		b.WriteString("Content-Type: multipart/mixed; boundary=\"" + bMix + "\"\r\n\r\n")
 		b.WriteString("--" + bMix + "\r\n" + body)
 		for _, a := range d.Attach {
-			ct := a.ContentType
-			if ct == "" {
-				ct = "application/octet-stream"
-			}
-			name := mime.QEncoding.Encode("utf-8", a.Filename)
+			ct, disp := attachmentHeaders(a.ContentType, a.Filename)
 			b.WriteString("--" + bMix + "\r\n")
-			b.WriteString("Content-Type: " + ct + "; name=\"" + name + "\"\r\n")
-			b.WriteString("Content-Disposition: attachment; filename=\"" + name + "\"\r\n")
+			b.WriteString("Content-Type: " + ct + "\r\n")
+			b.WriteString("Content-Disposition: " + disp + "\r\n")
 			b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
 			b.WriteString(wrap76(base64.StdEncoding.EncodeToString(a.Data)) + "\r\n")
 		}
@@ -314,4 +483,79 @@ func HeaderValue(raw []byte, key string) string {
 		}
 	}
 	return ""
+}
+
+// headerBlock returns the header section of raw including the line ending of
+// its last line (but not the blank separator line).
+func headerBlock(raw []byte) []byte {
+	crlf := bytes.Index(raw, []byte("\r\n\r\n"))
+	lf := bytes.Index(raw, []byte("\n\n"))
+	switch {
+	case crlf >= 0 && (lf < 0 || crlf+1 <= lf):
+		return raw[:crlf+2]
+	case lf >= 0:
+		return raw[:lf+1]
+	}
+	return raw
+}
+
+// headerFields splits a header block into raw fields, each including its
+// continuation lines and line endings.
+func headerFields(block []byte) [][]byte {
+	var fields [][]byte
+	for len(block) > 0 {
+		end := 0
+		for {
+			nl := bytes.IndexByte(block[end:], '\n')
+			if nl < 0 {
+				end = len(block)
+				break
+			}
+			end += nl + 1
+			if end >= len(block) || (block[end] != ' ' && block[end] != '\t') {
+				break
+			}
+		}
+		fields = append(fields, block[:end])
+		block = block[end:]
+	}
+	return fields
+}
+
+func fieldNameValue(f []byte) (string, string) {
+	i := bytes.IndexByte(f, ':')
+	if i < 0 {
+		return "", ""
+	}
+	return strings.TrimSpace(string(f[:i])), strings.Join(strings.Fields(string(f[i+1:])), " ")
+}
+
+// StripHeaders removes every top-level header field for which drop returns
+// true. The body is left untouched.
+func StripHeaders(raw []byte, drop func(name, value string) bool) []byte {
+	block := headerBlock(raw)
+	out := make([]byte, 0, len(raw))
+	removed := false
+	for _, f := range headerFields(block) {
+		if name, value := fieldNameValue(f); name != "" && drop(name, value) {
+			removed = true
+			continue
+		}
+		out = append(out, f...)
+	}
+	if !removed {
+		return raw
+	}
+	return append(out, raw[len(block):]...)
+}
+
+// CountHeader returns how often a header field occurs in the header section.
+func CountHeader(raw []byte, key string) int {
+	n := 0
+	for _, f := range headerFields(headerBlock(raw)) {
+		if name, _ := fieldNameValue(f); strings.EqualFold(name, key) {
+			n++
+		}
+	}
+	return n
 }

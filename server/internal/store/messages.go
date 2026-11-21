@@ -564,6 +564,25 @@ func (s *Store) CategoryCounts(ctx context.Context, since time.Time) ([]TagCount
 	return out, rows.Err()
 }
 
+// ErrQuota is returned when storing a message would exceed the account quota.
+var ErrQuota = errors.New("quota exceeded")
+
+// CheckQuota returns ErrQuota when adding size bytes would exceed the quota
+// of the account. Accounts without a quota (0) always pass.
+func (s *Store) CheckQuota(ctx context.Context, accountID, size int64) error {
+	var quota int64
+	if err := s.DB.QueryRowContext(ctx, `SELECT quota_bytes FROM accounts WHERE id = ?`, accountID).Scan(&quota); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if quota > 0 && s.UsedBytes(ctx, accountID)+size > quota {
+		return ErrQuota
+	}
+	return nil
+}
+
 func (s *Store) UsedBytes(ctx context.Context, accountID int64) int64 {
 	var n int64
 	_ = s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(size),0) FROM messages WHERE account_id = ?`, accountID).Scan(&n)

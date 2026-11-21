@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -9,9 +10,35 @@ import (
 	"strings"
 
 	"postwerk/internal/message"
+	"postwerk/internal/smtp"
 	"postwerk/internal/spam"
 	"postwerk/internal/store"
 )
+
+// errVirusBlocked is returned when a non-admin tries to download content of
+// a message the virus scanner flagged.
+var errVirusBlocked = errf(403, "virus", "Download gesperrt: Die Nachricht enthält einen Virus")
+
+func virusBlocked(m *store.Message, u *store.Account) bool {
+	return m.Virus != nil && *m.Virus != "" && u.Role != "admin"
+}
+
+// mailErr turns delivery errors into API errors with a German message.
+func mailErr(err error) error {
+	var r *smtp.Reply
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, store.ErrQuota):
+		return errf(507, "quota", "Speicherplatz voll: Das Postfach hat sein Speicherlimit erreicht")
+	case errors.As(err, &r):
+		if r.Code == 552 {
+			return errf(507, "quota", "Speicherplatz voll: Das Postfach hat sein Speicherlimit erreicht")
+		}
+		return errf(400, "rejected", "Nachricht abgelehnt: "+r.Text)
+	}
+	return err
+}
 
 // ---- mailboxes ----
 
@@ -167,6 +194,9 @@ func (s *Server) rawMessage(w http.ResponseWriter, r *http.Request, u *store.Acc
 	if err != nil {
 		return nil, err
 	}
+	if virusBlocked(m, u) {
+		return nil, errVirusBlocked
+	}
 	raw, err := s.Store.Blobs.Get(m.BlobHash)
 	if err != nil {
 		return nil, err
@@ -207,13 +237,24 @@ func (s *Server) attachment(w http.ResponseWriter, r *http.Request, u *store.Acc
 	if err != nil {
 		return nil, err
 	}
-	_, a, err := s.loadAttachment(r, u, id, attID)
+	m, a, err := s.loadAttachment(r, u, id, attID)
 	if err != nil {
 		return nil, err
 	}
+	if virusBlocked(m, u) {
+		return nil, errVirusBlocked
+	}
+	name := message.SanitizeFilename(a.Filename)
+	if name == "" {
+		name = "anhang"
+	}
+	disp := mime.FormatMediaType("attachment", map[string]string{"filename": name})
+	if disp == "" {
+		disp = "attachment"
+	}
 	// Always download; never render untrusted content inline on our origin.
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": a.Filename}))
+	w.Header().Set("Content-Disposition", disp)
 	w.Header().Set("Content-Length", strconv.Itoa(len(a.Data)))
 	w.Write(a.Data)
 	return nil, nil
@@ -437,7 +478,12 @@ func (s *Server) buildDraft(r *http.Request, u *store.Account, req *composeReq) 
 		if err != nil {
 			return nil, nil, nil, invalid("Anhang " + a.Filename + " ist nicht korrekt kodiert")
 		}
-		d.Attach = append(d.Attach, message.OutAttachment{Filename: a.Filename, ContentType: a.ContentType, Data: data})
+		// message.Build validates the content type and encodes the name.
+		ct := "application/octet-stream"
+		if mt, _, err := mime.ParseMediaType(a.ContentType); err == nil && strings.Count(mt, "/") == 1 {
+			ct = mt
+		}
+		d.Attach = append(d.Attach, message.OutAttachment{Filename: message.SanitizeFilename(a.Filename), ContentType: ct, Data: data})
 	}
 	var rcpts []string
 	for _, l := range [][]store.Address{to, cc, bcc} {
@@ -465,7 +511,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, u *store.Account) 
 	}
 	sent, err := s.Delivery.Submit(r.Context(), u, u.Email, rcpts, raw, true)
 	if err != nil {
-		return nil, err
+		return nil, mailErr(err)
 	}
 	if orig != nil {
 		t := true
@@ -498,7 +544,7 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request, u *store.Acco
 	}
 	m, err := s.Delivery.StoreMessage(r.Context(), u.ID, mb, raw, nil, nil)
 	if err != nil {
-		return nil, err
+		return nil, mailErr(err)
 	}
 	t := true
 	_ = s.Store.UpdateMessage(r.Context(), u.ID, m.ID, store.MessagePatch{Seen: &t})

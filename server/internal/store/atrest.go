@@ -117,7 +117,7 @@ func (s *Store) ReplaceMessageContent(ctx context.Context, accountID, id int64, 
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE messages SET blob_hash = ?, size = ?, uid = ?, subject = ?, preview = '', search_text = ?,
-			has_attachments = 0, ai_summary = NULL, ai_reasons_json = '[]', ai_events_json = '[]', ai_tasks_json = '[]', ai_done = 1
+			has_attachments = 0, ai_summary = NULL, ai_reasons_json = '[]', ai_events_json = '[]', ai_tasks_json = '[]', ai_suspicious = 0, ai_done = 1
 			WHERE id = ?`, c.BlobHash, c.Size, uid, c.Subject, strings.ToLower(c.SearchText), id); err != nil {
 			return err
 		}

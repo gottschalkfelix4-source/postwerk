@@ -79,7 +79,7 @@ func (n *netChecks) refresh(host string, doDNSBL, doPTR bool) {
 		bl = n.checkDNSBL(ctx, ips)
 	}
 	if doPTR {
-		ptr = n.checkPTR(ctx, host, onlyIPv4(ips))
+		ptr = n.checkPTR(ctx, host, ips)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -109,16 +109,6 @@ func publicIPs(ctx context.Context, lookup func(context.Context, string) ([]stri
 			ip = v4
 		}
 		out = append(out, ip)
-	}
-	return out
-}
-
-func onlyIPv4(ips []net.IP) []net.IP {
-	var out []net.IP
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			out = append(out, ip)
-		}
 	}
 	return out
 }

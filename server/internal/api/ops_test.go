@@ -101,7 +101,7 @@ func TestDNSBLAndPTRChecks(t *testing.T) {
 			return nil, &net.DNSError{IsNotFound: true}
 		},
 		lookupPTR: func(_ context.Context, ip string) ([]string, error) {
-			if ip == "192.0.2.10" {
+			if ip == "192.0.2.10" || ip == "2001:db8::1" {
 				return []string{"mail.example.test."}, nil
 			}
 			return []string{"static.provider.test."}, nil
@@ -117,7 +117,7 @@ func TestDNSBLAndPTRChecks(t *testing.T) {
 		!strings.Contains(bl[1].Title, "2001:db8::1") || !strings.Contains(bl[1].Title, "barracudacentral") {
 		t.Fatalf("dnsbl = %+v", bl)
 	}
-	ptr := n.checkPTR(ctx, "mail.example.test", onlyIPv4(ips))
+	ptr := n.checkPTR(ctx, "mail.example.test", ips)
 	if len(ptr) != 1 || !strings.Contains(ptr[0].Title, "198.51.100.7") || !strings.Contains(ptr[0].Detail, "static.provider.test") {
 		t.Fatalf("ptr = %+v", ptr)
 	}

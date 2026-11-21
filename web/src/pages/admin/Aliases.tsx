@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, AtSign, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
+import { mailAuthApi } from "@/api/mailauth";
+import { PostmasterCard, SystemAliasRows } from "./SystemAliases";
 import type { Alias } from "@/api/types";
 import { formatDate } from "@/lib/format";
 import { isEmail } from "@/lib/utils";
@@ -38,6 +40,7 @@ export default function AliasesPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const q = useQuery({ queryKey: ["admin", "aliases"], queryFn: adminApi.aliases });
+  const system = useQuery({ queryKey: ["admin", "aliases", "system"], queryFn: mailAuthApi.systemAliases });
 
   const remove = useMutation({
     mutationFn: async (ids: number[]) => {
@@ -58,6 +61,11 @@ export default function AliasesPage() {
       (a) => !s || a.address.toLowerCase().includes(s) || a.targets.some((t) => t.toLowerCase().includes(s)),
     );
   }, [q.data, search]);
+
+  const systemItems = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    return (system.data ?? []).filter((a) => !s || a.address.includes(s) || a.targets.some((t) => t.includes(s)));
+  }, [system.data, search]);
 
   const askDelete = async (ids: number[]) => {
     const ok = await confirm({
@@ -97,7 +105,7 @@ export default function AliasesPage() {
           <SkeletonRows rows={5} cols={3} />
         ) : q.error ? (
           <ErrorState error={q.error} onRetry={() => void q.refetch()} />
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && systemItems.length === 0 ? (
           <EmptyState
             icon={AtSign}
             title={search ? "Keine Treffer" : "Noch keine Aliase"}
@@ -168,10 +176,12 @@ export default function AliasesPage() {
                   </Td>
                 </Tr>
               ))}
+              <SystemAliasRows items={systemItems} />
             </TBody>
           </Table>
         )}
       </Card>
+      <PostmasterCard />
       <AliasDialog
         alias={editing}
         onClose={() => setEditing(null)}

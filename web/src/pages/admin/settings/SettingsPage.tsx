@@ -19,6 +19,7 @@ import {
   TlsSection,
   WebSection,
 } from "./sections";
+import { MailAuthCard } from "./MailAuthCard";
 
 const icons: Record<SettingsSectionId, LucideIcon> = {
   server: ServerCog,
@@ -118,7 +119,10 @@ export default function SettingsPage() {
           ) : id === "tls" ? (
             <TlsSection key={id} {...props} />
           ) : id === "spam" ? (
-            <SpamSection key={id} {...props} />
+            <>
+              <SpamSection key={id} {...props} />
+              <MailAuthCard {...props} />
+            </>
           ) : id === "antivirus" ? (
             <AntivirusSection key={id} {...props} />
           ) : id === "ai" ? (

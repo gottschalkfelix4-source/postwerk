@@ -20,7 +20,21 @@ type Settings struct {
 	DynDNS    DynDNSSettings    `json:"dyndns"`
 	Relay     RelaySettings     `json:"relay"`
 	Backup    BackupSettings    `json:"backup"`
+	MailAuth  MailAuthSettings  `json:"mailauth"`
 }
+
+// MailAuthSettings tune sender authentication and the system addresses.
+type MailAuthSettings struct {
+	// TrustedARCSealers are domains whose ARC seals may relax a failed DMARC
+	// policy (e.g. forwarders and mailing lists that seal what they checked).
+	TrustedARCSealers []string `json:"trustedArcSealers"`
+	// PostmasterAddress receives mail for postmaster@ and abuse@ of every
+	// domain that has no such account or alias (empty: first admin account).
+	PostmasterAddress string `json:"postmasterAddress"`
+}
+
+// DefaultTrustedARCSealers are large providers that ARC-seal forwarded mail.
+var DefaultTrustedARCSealers = []string{"google.com", "microsoft.com", "outlook.com", "icloud.com", "yahoo.com"}
 
 // BackupSettings configure automatic archives of the whole system.
 type BackupSettings struct {
@@ -263,6 +277,7 @@ func DefaultSettings(hostname string) Settings {
 	s.Security.BruteForce.MaxAttempts = 5
 	s.Security.BruteForce.WindowSeconds = 600
 	s.Security.BruteForce.BanSeconds = 3600
+	s.MailAuth.TrustedARCSealers = append([]string{}, DefaultTrustedARCSealers...)
 	return s
 }
 
@@ -309,13 +324,25 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	if cur.Web.TrustedProxies == nil {
 		cur.Web.TrustedProxies = []string{}
 	}
+	if cur.MailAuth.TrustedARCSealers == nil {
+		cur.MailAuth.TrustedARCSealers = []string{}
+	}
 	c := &SettingsCache{cur: cur, st: s}
+	s.settings = c
 	if raw == "" {
 		if err := c.Save(ctx, cur); err != nil {
 			return nil, err
 		}
 	}
 	return c, nil
+}
+
+// postmasterAddress returns the configured postmaster target without the
+// deep copy of Get.
+func (c *SettingsCache) postmasterAddress() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cur.MailAuth.PostmasterAddress
 }
 
 func (c *SettingsCache) Get() Settings {

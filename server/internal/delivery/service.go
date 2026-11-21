@@ -312,6 +312,7 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 		mailFrom = ""
 	}
 	authRes := s.checkAuth(ctx, env.RemoteIP, env.Helo, mailFrom, fromDomain, data)
+	s.applyARCOverride(&authRes, cfg.MailAuth.TrustedARCSealers, log)
 	if r := s.enforceSenderPolicy(ctx, mailFrom, fromDomain, authRes); r != nil {
 		if r.Code >= 500 {
 			return s.reject(ctx, log, r, "sender policy", "header_from", fromDomain, "spf", authRes.SPF, "dkim", authRes.DKIM, "dmarc", authRes.DMARC)
@@ -458,7 +459,7 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	forwarded := 0
 	for dom, targets := range forwards {
 		sender := s.forwardSender(ctx, env.From, dom)
-		if err := s.enqueue(ctx, sender, targets, full); err != nil {
+		if err := s.enqueue(ctx, sender, targets, s.SealForward(ctx, dom, authRes, full)); err != nil {
 			log.Error("forward enqueue failed", "err", err)
 			continue
 		}
@@ -477,6 +478,9 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	// could not be served instead of losing the message silently.
 	if len(failed) > 0 {
 		s.bounceFailed(ctx, env.From, failed, full)
+	}
+	if virus == "" {
+		s.ingestReports(ctx, log, env.Rcpts, parsed, data)
 	}
 	s.Store.IncStat(ctx, "received", 1)
 	if junk {
@@ -738,13 +742,15 @@ func (s *Service) Submit(ctx context.Context, acct *store.Account, from string, 
 func ptr[T any](v T) *T { return &v }
 
 func (s *Service) sign(ctx context.Context, from string, data []byte) []byte {
-	d, err := s.Store.GetDomain(ctx, store.DomainOf(from))
-	if err != nil {
+	domain := store.DomainOf(from)
+	keys := s.signingKeys(ctx, domain)
+	if len(keys) == 0 {
 		return data
 	}
-	signed, err := mailauth.Sign(data, d.Name, d.DKIMSelector, d.DKIMPrivateKey)
+	// Dual signing: one signature per active key (RSA and Ed25519).
+	signed, err := mailauth.SignAll(data, domain, keys)
 	if err != nil {
-		s.Log.Error("dkim signing failed", "domain", d.Name, "err", err)
+		s.Log.Error("dkim signing failed", "domain", domain, "err", err)
 		return data
 	}
 	return signed

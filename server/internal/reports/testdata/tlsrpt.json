@@ -1,0 +1,51 @@
+{
+  "organization-name": "Company-X",
+  "date-range": {
+    "start-datetime": "2026-11-19T00:00:00Z",
+    "end-datetime": "2026-11-19T23:59:59Z"
+  },
+  "contact-info": "sts-reporting@company-x.example",
+  "report-id": "5065427c-23d3-47ca-b6e0-946ea0e8c4be",
+  "policies": [{
+    "policy": {
+      "policy-type": "sts",
+      "policy-string": ["version: STSv1", "mode: testing", "mx: mail.example.test", "max_age: 86400"],
+      "policy-domain": "example.test",
+      "mx-host": ["mail.example.test"]
+    },
+    "summary": {
+      "total-successful-session-count": 5326,
+      "total-failure-session-count": 303
+    },
+    "failure-details": [{
+      "result-type": "certificate-expired",
+      "sending-mta-ip": "2001:db8:abcd:0012::1",
+      "receiving-mx-hostname": "mail.example.test",
+      "failed-session-count": 100
+    }, {
+      "result-type": "starttls-not-supported",
+      "sending-mta-ip": "2001:db8:abcd:0013::1",
+      "receiving-mx-hostname": "mail.example.test",
+      "receiving-ip": "203.0.113.56",
+      "failed-session-count": 200,
+      "additional-information": "https://reports.company-x.example/report_info?id=5065427c-23d3"
+    }, {
+      "result-type": "validation-failure",
+      "sending-mta-ip": "198.51.100.62",
+      "receiving-ip": "203.0.113.58",
+      "receiving-mx-hostname": "mail.example.test",
+      "failed-session-count": 3,
+      "failure-reason-code": "X509_V_ERR_PROXY_PATH_LENGTH_EXCEEDED"
+    }]
+  }, {
+    "policy": {
+      "policy-type": "no-policy-found",
+      "policy-domain": "other.test",
+      "mx-host": "mx.other.test"
+    },
+    "summary": {
+      "total-successful-session-count": 10,
+      "total-failure-session-count": 0
+    }
+  }]
+}

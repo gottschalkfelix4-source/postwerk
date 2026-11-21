@@ -147,7 +147,7 @@ interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt:
 |---|---|---|---|
 | GET | `/dashboard` | – | `Dashboard` |
 | GET | `/domains` | – | `Domain[]` |
-| POST | `/domains` | `{ name }` | `Domain` (erzeugt DKIM-Schlüssel) |
+| POST | `/domains` | `{ name }` | `Domain` (erzeugt einen aktiven RSA- und einen vorbereiteten Ed25519-DKIM-Schlüssel) |
 | PATCH | `/domains/{name}` | `{ catchAll? }` | `Domain` |
 | DELETE | `/domains/{name}` | – | `{ ok }` |
 | GET | `/domains/{name}/dns` | – | `DnsRecord[]` |
@@ -641,3 +641,124 @@ interface AutoFile {
 
 Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
 `categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.
+
+## Absender-Authentifizierung: DKIM-Schlüssel, ARC, postmaster@, Berichte
+
+### DKIM-Schlüssel und Schlüsselwechsel
+
+Jede Domain kann mehrere DKIM-Schlüssel haben. Ausgehende Mails werden mit **allen aktiven** Schlüsseln
+signiert (höchstens einer je Algorithmus, also RSA und optional Ed25519 nach RFC 8463).
+
+- `pending`: erzeugt und für den DNS vorgesehen, signiert noch nicht.
+- `active`: signiert. Das Aktivieren eines neuen Schlüssels mustert den aktiven Schlüssel desselben Algorithmus aus.
+- `retired`: signiert nicht mehr, soll aber noch 7 Tage im DNS bleiben (`removableAt`). Erst danach kann er gelöscht werden.
+
+Der aktive RSA-Schlüssel ist zugleich `Domain.dkimSelector`. Die empfohlenen DNS-Einträge
+(`/domains/{name}/dns`) enthalten zusätzlich jeden weiteren Schlüssel unter dem Key `dkim-<selector>`;
+die automatische Einrichtung beim DNS-Anbieter setzt aktive und vorbereitete Schlüssel.
+
+```ts
+interface DkimKey {
+  id: number; domain: string; selector: string;
+  algorithm: "rsa" | "ed25519";
+  state: "pending" | "active" | "retired";
+  createdAt: string; activatedAt: string | null; retiredAt: string | null;
+  removableAt: string | null;   // retired: ab wann der DNS-Eintrag entfernt werden kann
+  dnsName: string;              // "<selector>._domainkey.<domain>."
+  dnsValue: string;             // "v=DKIM1; k=rsa|ed25519; p=..."
+}
+interface DkimPublication { name: string; published: boolean; found: string[]; error?: string }
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/domains/{name}/dkim` | – | `DkimKey[]` |
+| POST | `/api/admin/domains/{name}/dkim` | `{ algorithm: "rsa" \| "ed25519" }` | `DkimKey` (Zustand `pending`; 409, wenn es schon einen neuen Schlüssel dieses Typs gibt) |
+| POST | `/api/admin/domains/{name}/dkim/{id}/check` | – | `DkimPublication` (Live-Abfrage im DNS) |
+| POST | `/api/admin/domains/{name}/dkim/{id}/activate` | `{ force?: boolean }` | `DkimKey[]`; ohne `force` 409 `dkim_not_published`, solange der Eintrag nicht im DNS steht |
+| DELETE | `/api/admin/domains/{name}/dkim/{id}` | – | `{ ok }` (nur `pending`, oder `retired` nach Ablauf der 7 Tage; sonst 409) |
+
+Bestehende Installationen übernehmen den bisherigen Schlüssel beim Update als aktiven RSA-Schlüssel.
+
+### ARC (RFC 8617)
+
+Eingehende Mails mit ARC-Headern werden geprüft (`cv=none/pass/fail`, Sätze `i=1..50`); das Ergebnis
+steht als `arc=` im `Authentication-Results`-Header. Scheitert DMARC, ist die ARC-Kette aber gültig und
+von einem vertrauenswürdigen Weiterleiter versiegelt, gilt eine lokale Ausnahme:
+
+- hat der Weiterleiter laut seinem `ARC-Authentication-Results` DMARC (oder eine passende DKIM-Signatur)
+  bestanden, wird die Mail normal zugestellt,
+- sonst wird aus `p=reject` eine Quarantäne (Spam-Ordner).
+
+Die Ausnahme steht als `dmarc=fail (policy overridden: arc=pass, sealed by …)` im Header. Mails, die
+über einen Alias an externe Ziele weitergeleitet werden, erhalten einen neuen ARC-Satz (AAR mit unseren
+Prüfergebnissen, AMS über die Nachricht, AS über die Kette), signiert mit dem aktiven DKIM-Schlüssel der
+Alias-Domain. Eine bereits als `cv=fail` markierte Kette wird nicht weiter versiegelt.
+
+Einstellungsabschnitt `mailauth` (`GET/PUT /api/admin/settings`):
+
+```ts
+interface MailAuthSettings {
+  trustedArcSealers: string[];  // d= der ARC-Seals, Subdomains eingeschlossen
+                                // Standard: google.com, microsoft.com, outlook.com, icloud.com, yahoo.com
+  postmasterAddress: string;    // Ziel für postmaster@/abuse@ (leer = erstes aktives Admin-Konto)
+}
+```
+
+### postmaster@ und abuse@
+
+Für jede Domain ohne eigenes Konto oder eigenen Alias mit diesen Adressen werden `postmaster@` und
+`abuse@` automatisch an `mailauth.postmasterAddress` bzw. das erste aktive Admin-Konto zugestellt
+(vor einem Catch-all).
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/aliases/system` | – | `{ address, targets: string[], system: true, configured: boolean }[]` (nur lesbar) |
+
+### DMARC- und TLS-Berichte
+
+Mails an `postmaster@`, `dmarc@`, `dmarc-reports@`, `rua@`, `tlsrpt@` oder `tls-reports@` einer eigenen
+Domain (oder mit Betreff „Report Domain: …“ bzw. Header `TLS-Report-Domain`) werden nach Berichten
+durchsucht: DMARC-Aggregatberichte als XML, ZIP oder GZIP, TLS-Berichte als JSON oder GZIP. Entpackt
+werden höchstens 20 MB je Mail. Gespeichert werden nur Berichte über eigene Domains (und deren
+Subdomains), doppelt eingehende Berichte nur einmal; die Mail selbst wird normal zugestellt. Berichte
+werden nach 400 Tagen gelöscht.
+
+```ts
+interface DmarcDomainSummary { domain: string; reports: number; messages: number; passed: number; failed: number; reporters: string[] }
+interface DmarcSource {
+  domain: string; sourceIp: string; count: number;
+  spfPass: number; dkimPass: number; dmarcPass: number;   // Anzahl Nachrichten (ausgerichtete Ergebnisse)
+  quarantined: number; rejected: number; reporters: string[]; headerFrom: string[];
+}
+interface DmarcReport {
+  id: number; domain: string; orgName: string; email: string; reportId: string;
+  begin: string; end: string; policy: { domain: string; adkim: string; aspf: string; p: string; sp: string; pct: string };
+  messages: number; failed: number; receivedAt: string;
+  records?: {
+    sourceIp: string; count: number; disposition: string; dkim: string; spf: string; headerFrom: string; envelopeFrom: string;
+    dkimResults: { domain: string; selector?: string; result: string }[];
+    spfResults: { domain: string; scope?: string; result: string }[];
+  }[];
+}
+interface TlsDomainSummary { domain: string; reports: number; success: number; failure: number; reporters: string[] }
+interface TlsFailureGroup {
+  domain: string; resultType: string; receivingMxHostname: string; sessions: number;
+  sendingIps: string[]; reporters: string[]; lastSeen: string;
+}
+interface TlsReport {
+  id: number; domain: string; orgName: string; email: string; reportId: string; begin: string; end: string;
+  policyType: string; policyString: string[]; mxHosts: string[]; successCount: number; failureCount: number;
+  failures: { resultType: string; sendingMtaIp: string; receivingMxHostname: string; receivingIp: string;
+              failedSessionCount: number; additionalInfo?: string; failureReasonCode?: string }[];
+  receivedAt: string;
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/reports/dmarc?domain=&days=30` | – | `{ summary: DmarcDomainSummary[]; sources: DmarcSource[]; reports: DmarcReport[] }` (Quellen mit Fehlern zuerst) |
+| GET | `/api/admin/reports/dmarc/{id}` | – | `DmarcReport` mit `records` |
+| DELETE | `/api/admin/reports/dmarc/{id}` | – | `{ ok }` |
+| GET | `/api/admin/reports/tls?domain=&days=30` | – | `{ summary: TlsDomainSummary[]; failures: TlsFailureGroup[]; reports: TlsReport[] }` |
+| DELETE | `/api/admin/reports/tls/{id}` | – | `{ ok }` |

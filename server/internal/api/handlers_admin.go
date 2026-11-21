@@ -97,6 +97,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request, u *store.A
 	if err := s.Store.CreateDomain(r.Context(), name, selector, key); err != nil {
 		return nil, err
 	}
+	s.addInitialEd25519Key(r.Context(), name)
 	s.Log.Info("domain created", "component", "admin", "domain", name, "by", u.Email)
 	return s.Store.GetDomain(r.Context(), name)
 }
@@ -216,6 +217,10 @@ func (s *Server) dnsRecords(d *store.Domain) ([]dnsRecord, error) {
 			Purpose: "Optional: wie oben, für POP3.", Priority: ip(0), Weight: ip(1), Port: ip(995), Target: sptr(host), Service: sptr("pop3s"), Protocol: sptr("tcp")},
 		{Key: "autoconfig", Type: "CNAME", Name: "autoconfig." + n + ".", Value: host + ".", Title: "Automatische Einrichtung: Thunderbird",
 			Purpose: "Optional: Thunderbird richtet Konten damit selbst ein."},
+	}
+	// Further DKIM keys (Ed25519, rotation) follow the primary DKIM record.
+	if extra := s.extraDKIMRecords(context.Background(), d); len(extra) > 0 {
+		recs = append(recs[:4], append(extra, recs[4:]...)...)
 	}
 	for i := range recs {
 		r := &recs[i]
@@ -583,7 +588,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	sections := map[string]any{
 		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
 		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security, "dyndns": &cur.DynDNS, "relay": &cur.Relay,
-		"backup": &cur.Backup,
+		"backup": &cur.Backup, "mailauth": &cur.MailAuth,
 	}
 	for k, raw := range patch {
 		target, known := sections[k]
@@ -642,6 +647,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 
 func validateSettings(c, old *store.Settings) error {
 	if err := validateBackup(&c.Backup, &old.Backup); err != nil {
+		return err
+	}
+	if err := validateMailAuth(&c.MailAuth); err != nil {
 		return err
 	}
 	switch c.AI.AutoFile.Mode {

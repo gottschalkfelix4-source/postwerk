@@ -162,6 +162,11 @@ export interface Settings {
     spfInclude: string;           // e.g. "include:_spf.strato.com" – added to the SPF suggestion
   };
   backup: BackupSettings;
+  /** Sender authentication: trusted ARC sealers and the postmaster@/abuse@ target. */
+  mailauth: {
+    trustedArcSealers: string[];
+    postmasterAddress: string;   // empty = first admin account
+  };
 }
 
 export type BackupTargetType = "local" | "webdav" | "smb";

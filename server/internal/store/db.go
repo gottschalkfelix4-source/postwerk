@@ -285,6 +285,18 @@ var migrations = []string{
 		until INTEGER NOT NULL,
 		failures INTEGER NOT NULL
 	);`,
+	// Sieve scripts (RFC 5228); at most one active script per account.
+	`CREATE TABLE sieve_scripts (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		name TEXT NOT NULL,
+		content TEXT NOT NULL,
+		active INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		UNIQUE(account_id, name)
+	);
+	CREATE UNIQUE INDEX sieve_scripts_active ON sieve_scripts(account_id) WHERE active = 1;`,
 }
 
 func migrate(db *sql.DB) error {

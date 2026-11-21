@@ -47,6 +47,7 @@ services:
       - "143:1430"    # IMAP mit STARTTLS (optional, kann entfernt werden)
       - "995:9950"    # POP3S Abruf
       - "110:1100"    # POP3 mit STARTTLS (optional, kann entfernt werden)
+      - "4190:4190"   # ManageSieve: Filterregeln aus Mailprogrammen verwalten (optional, kann entfernt werden)
       - "80:8080"     # Let's-Encrypt-Prüfung (schließt sich nach dem Zertifikat, siehe Setup-Assistent → TLS)
       - "443:8443"    # Weboberfläche über HTTPS
     volumes:

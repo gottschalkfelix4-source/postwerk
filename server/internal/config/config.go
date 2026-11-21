@@ -23,6 +23,8 @@ type Config struct {
 	IMAPSAddr       string // 993
 	POP3Addr        string // 110
 	POP3SAddr       string // 995
+	// ManageSieveAddr serves ManageSieve (RFC 5804, 4190); empty disables.
+	ManageSieveAddr string
 
 	TLSCertFile string
 	TLSKeyFile  string
@@ -70,6 +72,7 @@ func Load() *Config {
 		IMAPSAddr:         env("POSTWERK_IMAPS_ADDR", ""),
 		POP3Addr:          env("POSTWERK_POP3_ADDR", ":1110"),
 		POP3SAddr:         env("POSTWERK_POP3S_ADDR", ""),
+		ManageSieveAddr:   env("POSTWERK_MANAGESIEVE_ADDR", ":4190"),
 		TLSCertFile:       env("POSTWERK_TLS_CERT", ""),
 		TLSKeyFile:        env("POSTWERK_TLS_KEY", ""),
 		CertsDir:          env("POSTWERK_CERTS_DIR", "/certs"),

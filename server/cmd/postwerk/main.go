@@ -31,6 +31,7 @@ import (
 	"postwerk/internal/imapd"
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
+	"postwerk/internal/managesieve"
 	"postwerk/internal/message"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
@@ -206,6 +207,15 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	}
 	if cfg.POP3SAddr != "" {
 		srv := &pop3.Server{Addr: cfg.POP3SAddr, ImplicitTLS: true, TLSConfig: pop3TLS, Store: st, Auth: popAuth, Banned: guard.Banned, Hostname: hostname, Log: pop3Log}
+		listeners = append(listeners, srv.ListenAndServe)
+	}
+
+	if cfg.ManageSieveAddr != "" {
+		srv := &managesieve.Server{Addr: cfg.ManageSieveAddr, TLSConfig: tp.MailConfig("managesieve"), Store: st, Banned: guard.Banned,
+			Log: log.With("component", "managesieve"), AllowInsecureAuth: cfg.AllowInsecureAuth,
+			Auth: func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
+				return authn.Protocol(ctx, ip, user, pass, "managesieve")
+			}}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 

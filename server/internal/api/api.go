@@ -553,6 +553,7 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/mail/send", s.user(s.send))
 	m.HandleFunc("POST /api/mail/drafts", s.user(s.saveDraft))
 	m.HandleFunc("GET /api/mail/tags", s.user(s.tags))
+	s.sieveRoutes(m)
 
 	// ai
 	m.HandleFunc("GET /api/ai/status", s.user(s.aiStatus))

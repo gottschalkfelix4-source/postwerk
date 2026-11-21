@@ -417,9 +417,28 @@ func (s *Store) DeleteAlias(ctx context.Context, id int64) error {
 	return nil
 }
 
+// SubaddressSeparator separates user and detail in sub-addresses (RFC 5233).
+const SubaddressSeparator = "+"
+
+// StripDetail turns user+detail@domain into user@domain. ok is false when
+// the address carries no detail.
+func StripDetail(addr string) (string, bool) {
+	at := strings.LastIndexByte(addr, '@')
+	if at <= 0 {
+		return addr, false
+	}
+	local, domain := addr[:at], addr[at:]
+	user, _, found := strings.Cut(local, SubaddressSeparator)
+	if !found || user == "" {
+		return addr, false
+	}
+	return user + domain, true
+}
+
 // ResolveRecipient expands an address into local account e-mails and external
 // forward targets. Aliases are expanded recursively (max depth 5), then the
-// domain catch-all applies if nothing matched.
+// domain catch-all applies if nothing matched. user+tag@domain resolves like
+// user@domain when the full address is unknown.
 func (s *Store) ResolveRecipient(ctx context.Context, addr string) (local []string, external []string, err error) {
 	seen := map[string]bool{}
 	var walk func(a string, depth int) error
@@ -454,6 +473,17 @@ func (s *Store) ResolveRecipient(ctx context.Context, addr string) (local []stri
 		if !ok {
 			external = append(external, a)
 			return nil
+		}
+		// Sub-addressing: user+tag@domain goes to user@domain unless the
+		// full address exists itself (checked above).
+		if base, ok := StripDetail(a); ok {
+			before := len(local) + len(external)
+			if err := walk(base, depth+1); err != nil {
+				return err
+			}
+			if len(local)+len(external) > before {
+				return nil
+			}
 		}
 		// Local domain but unknown mailbox: try catch-all once.
 		if depth == 0 {

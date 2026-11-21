@@ -641,3 +641,60 @@ interface AutoFile {
 
 Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
 `categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.
+
+## Filterregeln (Sieve)
+
+Jedes Konto kann bis zu 20 Sieve-Skripte (RFC 5228, je höchstens 64 KB) speichern; höchstens eines ist
+aktiv. Unterstützte Erweiterungen: `fileinto`, `reject`, `ereject`, `envelope`, `imap4flags`, `copy`,
+`body`, `variables`, `vacation`, `relational`, `regex`, `subaddress`, `date`, `mailbox`,
+`comparator-i;ascii-numeric`. Dieselben Skripte lassen sich per ManageSieve (RFC 5804, Port 4190,
+`POSTWERK_MANAGESIEVE_ADDR`, Anmeldung mit AUTHENTICATE PLAIN erst nach STARTTLS) verwalten.
+
+Zustellung:
+
+- Das aktive Skript läuft bei der lokalen Zustellung nach Spam- und Virenprüfung, bevor die Nachricht im
+  Posteingang landet. Als Spam eingestufte Nachrichten (auch DMARC-Quarantäne und Viren-Quarantäne)
+  gehen ohne Skript in den Spam-Ordner.
+- `fileinto` sucht den Ordner per Name (`INBOX` = Posteingang); fehlt er, landet die Nachricht im
+  Posteingang, außer bei `:create`.
+- `redirect` (höchstens 5 je Nachricht) stellt lokal direkt zu und schickt externe Ziele mit SRS-Absender
+  über die Warteschlange. Der Kopf `X-Sieve-Redirected-By` verhindert Schleifen zwischen Konten.
+- `reject`/`ereject` lehnen bei einem einzigen Empfänger direkt im SMTP-Dialog ab (550), sonst geht eine
+  Unzustellbarkeitsnachricht mit dem Grund an den Absender.
+- Fehler zur Laufzeit führen zum impliziten `keep` (Posteingang).
+- Die Abwesenheitsnotiz aus den Kontoeinstellungen bleibt unabhängig und antwortet nach dem Skript, sofern
+  die Nachricht in einem Ordner abgelegt wurde und das Skript nicht selbst `vacation` ausgeführt hat.
+- Sub-Adressierung: `name+stichwort@domain` wird an `name@domain` zugestellt, wenn die volle Adresse
+  weder Konto noch Alias ist. `envelope :detail "to"` liefert `stichwort`.
+
+```ts
+interface SieveScriptInfo { name: string; active: boolean; size: number; updatedAt: string; }
+interface SieveScript extends SieveScriptInfo { content: string; }
+interface SieveList { scripts: SieveScriptInfo[]; active: string | null; capabilities: string[]; maxSize: number; maxScripts: number; }
+interface SieveError { error: "invalid_script"; message: string; detail: string; line: number; column: number; }
+interface SieveAction {
+  type: "keep" | "fileinto" | "redirect" | "discard" | "reject" | "ereject" | "vacation";
+  mailbox?: string; create?: boolean; copy?: boolean; flags?: string[]; address?: string; reason?: string;
+  vacation?: { days: number; subject?: string; from?: string; addresses?: string[]; handle?: string; reason: string };
+  implicit?: boolean;              // implizites keep
+}
+interface SieveTestResult { actions: SieveAction[]; implicitKeep: boolean; script: string; error?: string; }
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/mail/sieve` | – | `SieveList` |
+| GET | `/api/mail/sieve/{name}` | – | `SieveScript` |
+| PUT | `/api/mail/sieve/{name}` | `{ content, activate? }` | `SieveScript`; ungültig → 400 `SieveError` |
+| DELETE | `/api/mail/sieve/{name}` | – | `Ok`; aktives Skript → 409 |
+| POST | `/api/mail/sieve/{name}/activate` | – | `Ok` |
+| POST | `/api/mail/sieve/deactivate` | – | `Ok` |
+| POST | `/api/mail/sieve/check` | `{ content }` | `{ ok: true }` oder 400 `SieveError` |
+| POST | `/api/mail/sieve/test` | `{ content?, messageId?, raw?, envelopeFrom?, envelopeTo? }` | `SieveTestResult` |
+
+`message` in `SieveError` hat die Form `Zeile 3, Spalte 5: „;“ fehlt nach „keep“`. Der Test ist ein
+Probelauf ohne Wirkung; ohne `content` wird das aktive Skript verwendet, als Umschlag-Absender dient
+ohne `envelopeFrom` die Absenderadresse der Nachricht.
+
+Der Regel-Editor im Webmail speichert seine Regeln als Skript `postwerk-regeln` (die Regeln zusätzlich als
+JSON im Kommentar `# rules:`); wurde das Skript von Hand geändert, zeigt der Editor einen Hinweis.

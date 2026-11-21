@@ -113,8 +113,12 @@ interface MessageDetail extends MessageSummary {
   ai: { summary: string | null; reasons: string[]; events: ExtractedEvent[]; tasks: ExtractedTask[] } ;
 }
 
-interface CalendarEvent { id: number; title: string; start: string; end: string | null; location: string | null; description: string | null; sourceMessageId: number | null; }
-interface Task { id: number; title: string; due: string | null; done: boolean; sourceMessageId: number | null; createdAt: string; }
+// Zeitwerte: Termine mit Uhrzeit in UTC ("2026-11-21T08:00:00Z") oder als lokale Zeit ohne Zone
+// ("2026-11-21T10:00:00"); ganztägige Termine als Datum ("2026-11-21"), `end` dann exklusiv.
+interface CalendarEvent { id: number; calendarId: number; uid: string; title: string; start: string; end: string | null; allDay: boolean;
+  location: string | null; description: string | null; rrule: string | null; instance: string | null; sourceMessageId: number | null; }
+interface Task { id: number; calendarId: number; uid: string; title: string; due: string | null; done: boolean; description: string | null;
+  sourceMessageId: number | null; createdAt: string; }
 
 interface Vacation { enabled: boolean; subject: string; body: string; from: string | null; until: string | null; }
 interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt: string | null; }
@@ -205,16 +209,24 @@ interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt:
 
 ## Kalender, Aufgaben, DMS
 
+Termine und Aufgaben liegen als iCalendar-Objekte (VEVENT/VTODO) in Kalendern und sind dieselben
+Daten, die CalDAV-Clients sehen (siehe „Kalender und Kontakte (CalDAV/CardDAV)“).
+
 | Methode | Pfad | Body | Antwort |
 |---|---|---|---|
-| GET | `/api/calendar/events?from=&to=` | – | `CalendarEvent[]` |
-| POST | `/api/calendar/events` | `Omit<CalendarEvent,"id">` | `CalendarEvent` |
-| DELETE | `/api/calendar/events/{id}` | – | `{ ok }` |
-| GET | `/api/tasks` | – | `Task[]` |
-| POST | `/api/tasks` | `{ title, due?, sourceMessageId? }` | `Task` |
-| PATCH | `/api/tasks/{id}` | `{ title?, due?, done? }` | `Task` |
+| GET | `/api/calendar/events?from=&to=&calendar=` | – | `CalendarEvent[]`; Serien (RRULE) sind im Zeitraum in Einzeltermine aufgelöst (gleiche `id`, `instance` = Beginn des Vorkommens) |
+| POST | `/api/calendar/events` | `EventInput` | `CalendarEvent` |
+| PUT | `/api/calendar/events/{id}` | `EventInput & { instance? }` | `CalendarEvent` (ändert die ganze Serie; mit `instance` wird die Serie um den Abstand `start − instance` verschoben) |
+| DELETE | `/api/calendar/events/{id}` | – | `{ ok }` (ganze Serie) |
+| GET | `/api/tasks?calendar=` | – | `Task[]` |
+| POST | `/api/tasks` | `{ calendarId?, title, due?, description?, sourceMessageId? }` | `Task` |
+| PATCH | `/api/tasks/{id}` | `{ calendarId?, title?, due?, done?, description? }` | `Task` |
 | DELETE | `/api/tasks/{id}` | – | `{ ok }` |
 | POST | `/api/dms/forward` | `{ messageId, attachmentId }` | `{ ok }` |
+
+`EventInput = { calendarId?, title, start, end?, allDay?, location?, description?, rrule?, sourceMessageId? }` –
+`rrule` ohne „RRULE:“ (z. B. `FREQ=WEEKLY;COUNT=10`); bei PUT bedeutet fehlend „unverändert“, `""` „keine Wiederholung“.
+Eigenschaften, die die Weboberfläche nicht kennt (Erinnerungen, Teilnehmer …), bleiben beim Bearbeiten erhalten.
 
 ## Sonstiges
 
@@ -641,3 +653,74 @@ interface AutoFile {
 
 Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
 `categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.
+
+## Kalender und Kontakte (CalDAV/CardDAV)
+
+Postwerk ist CalDAV- (RFC 4791) und CardDAV-Server (RFC 6352). Alle Kalender und Adressbücher eines
+Kontos sind über die JSON-API und per DAV erreichbar; beide arbeiten auf denselben Daten
+(Tabellen `dav_collections`, `calendar_objects`, `address_objects`). Beim ersten Start nach dem Update
+werden die bisherigen Tabellen `events`/`tasks` einmalig in iCalendar-Objekte des Standardkalenders
+übernommen (die alten Zeilen bleiben unangetastet liegen).
+
+### Typen
+
+```ts
+interface Calendar { id: number; slug: string; name: string; color: string; description: string; components: string[]; url: string; }
+interface AddressBook { id: number; slug: string; name: string; color: string; description: string; components: string[]; url: string; count: number; }
+interface ContactEntry { type: string; value: string; }   // E-Mail: home|work|other; Telefon: cell|home|work|other
+interface Contact { id: number; addressBookId: number; uid: string; name: string; firstName: string; lastName: string;
+  emails: ContactEntry[]; phones: ContactEntry[]; organization: string; title: string; notes: string; birthday: string | null; updatedAt: string; }
+type ContactInput = Omit<Contact, "id" | "uid" | "updatedAt" | "addressBookId"> & { addressBookId?: number };
+interface ImportResult { imported: number; updated: number; skipped: number; }
+interface Suggestion { name: string; email: string; source: "contact" | "recent"; }
+```
+
+`url` ist der DAV-Pfad der Sammlung. Jedes Konto hat mindestens den Kalender „Kalender“ (VEVENT und VTODO)
+und das Adressbuch „Kontakte“; sie werden beim ersten Zugriff angelegt.
+
+### Endpunkte
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/calendars` | – | `Calendar[]` |
+| POST | `/api/calendars` | `{ name, color?, description?, components? }` | `Calendar` |
+| PATCH | `/api/calendars/{id}` | `{ name?, color?, description? }` | `Calendar` |
+| DELETE | `/api/calendars/{id}` | – | `{ ok }`; `409` beim letzten Kalender |
+| GET | `/api/calendars/{id}/export` | – | `.ics`-Datei |
+| POST | `/api/calendars/{id}/import` | `{ data: string }` (ICS-Text) | `ImportResult` (gleiche UID = Aktualisierung) |
+| GET | `/api/addressbooks` | – | `AddressBook[]` |
+| POST / PATCH / DELETE | `/api/addressbooks[/{id}]` | `{ name }` | wie bei Kalendern |
+| GET | `/api/contacts?q=&addressBook=&limit=` | – | `Contact[]` (Suche in Name, Organisation, E-Mail, Telefon) |
+| GET | `/api/contacts/{id}` | – | `Contact` |
+| POST | `/api/contacts` | `ContactInput` | `Contact` |
+| PUT | `/api/contacts/{id}` | `ContactInput` | `Contact` (unbekannte vCard-Felder wie Foto oder Adresse bleiben erhalten) |
+| DELETE | `/api/contacts/{id}` | – | `{ ok }` |
+| GET | `/api/contacts/export?addressBook=` | – | `.vcf`-Datei (alle oder ein Adressbuch) |
+| POST | `/api/contacts/import` | `{ addressBookId?, data: string }` (vCard-Text) | `ImportResult` |
+| GET | `/api/contacts/suggest?q=&limit=` | – | `Suggestion[]`: Kontakte, danach zuletzt angeschriebene Adressen (Gesendet) |
+| GET | `/api/account/dav` | – | `{ caldavUrl, carddavUrl, principalUrl, server, username }` |
+| GET | `/api/account/apple-profile` | – | `.mobileconfig` (unsigniert) mit IMAP, SMTP, CalDAV und CardDAV, ohne Passwort |
+
+### DAV-Server
+
+| Pfad | Bedeutung |
+|---|---|
+| `/.well-known/caldav`, `/.well-known/carddav` | `301` auf `/dav/` (RFC 6764) |
+| `/dav/principals/<E-Mail>/` | Principal (`current-user-principal`, `calendar-home-set`, `addressbook-home-set`) |
+| `/dav/calendars/<E-Mail>/<kalender>/<name>.ics` | Kalender und Objekte |
+| `/dav/addressbooks/<E-Mail>/<adressbuch>/<name>.vcf` | Adressbücher und vCards |
+
+- **Anmeldung:** HTTP Basic mit Kontopasswort oder App-Passwort (bei aktivierter 2FA nur App-Passwort), über
+  dieselbe Brute-Force-Sperre wie IMAP/SMTP (Protokoll `dav`). Nur über HTTPS, direkt oder über einen
+  vertrauenswürdigen Reverse-Proxy mit `X-Forwarded-Proto: https`; unverschlüsselte Anfragen werden mit `403`
+  abgelehnt (Ausnahme: `POSTWERK_ALLOW_INSECURE_AUTH` für Tests). Der CSRF-Header der JSON-API gilt für `/dav/` nicht.
+- **Methoden:** `OPTIONS`, `PROPFIND` (Depth 0/1), `PROPPATCH` (Name, Farbe, Beschreibung), `GET`/`HEAD`
+  (auf eine Sammlung: alles als eine Datei), `PUT` mit `If-Match`/`If-None-Match`, `DELETE`, `MKCALENDAR`,
+  erweitertes `MKCOL` (RFC 5689), `MOVE` zwischen Sammlungen.
+- **REPORT:** `calendar-query` (inkl. `time-range` mit Wiederholungen), `calendar-multiget`,
+  `addressbook-query`, `addressbook-multiget`, `sync-collection` (RFC 6578).
+- **Eigenschaften:** u. a. `getetag`, `getctag` (CalendarServer), `sync-token`, `calendar-color` (Apple),
+  `supported-calendar-component-set`, `supported-report-set`, `current-user-privilege-set`.
+- Gespeichert wird der Text so, wie der Client ihn schickt; die ETag-Antwort auf `PUT` entspricht deshalb
+  exakt dem gespeicherten Objekt. Wiederholungsregeln bleiben unverändert erhalten.
+- DNS: `_caldavs._tcp` / `_carddavs._tcp` (SRV auf Port 443) und je ein TXT `path=/dav/` stehen in der DNS-Anleitung.

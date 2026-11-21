@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Ellipsis, FolderPlus, ListTodo, Pencil, Sparkles, SquarePen, Tag, Trash2, UserCog } from "lucide-react";
+import { BookUser, CalendarDays, Ellipsis, FolderPlus, ListTodo, Pencil, Sparkles, SquarePen, Tag, Trash2, UserCog } from "lucide-react";
 import { mailApi } from "@/api/endpoints";
 import type { Mailbox } from "@/api/types";
 import { useMe } from "@/lib/auth";
@@ -193,6 +193,13 @@ export function MailSidebar() {
           {({ isActive }) => (
             <>
               <ListTodo className={navIconClass(isActive)} /> Aufgaben
+            </>
+          )}
+        </NavLink>
+        <NavLink to="/mail/contacts" className={({ isActive }) => navItemClass(isActive)}>
+          {({ isActive }) => (
+            <>
+              <BookUser className={navIconClass(isActive)} /> Kontakte
             </>
           )}
         </NavLink>

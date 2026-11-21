@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
-import { KeyRound, LifeBuoy, Lock, LogOut, Monitor, Palmtree, Plus, RefreshCw, ShieldCheck, ShieldOff, Smartphone, Trash2 } from "lucide-react";
+import { CalendarSync, Download, KeyRound, LifeBuoy, Lock, LogOut, Monitor, Palmtree, Plus, RefreshCw, ShieldCheck, ShieldOff, Smartphone, Trash2 } from "lucide-react";
 import { accountApi } from "@/api/endpoints";
 import type { CreatedAppPassword, TotpSetup, Vacation } from "@/api/types";
 import { useMe } from "@/lib/auth";
@@ -64,6 +64,7 @@ export default function MailSettingsPage() {
         <PasswordCard />
         <TotpCard />
         <AppPasswordsCard />
+        <DavSyncCard />
         <SessionsCard />
         <VacationCard />
         <ImportCard />
@@ -426,6 +427,62 @@ function TotpCard() {
   );
 }
 
+function DavSyncCard() {
+  const me = useMe();
+  const q = useQuery({ queryKey: qk.davInfo, queryFn: accountApi.dav, staleTime: 5 * 60_000 });
+  const rows: { label: string; value: string | undefined }[] = [
+    { label: "Server", value: q.data?.server },
+    { label: "Benutzername", value: q.data?.username ?? me.email },
+    { label: "CalDAV-Adresse", value: q.data?.caldavUrl },
+    { label: "CardDAV-Adresse", value: q.data?.carddavUrl },
+  ];
+  return (
+    <Card>
+      <CardHeader
+        title="Kalender & Kontakte synchronisieren"
+        description="Kalender, Aufgaben und Kontakte per CalDAV und CardDAV mit Smartphone, Tablet und Desktop abgleichen."
+        icon={<CalendarSync className="h-4 w-4 text-zinc-400" />}
+        actions={
+          <Button size="sm" icon={Download} onClick={() => (window.location.href = accountApi.appleProfileUrl)}>
+            Apple-Profil herunterladen
+          </Button>
+        }
+      />
+      <CardBody className="space-y-4">
+        <dl className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          {rows.map((r) => (
+            <div key={r.label} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3.5 py-2.5">
+              <dt className="w-36 shrink-0 text-sm text-zinc-500 dark:text-zinc-400">{r.label}</dt>
+              <dd className="flex min-w-0 flex-1 items-center gap-2">
+                {q.isLoading && !r.value ? (
+                  <Skeleton className="h-4 w-48" />
+                ) : (
+                  <>
+                    <code className="min-w-0 flex-1 truncate font-mono text-[13px] text-zinc-800 dark:text-zinc-200">{r.value ?? "–"}</code>
+                    {r.value && <CopyButton value={r.value} />}
+                  </>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <div className="space-y-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+          <p>
+            <span className="font-medium text-zinc-800 dark:text-zinc-200">iPhone, iPad und Mac:</span> Einstellungen → Kalender bzw. Kontakte → Accounts →
+            Account hinzufügen → Andere → <em>CalDAV-Account</em> bzw. <em>CardDAV-Account</em>. Als Server{" "}
+            <code className="font-mono text-[13px]">{q.data?.server ?? "den Mailserver"}</code> eintragen, als Benutzer deine E-Mail-Adresse.
+          </p>
+          <p>
+            Als Passwort dein Kontopasswort – bei aktiver Zwei-Faktor-Anmeldung ein App-Passwort. Einfacher geht es mit dem Apple-Profil: Es richtet Mail, Kalender und
+            Kontakte in einem Schritt ein; das Passwort wird beim Installieren abgefragt.
+          </p>
+          <p>Android (z. B. DAVx⁵), Thunderbird und andere Programme verwenden die CalDAV- und CardDAV-Adresse oben.</p>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
 function AppPasswordsCard() {
   const me = useMe();
   const qc = useQueryClient();
@@ -473,7 +530,7 @@ function AppPasswordsCard() {
     <Card>
       <CardHeader
         title="App-Passwörter"
-        description={`Eigene Passwörter für IMAP, SMTP, CalDAV oder Smartphones – einzeln widerrufbar (höchstens ${MAX_APP_PASSWORDS}).`}
+        description={`Eigene Passwörter für Mail-Programme und Smartphones (IMAP, SMTP, POP3, CalDAV, CardDAV) – einzeln widerrufbar (höchstens ${MAX_APP_PASSWORDS}).`}
         icon={<KeyRound className="h-4 w-4 text-zinc-400" />}
         actions={
           <Button size="sm" icon={Plus} disabled={atLimit} onClick={() => setCreateOpen(true)}>

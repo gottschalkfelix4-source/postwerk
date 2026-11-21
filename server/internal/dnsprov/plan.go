@@ -88,6 +88,10 @@ func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string, op
 		Desired{Key: "srv-submission", Record: Record{Name: "_submission._tcp." + domain, Type: "SRV", Value: "1 587 " + hostDot}, Purpose: "Autokonfiguration: Versand (STARTTLS)"},
 		Desired{Key: "srv-imaps", Record: Record{Name: "_imaps._tcp." + domain, Type: "SRV", Value: "1 993 " + hostDot}, Purpose: "Autokonfiguration: IMAP (TLS)"},
 		Desired{Key: "srv-pop3s", Record: Record{Name: "_pop3s._tcp." + domain, Type: "SRV", Value: "1 995 " + hostDot}, Purpose: "Autokonfiguration: POP3 (TLS)"},
+		Desired{Key: "srv-caldavs", Record: Record{Name: "_caldavs._tcp." + domain, Type: "SRV", Value: "1 443 " + hostDot}, Purpose: "Autokonfiguration: Kalender (CalDAV)"},
+		Desired{Key: "txt-caldavs", Record: Record{Name: "_caldavs._tcp." + domain, Type: "TXT", Value: "path=/dav/"}, Purpose: "Autokonfiguration: CalDAV-Pfad", Match: "path="},
+		Desired{Key: "srv-carddavs", Record: Record{Name: "_carddavs._tcp." + domain, Type: "SRV", Value: "1 443 " + hostDot}, Purpose: "Autokonfiguration: Kontakte (CardDAV)"},
+		Desired{Key: "txt-carddavs", Record: Record{Name: "_carddavs._tcp." + domain, Type: "TXT", Value: "path=/dav/"}, Purpose: "Autokonfiguration: CardDAV-Pfad", Match: "path="},
 		Desired{Key: "autoconfig", Record: Record{Name: "autoconfig." + domain, Type: "CNAME", Value: hostDot}, Purpose: "Thunderbird-Autokonfiguration"},
 	)
 	return d

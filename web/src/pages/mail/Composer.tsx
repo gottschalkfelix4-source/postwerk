@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { File as FileIcon, Paperclip, Save, Send, Trash2, Upload, X } from "lucide-react";
-import { mailApi } from "@/api/endpoints";
+import { contactsApi, mailApi } from "@/api/endpoints";
 import type { OutgoingAttachment, SendRequest } from "@/api/types";
 import { useMe } from "@/lib/auth";
 import { formatBytes } from "@/lib/format";
 import { cn, extractEmail, fileToBase64, isEmail } from "@/lib/utils";
-import { Button, ChipInput, Kbd, Modal, Textarea, useConfirm, useToast } from "@/components/ui";
+import { Button, ChipInput, Kbd, Modal, Textarea, useConfirm, useToast, type ChipSuggestion } from "@/components/ui";
 import type { ComposeInit } from "./mailUtils";
 
 interface ComposerApi {
@@ -72,6 +72,16 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       {draft && <ComposerPanel key={session} initial={draft} onClose={() => setDraft(null)} />}
     </ComposerContext.Provider>
   );
+}
+
+/** Address suggestions from contacts and recently used recipients. */
+async function suggestAddresses(q: string, signal: AbortSignal): Promise<ChipSuggestion[]> {
+  const list = await contactsApi.suggest(q, 8, signal);
+  return list.map((s) => ({
+    value: s.email.toLowerCase(),
+    label: s.name ? `${s.name} <${s.email}>` : s.email,
+    hint: s.source === "contact" ? "Kontakt" : "Zuletzt",
+  }));
 }
 
 const validateAddress = (v: string) => (isEmail(v) ? null : `„${v}“ ist keine gültige E-Mail-Adresse.`);
@@ -363,6 +373,7 @@ function AddressRow({
         validate={validateAddress}
         placeholder="name@beispiel.de"
         autoFocus={autoFocus}
+        suggest={suggestAddresses}
         className="min-w-0 flex-1 [&>div]:border-0 [&>div]:bg-transparent [&>div]:px-0 [&>div]:shadow-none [&>div]:focus-within:ring-0 dark:[&>div]:bg-transparent"
       />
       {children && <div className="pt-1.5">{children}</div>}

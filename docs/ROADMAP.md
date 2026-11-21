@@ -53,7 +53,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 ## Meilenstein 3 – Groupware und Zustellbarkeit
 
-- ⏳ CalDAV und CardDAV (Kalender, Kontakte, Aufgaben als VTODO); der interne Kalender wird darauf migriert
+- ✅ CalDAV und CardDAV (Kalender, Kontakte, Aufgaben als VTODO, sync-collection, mehrere Kalender/Adressbücher); der interne Kalender ist darauf migriert, Kontakte und Adress-Vervollständigung im Webmail, Apple-Profil
 - ⏳ MTA-STS-Policy ausliefern und ausgehend erzwingen, DANE (TLSA) ausgehend prüfen
 - ⏳ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
 - ⏳ DMARC- und TLS-RPT-Berichte empfangen und auswerten

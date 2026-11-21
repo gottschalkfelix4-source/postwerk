@@ -13,7 +13,16 @@ import type {
   BackupTestResult,
   Ban,
   BulkRequest,
+  AddressBook,
+  AddressSuggestion,
+  Calendar,
   CalendarEvent,
+  CalendarInput,
+  Contact,
+  ContactInput,
+  DavImportResult,
+  DavInfo,
+  EventInput,
   CertificateFile,
   ClamavTestResult,
   CreateAccountRequest,
@@ -105,6 +114,8 @@ export const accountApi = {
   logoutOtherSessions: () => http.post<Ok & { ended: number }>("/api/account/sessions/logout-others"),
   vacation: () => http.get<Vacation>("/api/account/vacation"),
   saveVacation: (v: Vacation) => http.put<Vacation>("/api/account/vacation", v),
+  dav: () => http.get<DavInfo>("/api/account/dav"),
+  appleProfileUrl: buildUrl("/api/account/apple-profile"),
 };
 
 export const adminApi = {
@@ -247,9 +258,39 @@ export const aiApi = {
 };
 
 export const calendarApi = {
-  events: (from: string, to: string) => http.get<CalendarEvent[]>("/api/calendar/events", { query: { from, to } }),
-  createEvent: (body: Omit<CalendarEvent, "id">) => http.post<CalendarEvent>("/api/calendar/events", body),
+  events: (from: string, to: string, calendar?: number) =>
+    http.get<CalendarEvent[]>("/api/calendar/events", { query: { from, to, calendar } }),
+  createEvent: (body: EventInput) => http.post<CalendarEvent>("/api/calendar/events", body),
+  updateEvent: (id: number, body: EventInput) => http.put<CalendarEvent>(`/api/calendar/events/${id}`, body),
   deleteEvent: (id: number) => http.delete<Ok>(`/api/calendar/events/${id}`),
+
+  calendars: () => http.get<Calendar[]>("/api/calendars"),
+  createCalendar: (body: CalendarInput & { name: string }) => http.post<Calendar>("/api/calendars", body),
+  updateCalendar: (id: number, body: CalendarInput) => http.patch<Calendar>(`/api/calendars/${id}`, body),
+  deleteCalendar: (id: number) => http.delete<Ok>(`/api/calendars/${id}`),
+  importIcs: (id: number, data: string) => http.post<DavImportResult>(`/api/calendars/${id}/import`, { data }),
+  exportUrl: (id: number) => buildUrl(`/api/calendars/${id}/export`),
+};
+
+export const addressBooksApi = {
+  list: () => http.get<AddressBook[]>("/api/addressbooks"),
+  create: (name: string) => http.post<AddressBook>("/api/addressbooks", { name }),
+  update: (id: number, name: string) => http.patch<AddressBook>(`/api/addressbooks/${id}`, { name }),
+  remove: (id: number) => http.delete<Ok>(`/api/addressbooks/${id}`),
+};
+
+export const contactsApi = {
+  list: (q?: string, addressBook?: number, signal?: AbortSignal) =>
+    http.get<Contact[]>("/api/contacts", { query: { q, addressBook }, signal }),
+  get: (id: number) => http.get<Contact>(`/api/contacts/${id}`),
+  create: (body: ContactInput) => http.post<Contact>("/api/contacts", body),
+  update: (id: number, body: ContactInput) => http.put<Contact>(`/api/contacts/${id}`, body),
+  remove: (id: number) => http.delete<Ok>(`/api/contacts/${id}`),
+  importVcf: (data: string, addressBookId?: number) =>
+    http.post<DavImportResult>("/api/contacts/import", { data, ...(addressBookId ? { addressBookId } : {}) }),
+  exportUrl: (addressBook?: number) => buildUrl("/api/contacts/export", { addressBook }),
+  suggest: (q: string, limit = 10, signal?: AbortSignal) =>
+    http.get<AddressSuggestion[]>("/api/contacts/suggest", { query: { q, limit }, signal }),
 };
 
 export const tasksApi = {

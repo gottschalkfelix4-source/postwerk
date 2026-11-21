@@ -40,6 +40,9 @@ func Open(dataDir string) (*Store, error) {
 	if err := migrate(db); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := migrateLegacyCalendar(context.Background(), db); err != nil {
+		return nil, fmt.Errorf("migrate calendar: %w", err)
+	}
 	blobs, err := NewBlobStore(filepath.Join(dataDir, "blobs"))
 	if err != nil {
 		return nil, err
@@ -284,6 +287,67 @@ var migrations = []string{
 		reason TEXT NOT NULL,
 		until INTEGER NOT NULL,
 		failures INTEGER NOT NULL
+	);`,
+	// CalDAV/CardDAV: calendars and address books with iCalendar/vCard
+	// objects, sync sequence numbers and tombstones for sync-collection.
+	`CREATE TABLE dav_collections (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		kind TEXT NOT NULL,
+		slug TEXT NOT NULL,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		color TEXT NOT NULL DEFAULT '',
+		components TEXT NOT NULL DEFAULT '',
+		sync_seq INTEGER NOT NULL DEFAULT 1,
+		created_at INTEGER NOT NULL,
+		UNIQUE(account_id, kind, slug)
+	);
+	CREATE TABLE calendar_objects (
+		id INTEGER PRIMARY KEY,
+		collection_id INTEGER NOT NULL REFERENCES dav_collections(id) ON DELETE CASCADE,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		name TEXT NOT NULL,
+		uid TEXT NOT NULL,
+		component TEXT NOT NULL,
+		data BLOB NOT NULL,
+		etag TEXT NOT NULL,
+		modseq INTEGER NOT NULL,
+		summary TEXT NOT NULL DEFAULT '',
+		start_ts INTEGER,
+		end_ts INTEGER,
+		source_message_id INTEGER,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		UNIQUE(collection_id, name),
+		UNIQUE(collection_id, uid)
+	);
+	CREATE INDEX calendar_objects_account ON calendar_objects(account_id, component, start_ts);
+	CREATE INDEX calendar_objects_modseq ON calendar_objects(collection_id, modseq);
+	CREATE TABLE address_objects (
+		id INTEGER PRIMARY KEY,
+		collection_id INTEGER NOT NULL REFERENCES dav_collections(id) ON DELETE CASCADE,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		name TEXT NOT NULL,
+		uid TEXT NOT NULL,
+		data BLOB NOT NULL,
+		etag TEXT NOT NULL,
+		modseq INTEGER NOT NULL,
+		fn TEXT NOT NULL DEFAULT '',
+		emails TEXT NOT NULL DEFAULT '',
+		search TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		UNIQUE(collection_id, name),
+		UNIQUE(collection_id, uid)
+	);
+	CREATE INDEX address_objects_account ON address_objects(account_id, fn);
+	CREATE INDEX address_objects_modseq ON address_objects(collection_id, modseq);
+	CREATE TABLE dav_tombstones (
+		collection_id INTEGER NOT NULL REFERENCES dav_collections(id) ON DELETE CASCADE,
+		name TEXT NOT NULL,
+		modseq INTEGER NOT NULL,
+		PRIMARY KEY(collection_id, name)
 	);`,
 }
 

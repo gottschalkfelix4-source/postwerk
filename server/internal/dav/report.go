@@ -1,6 +1,7 @@
 package dav
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -92,6 +93,10 @@ func (q *request) syncCollection(c *store.Collection, body *node) error {
 	// writes are reported (again) in the next sync rather than lost.
 	token := syncToken(c)
 	changed, deleted, err := q.h.Store.DAVChanges(q.ctx(), c, since)
+	if errors.Is(err, store.ErrInvalidSyncToken) {
+		// Deletions before the token were pruned: force a full resync.
+		return errCond(http.StatusForbidden, nsDAV, "valid-sync-token", "")
+	}
 	if err != nil {
 		return err
 	}

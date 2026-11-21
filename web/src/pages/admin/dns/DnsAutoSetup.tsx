@@ -146,6 +146,7 @@ const actionMeta: Record<DnsChangeAction, { label: string; tone: BadgeTone }> = 
   update: { label: "Ändern", tone: "amber" },
   unchanged: { label: "Unverändert", tone: "neutral" },
   manual: { label: "Manuell", tone: "neutral" },
+  delete: { label: "Entfernen", tone: "red" },
 };
 
 const typeTones: Record<string, BadgeTone> = {
@@ -170,7 +171,7 @@ function isIpv6(v: string): boolean {
 }
 
 function selectable(c: DnsChange): boolean {
-  return c.action === "create" || c.action === "update";
+  return c.action === "create" || c.action === "update" || c.action === "delete";
 }
 
 function replacesMx(c: DnsChange): boolean {
@@ -335,6 +336,7 @@ function DnsAutoSetupDialog({ onClose, domain, onApplied, defaultIpv4 }: DnsAuto
       setResult(r);
       setStep(3);
       void qc.invalidateQueries({ queryKey: setupKeys.dnsCheck(domain) });
+      void qc.invalidateQueries({ queryKey: ["admin", "dkim-dns-cleanup", domain] });
       onApplied?.();
     },
   });
@@ -823,7 +825,7 @@ function PreviewStep({
 }) {
   const changes = plan.changes;
   const count = (a: DnsChangeAction) => changes.filter((c) => c.action === a).length;
-  const counts = { create: count("create"), update: count("update"), unchanged: count("unchanged"), manual: count("manual") };
+  const counts = { create: count("create"), update: count("update"), unchanged: count("unchanged"), manual: count("manual"), delete: count("delete") };
   const selectableKeys = changes.filter(selectable).map((c) => c.key);
   const selectedCount = selectableKeys.filter((k) => selected.has(k)).length;
   const allSelected = selectableKeys.length > 0 && selectedCount === selectableKeys.length;
@@ -845,6 +847,7 @@ function PreviewStep({
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge tone="blue">{counts.create} neu</Badge>
           <Badge tone="amber">{counts.update} ändern</Badge>
+          {counts.delete > 0 && <Badge tone="red">{counts.delete} entfernen</Badge>}
           <Badge tone="neutral">{counts.unchanged} unverändert</Badge>
           <Badge tone="neutral">{counts.manual} manuell</Badge>
         </div>
@@ -955,21 +958,23 @@ function ChangeRow({
               <span className="pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Aktuell</span>
               <div className="space-y-1">
                 {c.current.map((v, i) => (
-                  <DnsValue key={i} value={v} variant={c.action === "update" ? "old" : "plain"} />
+                  <DnsValue key={i} value={v} variant={c.action === "update" || c.action === "delete" ? "old" : "plain"} />
                 ))}
               </div>
             </div>
           )}
-          <div className="grid grid-cols-[3.25rem_minmax(0,1fr)] items-start gap-x-2">
-            <span className="pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
-              {c.action === "unchanged" ? "Wert" : "Neu"}
-            </span>
-            <DnsValue
-              value={c.desired}
-              variant={c.action === "create" || c.action === "update" ? "new" : "plain"}
-              copy={c.action === "manual"}
-            />
-          </div>
+          {c.action !== "delete" && (
+            <div className="grid grid-cols-[3.25rem_minmax(0,1fr)] items-start gap-x-2">
+              <span className="pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+                {c.action === "unchanged" ? "Wert" : "Neu"}
+              </span>
+              <DnsValue
+                value={c.desired}
+                variant={c.action === "create" || c.action === "update" ? "new" : "plain"}
+                copy={c.action === "manual"}
+              />
+            </div>
+          )}
           {c.warning && (
             <p className="flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
               <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />

@@ -98,7 +98,14 @@ export interface Settings {
     hostname: string;
     maxMessageSize: number;
     /** Days until Trash/Junk are emptied automatically (0 = never). Missing in old settings. */
-    retention?: { trashDays: number; junkDays: number };
+    retention?: {
+      trashDays: number;
+      junkDays: number;
+      /** Delete retired DKIM keys automatically (default on). */
+      dkimCleanup?: boolean;
+      /** Days deleted calendar entries/contacts are remembered for sync clients (0 = forever). */
+      davTombstoneDays?: number;
+    };
   };
   web: {
     publicUrl: string;            // e.g. "https://mail.example.com" (empty = unknown)
@@ -173,7 +180,34 @@ export interface Settings {
   mailauth: {
     trustedArcSealers: string[];
     postmasterAddress: string;   // empty = first admin account
+    /** Our own MTA-STS policy: mode and max_age in seconds. */
+    mtaSts?: MtaStsSettings;
   };
+}
+
+export type MtaStsMode = "none" | "testing" | "enforce";
+
+export interface MtaStsSettings {
+  mode: MtaStsMode;
+  maxAge: number;
+}
+
+/** Certificate check of one host the MTA-STS policy depends on. */
+export interface MtaStsCheck {
+  host: string;
+  purpose: "mx" | "policy";
+  ok: boolean;
+  detail: string;
+}
+
+export interface MtaStsStatus {
+  mode: MtaStsMode;
+  maxAge: number;
+  policy: string;
+  /** id of the _mta-sts TXT record (changes with the policy). */
+  id: string;
+  checks: MtaStsCheck[];
+  enforceReady: boolean;
 }
 
 /** LDAP directory as account source (secrets masked). */
@@ -548,7 +582,7 @@ export interface DnsPlanRequest {
   ipv6?: string | null;       // optional AAAA
 }
 
-export type DnsChangeAction = "create" | "update" | "unchanged" | "manual";
+export type DnsChangeAction = "create" | "update" | "unchanged" | "manual" | "delete";
 
 export interface DnsChange {
   key: string;                // stable key, e.g. "mx", "spf", "dkim", "dmarc", "a", "aaaa", "mta-sts-txt" …

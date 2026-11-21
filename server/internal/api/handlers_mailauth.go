@@ -20,12 +20,45 @@ type dkimKeyView struct {
 	DNSName     string     `json:"dnsName"`
 	DNSValue    string     `json:"dnsValue"`
 	RemovableAt *time.Time `json:"removableAt"`
+	// AutoDeleteAt is when housekeeping deletes a retired key (nil when the
+	// automatic cleanup is off).
+	AutoDeleteAt *time.Time `json:"autoDeleteAt"`
 }
 
 func dkimView(k store.DKIMKey) dkimKeyView {
 	v := dkimKeyView{DKIMKey: k, DNSName: k.Selector + "._domainkey." + k.Domain + ".", RemovableAt: k.RemovableAt()}
 	v.DNSValue, _ = mailauth.DNSValue(k.PrivateKey)
 	return v
+}
+
+// dkimDNSCleanupView is the TXT record of a deleted key that may still be
+// published.
+type dkimDNSCleanupView struct {
+	Selector string `json:"selector"`
+	DNSName  string `json:"dnsName"`
+}
+
+// listDKIMDNSCleanup lists the DNS records of deleted keys to remove.
+func (s *Server) listDKIMDNSCleanup(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	d, err := s.Store.GetDomain(r.Context(), r.PathValue("name"))
+	if err != nil {
+		return nil, err
+	}
+	out := []dkimDNSCleanupView{}
+	for _, sel := range s.dkimDNSRemovals(r.Context(), d) {
+		out = append(out, dkimDNSCleanupView{Selector: sel, DNSName: sel + "._domainkey." + d.Name + "."})
+	}
+	return out, nil
+}
+
+// doneDKIMDNSCleanup marks the record of a deleted key as removed.
+func (s *Server) doneDKIMDNSCleanup(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	d, err := s.Store.GetDomain(r.Context(), r.PathValue("name"))
+	if err != nil {
+		return nil, err
+	}
+	s.Store.ForgetDKIMDNSCleanup(r.Context(), d.Name, r.PathValue("selector"))
+	return ok(), nil
 }
 
 // dkimErr turns state machine errors into 409 responses.
@@ -46,9 +79,14 @@ func (s *Server) listDKIMKeys(w http.ResponseWriter, r *http.Request, u *store.A
 	if err != nil {
 		return nil, err
 	}
+	auto := s.Settings.Get().Server.Retention.DKIMCleanup
 	out := make([]dkimKeyView, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, dkimView(k))
+		v := dkimView(k)
+		if auto {
+			v.AutoDeleteAt = k.AutoDeleteAt()
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -258,7 +296,7 @@ func validateMailAuth(c *store.MailAuthSettings) error {
 	if store.IsSystemAddress(c.PostmasterAddress) {
 		return invalid("Die Zieladresse darf selbst keine postmaster@- oder abuse@-Adresse sein")
 	}
-	return nil
+	return validateMTASTS(&c.MTASTS)
 }
 
 // ---- reports ----

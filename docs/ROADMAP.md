@@ -30,7 +30,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | Betrieb | Web-Verwaltung, REST-API, Live-Logs, Prometheus-Metriken, Dashboard | ✅ |
 | | Backup im Web-Interface: Archive lokal, per WebDAV oder SMB, Zeitplan, Aufbewahrung, AES-256-Verschlüsselung, Download/Upload, Wiederherstellung per Klick | ✅ |
 | | Backup-/Restore-Befehl, Notfall-Passwort-Reset | ✅ |
-| | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus „testing“) | ✅ |
+| | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus none/testing/enforce umschaltbar, Zertifikatsprüfung vor „enforce“) | ✅ |
 | | JMAP (RFC 8620/8621) als zusätzliche Client-API, siehe [API.md](API.md#jmap-rfc-8620--rfc-8621) | ✅ |
 | Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen (über die REST-API) | ✅ |
 | | Abwesenheitsnotiz | ✅ |
@@ -68,7 +68,8 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 - ✅ CalDAV und CardDAV (Kalender, Kontakte, Aufgaben als VTODO, sync-collection, mehrere Kalender/Adressbücher); der interne Kalender ist darauf migriert, Kontakte und Adress-Vervollständigung im Webmail, Apple-Profil
 - ✅ MTA-STS ausgehend erzwingen (RFC 8461, Modus enforce/testing) und DANE/TLSA prüfen (RFC 7672, wenn der Resolver DNSSEC validiert)
-- ⏳ MTA-STS-Modus der eigenen Policy in der Oberfläche umschalten (derzeit fest „testing“)
+- ✅ MTA-STS-Modus der eigenen Policy in der Oberfläche umschalten; die `id` im TXT-Eintrag folgt der Policy
+- ✅ Aufräumen: ausgemusterte DKIM-Schlüssel und alte CalDAV/CardDAV-Löschvermerke (sync-token danach ungültig, RFC 6578) automatisch entfernen; JMAP-IDs werden nie wiederverwendet
 - ✅ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
 - ✅ DMARC- und TLS-RPT-Berichte empfangen und auswerten
 - ⏳ DMARC- und TLS-RPT-Berichte selbst versenden

@@ -371,12 +371,20 @@ type Submission struct {
 
 // CreateSubmission stores a completed submission.
 func (s *Store) CreateSubmission(ctx context.Context, accountID int64, sub *Submission) error {
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO jmap_submissions(account_id, identity_id, email_id, thread_id, envelope_json, send_at) VALUES (?,?,?,?,?,?)`,
-		accountID, sub.IdentityID, sub.EmailID, sub.ThreadID, sub.EnvelopeJSON, sub.SendAt.Unix())
+	var id int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if id, err = nextID(ctx, tx, "jmap_submissions"); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO jmap_submissions(id, account_id, identity_id, email_id, thread_id, envelope_json, send_at) VALUES (?,?,?,?,?,?,?)`,
+			id, accountID, sub.IdentityID, sub.EmailID, sub.ThreadID, sub.EnvelopeJSON, sub.SendAt.Unix())
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	sub.ID, _ = res.LastInsertId()
+	sub.ID = id
 	s.LogChange(ctx, accountID, TypeEmailSubmission, sub.ID, 'c')
 	return nil
 }

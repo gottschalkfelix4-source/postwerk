@@ -205,6 +205,27 @@ func TestCalDAVRoundTrip(t *testing.T) {
 	if sync2.SyncToken == sync.SyncToken {
 		t.Fatal("sync token must change")
 	}
+
+	// Once the tombstone is pruned, the old token is no longer valid and the
+	// client must resync from scratch; the newer token still works.
+	if _, err := e.st.DB.Exec(`UPDATE dav_tombstones SET deleted_at = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.PruneDAVTombstones(ctx, 90*24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	report := func(token string) *http.Response {
+		body := `<?xml version="1.0"?><d:sync-collection xmlns:d="DAV:"><d:sync-token>` + token +
+			`</d:sync-token><d:sync-level>1</d:sync-level><d:prop><d:getetag/></d:prop></d:sync-collection>`
+		return e.raw(t, "REPORT", calPath, body, map[string]string{"Content-Type": "application/xml", "Depth": "1"})
+	}
+	r := report(sync.SyncToken)
+	if b := readBody(t, r); r.StatusCode != http.StatusForbidden || !strings.Contains(b, "valid-sync-token") {
+		t.Fatalf("old token after prune: %d %s", r.StatusCode, b)
+	}
+	if r := report(sync2.SyncToken); r.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("current token after prune: %d %s", r.StatusCode, readBody(t, r))
+	}
 }
 
 func TestPropfindCTagAndPreconditions(t *testing.T) {

@@ -136,14 +136,21 @@ func (s *Store) MailboxOwned(ctx context.Context, accountID, mailboxID int64) (*
 }
 
 func (s *Store) CreateMailbox(ctx context.Context, accountID int64, name string) (*Mailbox, error) {
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO mailboxes(account_id, name, uid_validity, created_at) VALUES (?,?,?,?)`, accountID, name, now(), now())
+	var id int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if id, err = nextID(ctx, tx, "mailboxes"); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO mailboxes(id, account_id, name, uid_validity, created_at) VALUES (?,?,?,?,?)`, id, accountID, name, now(), now())
+		return err
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return nil, ErrConflict
 		}
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	s.logMailbox(ctx, accountID, id, 'c')
 	return &Mailbox{ID: id, Name: name}, nil
 }
@@ -239,7 +246,9 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 	if m.Priority == "" {
 		m.Priority = "normal"
 	}
+	origThread := m.ThreadID
 	if err := s.tx(ctx, func(tx *sql.Tx) error {
+		m.ThreadID = origThread
 		if err := tx.QueryRowContext(ctx, `UPDATE mailboxes SET uid_next = uid_next + 1 WHERE id = ? RETURNING uid_next - 1`, m.MailboxID).Scan(&m.UID); err != nil {
 			return err
 		}
@@ -258,22 +267,23 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) error {
 				break
 			}
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO messages(account_id, mailbox_id, thread_id, uid, message_id, in_reply_to, subject, from_name, from_email,
-			to_json, cc_json, reply_to_json, preview, received_at, size, seen, flagged, answered, draft, has_attachments, tags_json, category, priority,
-			spam_score, auth_json, virus, search_text, blob_hash, ai_done) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			m.AccountID, m.MailboxID, m.ThreadID, m.UID, m.MessageID, m.InReplyTo, m.Subject, m.From.Name, m.From.Email,
-			js(m.To), js(m.Cc), js(m.ReplyTo), m.Preview, m.ReceivedAt.Unix(), m.Size, m.Seen, m.Flagged, m.Answered, m.Draft, m.HasAttachments,
-			js(m.Tags), toNull(m.Category), m.Priority, m.SpamScore, js(m.Auth), toNull(m.Virus), strings.ToLower(m.SearchText), m.BlobHash, m.AIDone)
+		id, err := nextID(ctx, tx, "messages")
 		if err != nil {
 			return err
 		}
-		m.ID, _ = res.LastInsertId()
+		m.ID = id
 		if m.ThreadID == 0 {
-			m.ThreadID = m.ID
-			_, err = tx.ExecContext(ctx, `UPDATE messages SET thread_id = ? WHERE id = ?`, m.ID, m.ID)
+			m.ThreadID = id
 		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, account_id, mailbox_id, thread_id, uid, message_id, in_reply_to, subject, from_name, from_email,
+			to_json, cc_json, reply_to_json, preview, received_at, size, seen, flagged, answered, draft, has_attachments, tags_json, category, priority,
+			spam_score, auth_json, virus, search_text, blob_hash, ai_done) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			m.ID, m.AccountID, m.MailboxID, m.ThreadID, m.UID, m.MessageID, m.InReplyTo, m.Subject, m.From.Name, m.From.Email,
+			js(m.To), js(m.Cc), js(m.ReplyTo), m.Preview, m.ReceivedAt.Unix(), m.Size, m.Seen, m.Flagged, m.Answered, m.Draft, m.HasAttachments,
+			js(m.Tags), toNull(m.Category), m.Priority, m.SpamScore, js(m.Auth), toNull(m.Virus), strings.ToLower(m.SearchText), m.BlobHash, m.AIDone)
 		return err
 	}); err != nil {
+		m.ID, m.ThreadID = 0, origThread
 		return err
 	}
 	s.logMessageInsert(ctx, m)

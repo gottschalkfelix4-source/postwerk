@@ -37,6 +37,15 @@ type MailAuthSettings struct {
 	// PostmasterAddress receives mail for postmaster@ and abuse@ of every
 	// domain that has no such account or alias (empty: first admin account).
 	PostmasterAddress string `json:"postmasterAddress"`
+	// MTASTS configures the MTA-STS policy published for our own domains.
+	MTASTS MTASTSSettings `json:"mtaSts"`
+}
+
+// MTASTSSettings select the mode ("none", "testing", "enforce") and max_age
+// (seconds) of the MTA-STS policy served at mta-sts.<domain>.
+type MTASTSSettings struct {
+	Mode   string `json:"mode"`
+	MaxAge int    `json:"maxAge"`
 }
 
 // DefaultTrustedARCSealers are large providers that ARC-seal forwarded mail.
@@ -114,6 +123,12 @@ type ServerSettings struct {
 type RetentionSettings struct {
 	TrashDays int `json:"trashDays"`
 	JunkDays  int `json:"junkDays"`
+	// DKIMCleanup deletes retired DKIM keys some time after their grace
+	// period (DKIMRetireGrace + DKIMCleanupMargin).
+	DKIMCleanup bool `json:"dkimCleanup"`
+	// DAVTombstoneDays keeps records of deleted calendar entries and
+	// contacts for sync clients this long (0 = forever).
+	DAVTombstoneDays int `json:"davTombstoneDays"`
 }
 
 // WebSettings describe how the web interface is reached (reverse proxy).
@@ -285,6 +300,9 @@ func DefaultSettings(hostname string) Settings {
 	s.Security.BruteForce.BanSeconds = 3600
 	applyDirectoryDefaults(&s)
 	s.MailAuth.TrustedARCSealers = append([]string{}, DefaultTrustedARCSealers...)
+	s.MailAuth.MTASTS = MTASTSSettings{Mode: "testing", MaxAge: 604800}
+	s.Server.Retention.DKIMCleanup = true
+	s.Server.Retention.DAVTombstoneDays = 90
 	return s
 }
 
@@ -337,6 +355,12 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	}
 	if cur.MailAuth.TrustedARCSealers == nil {
 		cur.MailAuth.TrustedARCSealers = []string{}
+	}
+	if cur.MailAuth.MTASTS.Mode == "" {
+		cur.MailAuth.MTASTS.Mode = "testing"
+	}
+	if cur.MailAuth.MTASTS.MaxAge <= 0 {
+		cur.MailAuth.MTASTS.MaxAge = 604800
 	}
 	c := &SettingsCache{cur: cur, st: s}
 	s.settings = c

@@ -4,6 +4,7 @@ import { CircleCheck, CircleX, KeyRound, Plus, RefreshCw, ShieldCheck, Trash2 } 
 import { isApiError } from "@/api/client";
 import { mailAuthApi, type DkimAlgorithm, type DkimKey, type DkimPublication } from "@/api/mailauth";
 import { formatDate, formatDateTime } from "@/lib/format";
+import { DkimDnsCleanup } from "./DkimDnsCleanup";
 import {
   Badge,
   Button,
@@ -44,6 +45,7 @@ export function DkimKeysCard({ domain }: { domain: string }) {
     void qc.invalidateQueries({ queryKey: ["admin", "domains"] });
     void qc.invalidateQueries({ queryKey: ["admin", "domain-dns", domain] });
     void qc.invalidateQueries({ queryKey: ["admin", "dns-check", domain] });
+    void qc.invalidateQueries({ queryKey: ["admin", "dkim-dns-cleanup", domain] });
   };
 
   const check = useMutation({
@@ -141,6 +143,7 @@ export function DkimKeysCard({ domain }: { domain: string }) {
             />
           ))
         )}
+        <DkimDnsCleanup domain={domain} />
       </CardBody>
       <CreateKeyDialog
         open={createOpen}
@@ -245,6 +248,7 @@ function KeyRow({
               Der TXT-Eintrag <code className="font-mono">{k.dnsName}</code> wird nicht mehr gebraucht und kann beim DNS-Anbieter gelöscht werden.
             </>
           )}
+          {k.autoDeleteAt && <> Der Schlüssel wird am {formatDate(k.autoDeleteAt)} automatisch entfernt.</>}
         </p>
       )}
 

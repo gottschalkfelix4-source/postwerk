@@ -134,4 +134,29 @@ func dailyCleanup(ctx context.Context, st *store.Store, ret store.RetentionSetti
 	} else if files > 0 {
 		log.Info("orphaned blobs removed", "files", files, "bytes", size)
 	}
+	cleanupDKIMAndDAV(ctx, st, ret, log)
+}
+
+// cleanupDKIMAndDAV deletes retired DKIM keys well after their grace period
+// and forgets old CalDAV/CardDAV tombstones.
+func cleanupDKIMAndDAV(ctx context.Context, st *store.Store, ret store.RetentionSettings, log *slog.Logger) {
+	if ret.DKIMCleanup {
+		keys, err := st.PurgeRetiredDKIMKeys(ctx, store.DKIMCleanupMargin)
+		if err != nil {
+			log.Error("retired dkim key cleanup failed", "err", err)
+		}
+		// DNS provider credentials are not stored, so the TXT record cannot
+		// be removed from here: the automatic DNS setup offers its removal.
+		for _, k := range keys {
+			log.Info("retired dkim key removed", "domain", k.Domain, "selector", k.Selector,
+				"dns_record", k.Selector+"._domainkey."+k.Domain, "hint", "remove the TXT record at the DNS provider or via the automatic DNS setup")
+		}
+	}
+	if ret.DAVTombstoneDays > 0 {
+		if n, err := st.PruneDAVTombstones(ctx, time.Duration(ret.DAVTombstoneDays)*24*time.Hour); err != nil {
+			log.Error("dav tombstone cleanup failed", "err", err)
+		} else if n > 0 {
+			log.Info("old dav tombstones forgotten", "count", n, "days", ret.DAVTombstoneDays)
+		}
+	}
 }

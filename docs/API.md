@@ -241,7 +241,7 @@ Eigenschaften, die die Weboberfläche nicht kennt (Erinnerungen, Teilnehmer …)
 
 - `GET /metrics` – Prometheus-Format. Über die öffentlichen Ports nur mit `Authorization: Bearer <METRICS_TOKEN>` (ohne gesetzten Token: 404); ohne Token intern am Health-Port erreichbar.
 - `GET /healthz` – `ok`.
-- `GET /.well-known/mta-sts.txt` – MTA-STS-Policy (ab Meilenstein 3).
+- `GET /.well-known/mta-sts.txt` – MTA-STS-Policy im eingestellten Modus (`mailauth.mtaSts.mode`: `none`, `testing` (Standard) oder `enforce`, `maxAge` in Sekunden). Die `id` im TXT-Eintrag `_mta-sts` ist ein Hash der Policy und ändert sich mit ihr.
 
 ## Einrichtung (Setup-Assistent)
 
@@ -894,6 +894,9 @@ signiert (höchstens einer je Algorithmus, also RSA und optional Ed25519 nach RF
 - `pending`: erzeugt und für den DNS vorgesehen, signiert noch nicht.
 - `active`: signiert. Das Aktivieren eines neuen Schlüssels mustert den aktiven Schlüssel desselben Algorithmus aus.
 - `retired`: signiert nicht mehr, soll aber noch 7 Tage im DNS bleiben (`removableAt`). Erst danach kann er gelöscht werden.
+  Ist `server.retention.dkimCleanup` an (Standard), löscht die tägliche Aufräumrunde den Schlüssel weitere
+  7 Tage später selbst (`autoDeleteAt`). Der TXT-Eintrag gelöschter Schlüssel erscheint unter
+  `dkim-dns-cleanup` und wird von der automatischen DNS-Einrichtung als Aktion `delete` angeboten.
 
 Der aktive RSA-Schlüssel ist zugleich `Domain.dkimSelector`. Die empfohlenen DNS-Einträge
 (`/domains/{name}/dns`) enthalten zusätzlich jeden weiteren Schlüssel unter dem Key `dkim-<selector>`;
@@ -906,6 +909,7 @@ interface DkimKey {
   state: "pending" | "active" | "retired";
   createdAt: string; activatedAt: string | null; retiredAt: string | null;
   removableAt: string | null;   // retired: ab wann der DNS-Eintrag entfernt werden kann
+  autoDeleteAt: string | null;  // retired: wann der Schlüssel automatisch gelöscht wird (null = aus)
   dnsName: string;              // "<selector>._domainkey.<domain>."
   dnsValue: string;             // "v=DKIM1; k=rsa|ed25519; p=..."
 }
@@ -957,6 +961,9 @@ interface SieveTestResult { actions: SieveAction[]; implicitKeep: boolean; scrip
 | POST | `/api/admin/domains/{name}/dkim/{id}/check` | – | `DkimPublication` (Live-Abfrage im DNS) |
 | POST | `/api/admin/domains/{name}/dkim/{id}/activate` | `{ force?: boolean }` | `DkimKey[]`; ohne `force` 409 `dkim_not_published`, solange der Eintrag nicht im DNS steht |
 | DELETE | `/api/admin/domains/{name}/dkim/{id}` | – | `{ ok }` (nur `pending`, oder `retired` nach Ablauf der 7 Tage; sonst 409) |
+| GET | `/api/admin/domains/{name}/dkim-dns-cleanup` | – | `{ selector, dnsName }[]` – TXT-Einträge gelöschter Schlüssel, die noch im DNS stehen können |
+| DELETE | `/api/admin/domains/{name}/dkim-dns-cleanup/{selector}` | – | `{ ok }` – Eintrag als entfernt markieren |
+| GET | `/api/admin/mta-sts` | – | `{ mode, maxAge, policy, id, checks: { host, purpose: "mx" \| "policy", ok, detail }[], enforceReady }` |
 
 Bestehende Installationen übernehmen den bisherigen Schlüssel beim Update als aktiven RSA-Schlüssel.
 

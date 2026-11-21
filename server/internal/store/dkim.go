@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,6 +28,10 @@ const (
 
 // DKIMRetireGrace is how long a retired key should stay published in DNS.
 const DKIMRetireGrace = 7 * 24 * time.Hour
+
+// DKIMCleanupMargin is how long housekeeping waits after RemovableAt before
+// it deletes a retired key on its own.
+const DKIMCleanupMargin = 7 * 24 * time.Hour
 
 // DKIMKey is one DKIM key of a domain.
 type DKIMKey struct {
@@ -253,6 +258,10 @@ func (s *Store) AddDKIMKey(ctx context.Context, domain, selector, alg, privPEM, 
 		out = &k
 		return nil
 	})
+	if err == nil {
+		// A reused selector must not be offered for removal from DNS.
+		s.ForgetDKIMDNSCleanup(ctx, domain, selector)
+	}
 	return out, err
 }
 
@@ -318,8 +327,109 @@ func (s *Store) DeleteDKIMKey(ctx context.Context, domain string, id int64) erro
 	if err := checkDKIMDelete(*k, time.Now()); err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, `DELETE FROM dkim_keys WHERE id = ?`, id)
-	return err
+	if _, err = s.DB.ExecContext(ctx, `DELETE FROM dkim_keys WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if k.State == DKIMRetired {
+		s.addDKIMDNSCleanup(ctx, k.Domain, k.Selector)
+	}
+	return nil
+}
+
+// AutoDeleteAt returns when housekeeping deletes a retired key.
+func (k DKIMKey) AutoDeleteAt() *time.Time {
+	r := k.RemovableAt()
+	if r == nil {
+		return nil
+	}
+	t := r.Add(DKIMCleanupMargin)
+	return &t
+}
+
+// PurgeRetiredDKIMKeys deletes retired keys whose DNS record has not been
+// needed for at least margin (retired_at + DKIMRetireGrace + margin). Their
+// selectors are remembered for the DNS cleanup (DKIMDNSCleanup).
+func (s *Store) PurgeRetiredDKIMKeys(ctx context.Context, margin time.Duration) ([]DKIMKey, error) {
+	cutoff := time.Now().Add(-DKIMRetireGrace - margin).Unix()
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+dkimCols+` FROM dkim_keys WHERE state = ? AND retired_at IS NOT NULL AND retired_at < ?`, DKIMRetired, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	var keys []DKIMKey
+	for rows.Next() {
+		k, err := scanDKIMKey(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		k.PrivateKey = "" // not needed, stays encrypted
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []DKIMKey
+	for _, k := range keys {
+		res, err := s.DB.ExecContext(ctx, `DELETE FROM dkim_keys WHERE id = ? AND state = ?`, k.ID, DKIMRetired)
+		if err != nil {
+			return out, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		s.addDKIMDNSCleanup(ctx, k.Domain, k.Selector)
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+// ---- DNS cleanup of deleted keys ----
+
+func dkimCleanupKey(domain string) string { return "dkim-dns-cleanup:" + Normalize(domain) }
+
+// DKIMDNSCleanup lists the selectors of deleted keys whose TXT record may
+// still be published and should be removed from DNS.
+func (s *Store) DKIMDNSCleanup(ctx context.Context, domain string) []string {
+	raw, _ := s.KV(ctx, dkimCleanupKey(domain))
+	out := []string{}
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &out)
+	}
+	return out
+}
+
+func (s *Store) setDKIMDNSCleanup(ctx context.Context, domain string, sels []string) {
+	if len(sels) == 0 {
+		_ = s.SetKV(ctx, dkimCleanupKey(domain), "")
+		return
+	}
+	b, _ := json.Marshal(sels)
+	_ = s.SetKV(ctx, dkimCleanupKey(domain), string(b))
+}
+
+func (s *Store) addDKIMDNSCleanup(ctx context.Context, domain, selector string) {
+	sels := s.DKIMDNSCleanup(ctx, domain)
+	for _, x := range sels {
+		if strings.EqualFold(x, selector) {
+			return
+		}
+	}
+	s.setDKIMDNSCleanup(ctx, domain, append(sels, selector))
+}
+
+// ForgetDKIMDNSCleanup marks the TXT record of a deleted key as removed.
+func (s *Store) ForgetDKIMDNSCleanup(ctx context.Context, domain, selector string) {
+	sels := s.DKIMDNSCleanup(ctx, domain)
+	keep := []string{}
+	for _, x := range sels {
+		if !strings.EqualFold(x, selector) {
+			keep = append(keep, x)
+		}
+	}
+	if len(keep) != len(sels) {
+		s.setDKIMDNSCleanup(ctx, domain, keep)
+	}
 }
 
 // SigningKeys returns the active keys of a domain, falling back to the key

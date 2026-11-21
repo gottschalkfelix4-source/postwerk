@@ -218,7 +218,7 @@ interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt:
 
 ## Sonstiges
 
-- `GET /metrics` – Prometheus-Format (optional mit `Authorization: Bearer <METRICS_TOKEN>`).
+- `GET /metrics` – Prometheus-Format. Über die öffentlichen Ports nur mit `Authorization: Bearer <METRICS_TOKEN>` (ohne gesetzten Token: 404); ohne Token intern am Health-Port erreichbar.
 - `GET /healthz` – `ok`.
 - `GET /.well-known/mta-sts.txt` – MTA-STS-Policy (ab Meilenstein 3).
 

@@ -8,3 +8,6 @@ server/internal/webui/dist/*
 web/node_modules/
 web/dist/
 *.log
+
+# lokale Arbeitskopien
+.claude/worktrees/

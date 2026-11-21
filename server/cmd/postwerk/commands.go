@@ -86,10 +86,11 @@ func resetPassword(ctx context.Context, cfg *config.Config, email, pw string) er
 		return err
 	}
 	f, empty := false, ""
-	if err := st.UpdateAccount(ctx, a.ID, store.AccountPatch{PasswordHash: &h, TOTPEnabled: &f, TOTPSecret: &empty}); err != nil {
+	if err := st.UpdateAccount(ctx, a.ID, store.AccountPatch{PasswordHash: &h, TOTPEnabled: &f, TOTPSecret: &empty, MustChangePassword: &f}); err != nil {
 		return err
 	}
 	_ = st.DeleteAccountSessions(ctx, a.ID)
+	_ = os.Remove(filepath.Join(cfg.DataDir, "admin-password.txt"))
 	fmt.Printf("Passwort für %s gesetzt, 2FA zurückgesetzt.\n", a.Email)
 	return nil
 }

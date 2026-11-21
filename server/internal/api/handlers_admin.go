@@ -337,6 +337,11 @@ func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request, u *store.A
 			return nil, err
 		}
 		p.PasswordHash = &h
+		if id != u.ID {
+			// The user must replace a password an admin has set.
+			t := true
+			p.MustChangePassword = &t
+		}
 	}
 	if req.ResetTOTP {
 		f, empty := false, ""

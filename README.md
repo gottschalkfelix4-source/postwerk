@@ -182,7 +182,7 @@ web/                   React-Oberfläche (Verwaltung + Webmail)
 | `POSTWERK_TLS_CERT` / `POSTWERK_TLS_KEY` | – | Eigenes Zertifikat (überschreibt die Einstellung) |
 | `POSTWERK_CERTS_DIR` | `/certs` | Ordner mit Zertifikaten des Reverse-Proxys |
 | `POSTWERK_RELAY_HOST` / `_USER` / `_PASSWORD` | – | Smarthost |
-| `POSTWERK_METRICS_TOKEN` | – | Bearer-Token für `/metrics` |
+| `POSTWERK_METRICS_TOKEN` | – | Bearer-Token für `/metrics` über 80/443; ohne Token gibt es `/metrics` nur intern am Health-Port (`127.0.0.1:8099/metrics` im Container) |
 | `POSTWERK_SECURE_COOKIES` | `false` | Cookie nur über HTTPS |
 | `POSTWERK_TRUST_PROXY` | `false` | Proxy-Auswertung erzwingen (sonst im Setup-Assistenten) |
 | `POSTWERK_ALLOW_INSECURE_AUTH` | `false` | Anmeldung ohne TLS (nur Entwicklung) |

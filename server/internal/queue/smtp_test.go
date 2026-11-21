@@ -53,14 +53,6 @@ func (f *fakeSMTP) addr() string { return f.ln.Addr().String() }
 
 func (f *fakeSMTP) serve(c net.Conn) {
 	defer c.Close()
-	n := f.cur.Add(1)
-	defer f.cur.Add(-1)
-	for {
-		p := f.peak.Load()
-		if n <= p || f.peak.CompareAndSwap(p, n) {
-			break
-		}
-	}
 	r := bufio.NewReader(c)
 	w := func(s string) { io.WriteString(c, s+"\r\n") }
 	w("220 fake ESMTP")
@@ -109,10 +101,21 @@ func (f *fakeSMTP) serve(c net.Conn) {
 					break
 				}
 			}
+			// Concurrency is measured while a message is being accepted: the
+			// client holds its delivery slot until it reads the reply, so
+			// connection teardown after QUIT cannot inflate the peak.
+			n := f.cur.Add(1)
+			for {
+				p := f.peak.Load()
+				if n <= p || f.peak.CompareAndSwap(p, n) {
+					break
+				}
+			}
 			time.Sleep(f.hold)
 			f.mu.Lock()
 			f.delivered++
 			f.mu.Unlock()
+			f.cur.Add(-1)
 			w("250 queued")
 		case cmd == "QUIT":
 			w("221 bye")

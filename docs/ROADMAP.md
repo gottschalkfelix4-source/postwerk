@@ -20,6 +20,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | DMARC-Aggregat- und TLS-RPT-Berichte (RFC 8460) empfangen, auswerten und unter „Berichte“ anzeigen | ✅ |
 | | postmaster@ und abuse@ für jede Domain automatisch (an das erste Admin-Konto oder eine eingestellte Adresse) | ✅ |
 | Verzeichnis | Mehrere Domains, Konten, Aliase (auch extern), Catch-all, Quotas | ✅ |
+| | Sub-Adressierung (`name+stichwort@domain`) | ✅ |
 | | Empfohlene DNS-Einträge je Domain (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, SRV) | ✅ |
 | Filter | Spam-Scoring (Auth-Ergebnisse, Header-Heuristiken, Phishing-Muster, gefährliche Anhänge) | ✅ |
 | | Bayes-Filter mit Auto-Learn und Training über „Spam / kein Spam“ | ✅ |
@@ -33,6 +34,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | JMAP (RFC 8620/8621) als zusätzliche Client-API, siehe [API.md](API.md#jmap-rfc-8620--rfc-8621) | ✅ |
 | Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen (über die REST-API) | ✅ |
 | | Abwesenheitsnotiz | ✅ |
+| | Filterregeln (Sieve) mit Regel-Editor, Experten-Modus und ManageSieve | ✅ |
 | Einrichtung | Setup-Assistent mit Setup-Token, Live-DNS-Prüfung und System-Check (PTR, Port 25, ClamAV, KI) | ✅ |
 | | DNS-Einträge automatisch beim Anbieter setzen: IONOS, Hetzner, Cloudflare, netcup, INWX, deSEC (offizielle APIs), STRATO (inoffiziell, TXT/CNAME) | ✅ |
 | | Reverse-Proxy: Erkennung, vertrauenswürdige Proxys, fertige Konfigurationen (NPM, Traefik, Caddy, nginx, SWAG), Zertifikat vom Proxy übernehmen inkl. Traefik-acme.json, automatisches Neuladen | ✅ |
@@ -52,7 +54,11 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 ## Meilenstein 2 – Clients und Filterregeln
 
 - ⏳ IMAP CONDSTORE/QRESYNC für schnelleren Abgleich großer Postfächer (das JMAP-Änderungsprotokoll führt bereits eine Modseq pro Konto)
-- ⏳ Sieve (RFC 5228) mit ManageSieve, Regel-Editor im Webmail; Abwesenheitsnotiz wandert auf Sieve `vacation`
+- ✅ Sieve (RFC 5228) mit fileinto, reject/ereject, envelope, imap4flags, copy, body, variables, vacation, relational, regex, subaddress, date und mailbox; Probelauf über die API
+- ✅ ManageSieve (RFC 5804, Port 4190, STARTTLS) für Mailprogramme wie Thunderbird
+- ✅ Regel-Editor „Filterregeln“ im Webmail mit Experten-Modus und Test gegen Nachrichten aus dem Posteingang
+- ✅ Sub-Adressierung: `name+stichwort@domain` landet bei `name@domain`, Sieve sieht das Stichwort über `:detail`
+- ⏳ Abwesenheitsnotiz der Weboberfläche auf Sieve `vacation` umstellen (läuft vorerst getrennt, nach dem Skript)
 - ✅ JMAP Core + Mail + Submission (RFC 8620/8621) mit Push per EventSource, Upload/Download und Änderungsprotokoll
 - ⏳ Webmail auf JMAP umstellen (das Webmail nutzt weiterhin die REST-API)
 - ⏳ Autoconfig/Autodiscover-Endpunkte für Mailclients

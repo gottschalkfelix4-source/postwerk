@@ -30,6 +30,7 @@ const MailPage = lazy(() => import("@/pages/mail/MailPage"));
 const CalendarPage = lazy(() => import("@/pages/mail/CalendarPage"));
 const TasksPage = lazy(() => import("@/pages/mail/TasksPage"));
 const MailSettingsPage = lazy(() => import("@/pages/mail/MailSettingsPage"));
+const FiltersPage = lazy(() => import("@/pages/mail/FiltersPage"));
 
 function HomeRedirect() {
   const me = useMe();
@@ -114,6 +115,7 @@ export const router = createBrowserRouter([
               { index: true, element: <MailPage />, handle: h({ crumb: "Nachrichten", fullBleed: true }) },
               { path: "calendar", element: <CalendarPage />, handle: h({ crumb: "Kalender" }) },
               { path: "tasks", element: <TasksPage />, handle: h({ crumb: "Aufgaben" }) },
+              { path: "filters", element: <FiltersPage />, handle: h({ crumb: "Filterregeln" }) },
               { path: "settings", element: <MailSettingsPage />, handle: h({ crumb: "Konto & Sicherheit" }) },
             ],
           },

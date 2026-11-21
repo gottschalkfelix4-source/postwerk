@@ -34,6 +34,7 @@ services:
       - "${BIND_IP:-0.0.0.0}:143:1430"    # IMAP (STARTTLS)
       - "${BIND_IP:-0.0.0.0}:110:1100"    # POP3 (STARTTLS)
       - "${BIND_IP:-0.0.0.0}:995:9950"    # POP3 (TLS)
+      - "${BIND_IP:-0.0.0.0}:4190:4190"   # ManageSieve (Filterregeln aus Mailprogrammen, optional)
       - "${BIND_IP:-0.0.0.0}:${HTTP_PORT:-80}:8080"     # HTTP: Weboberfläche + ACME HTTP-01
       - "${BIND_IP:-0.0.0.0}:${HTTPS_PORT:-443}:8443"   # HTTPS: Weboberfläche
     volumes:

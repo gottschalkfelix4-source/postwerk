@@ -34,6 +34,7 @@ import (
 	"postwerk/internal/jmap"
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
+	"postwerk/internal/managesieve"
 	"postwerk/internal/message"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
@@ -219,6 +220,15 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	jmapSrv := &jmap.Server{Store: st, Auth: authn, Delivery: svc, MaxSize: maxSize, Log: log.With("component", "jmap"), AllowInsecureAuth: cfg.AllowInsecureAuth}
 	go jmapSrv.Run(ctx)
+	if cfg.ManageSieveAddr != "" {
+		srv := &managesieve.Server{Addr: cfg.ManageSieveAddr, TLSConfig: tp.MailConfig("managesieve"), Store: st, Banned: guard.Banned,
+			Log: log.With("component", "managesieve"), AllowInsecureAuth: cfg.AllowInsecureAuth,
+			Auth: func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
+				return authn.Protocol(ctx, ip, user, pass, "managesieve")
+			}}
+		listeners = append(listeners, srv.ListenAndServe)
+	}
+
 	apiSrv := &api.Server{
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
 		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn, Backups: backups,

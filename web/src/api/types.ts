@@ -624,3 +624,20 @@ export interface DynDNSStatus {
 export interface RelayPresets { presets: RelayPreset[]; envOverride: boolean; }
 
 export interface RelayTestResult { ok: boolean; detail: string; }
+
+// ---------------------------------------------------------------------------
+// Sieve filter rules (docs/API.md, "Filterregeln (Sieve)").
+// ---------------------------------------------------------------------------
+
+export interface SieveScriptInfo { name: string; active: boolean; size: number; updatedAt: string; }
+export interface SieveScript extends SieveScriptInfo { content: string; }
+export interface SieveList { scripts: SieveScriptInfo[]; active: string | null; capabilities: string[]; maxSize: number; maxScripts: number; }
+
+export interface SieveVacation { days: number; subject?: string; from?: string; addresses?: string[]; handle?: string; reason: string; }
+export interface SieveAction {
+  type: "keep" | "fileinto" | "redirect" | "discard" | "reject" | "ereject" | "vacation";
+  mailbox?: string; create?: boolean; copy?: boolean; flags?: string[]; address?: string; reason?: string;
+  vacation?: SieveVacation; implicit?: boolean;
+}
+export interface SieveTestRequest { content?: string; messageId?: number; raw?: string; }
+export interface SieveTestResult { actions: SieveAction[]; implicitKeep: boolean; script: string; error?: string; }

@@ -361,6 +361,7 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	// Resolve all recipients first so the forwarding decision can take
 	// local deliveries into account.
 	var locals []string
+	rcptOf := map[string]string{}     // local account -> envelope recipient
 	forwards := map[string][]string{} // forwarding domain -> targets
 	var forwardCount int
 	var srsTargets []string
@@ -386,6 +387,7 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 			if !seen[l] {
 				seen[l] = true
 				locals = append(locals, l)
+				rcptOf[l] = rcpt
 			}
 		}
 		dom := store.DomainOf(rcpt)
@@ -437,7 +439,7 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	delivered := 0
 	var failed []failedRcpt
 	for _, l := range locals {
-		meta := deliveryMeta{Auth: authRes, SpamScore: verdict.Score, Junk: junk || virus != "", Virus: virus, Tokens: verdict.Tokens}
+		meta := deliveryMeta{Auth: authRes, SpamScore: verdict.Score, Junk: junk || virus != "", Virus: virus, Tokens: verdict.Tokens, Rcpt: rcptOf[l]}
 		if err := s.deliverLocal(ctx, l, full, parsed, meta, env.From); err != nil {
 			var r *smtp.Reply
 			errors.As(err, &r)
@@ -563,6 +565,7 @@ type deliveryMeta struct {
 	Tokens    []string
 	Mailbox   string // role override, e.g. "sent"
 	Seen      bool
+	Rcpt      string // original envelope recipient (sub-address, Sieve envelope "to")
 }
 
 // deliverLocal stores raw for the account with the given address.
@@ -577,6 +580,11 @@ func (s *Service) deliverLocal(ctx context.Context, email string, raw []byte, pa
 	}
 	if meta.Mailbox != "" {
 		role = meta.Mailbox
+	}
+	if role == "inbox" {
+		if handled, err := s.applySieve(ctx, acct, raw, parsed, meta, envFrom); handled {
+			return err
+		}
 	}
 	mbID, err := s.Store.MailboxByRole(ctx, acct.ID, role)
 	if err != nil {
@@ -720,7 +728,7 @@ func (s *Service) Submit(ctx context.Context, acct *store.Account, from string, 
 			return nil, err
 		}
 		for _, l := range local {
-			if err := s.deliverLocal(ctx, l, signed, nil, deliveryMeta{}, from); err != nil {
+			if err := s.deliverLocal(ctx, l, signed, nil, deliveryMeta{Rcpt: r}, from); err != nil {
 				var rep *smtp.Reply
 				errors.As(err, &rep)
 				s.Log.Warn("local delivery failed", "rcpt", l, "err", err)

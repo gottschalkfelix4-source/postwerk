@@ -78,6 +78,8 @@ import type {
   UpdateTaskRequest,
   Vacation, TlsIssueResult } from "./types";
 
+import type { SieveList, SieveScript, SieveTestRequest, SieveTestResult } from "./types";
+
 const enc = encodeURIComponent;
 
 export const authApi = {
@@ -235,6 +237,18 @@ export const mailApi = {
 
   rawUrl: (id: number) => `/api/mail/messages/${id}/raw`,
   attachmentUrl: (id: number, attId: number) => `/api/mail/messages/${id}/attachments/${attId}`,
+};
+
+export const sieveApi = {
+  list: () => http.get<SieveList>("/api/mail/sieve"),
+  get: (name: string) => http.get<SieveScript>(`/api/mail/sieve/${enc(name)}`),
+  put: (name: string, content: string, activate = false) =>
+    http.put<SieveScript>(`/api/mail/sieve/${enc(name)}`, { content, activate }),
+  remove: (name: string) => http.delete<Ok>(`/api/mail/sieve/${enc(name)}`),
+  activate: (name: string) => http.post<Ok>(`/api/mail/sieve/${enc(name)}/activate`),
+  deactivate: () => http.post<Ok>("/api/mail/sieve/deactivate"),
+  check: (content: string) => http.post<{ ok: boolean }>("/api/mail/sieve/check", { content }),
+  test: (body: SieveTestRequest) => http.post<SieveTestResult>("/api/mail/sieve/test", body),
 };
 
 export const aiApi = {

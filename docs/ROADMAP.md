@@ -66,7 +66,8 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 ## Meilenstein 3 – Groupware und Zustellbarkeit
 
 - ✅ CalDAV und CardDAV (Kalender, Kontakte, Aufgaben als VTODO, sync-collection, mehrere Kalender/Adressbücher); der interne Kalender ist darauf migriert, Kontakte und Adress-Vervollständigung im Webmail, Apple-Profil
-- ⏳ MTA-STS-Policy ausliefern und ausgehend erzwingen, DANE (TLSA) ausgehend prüfen
+- ✅ MTA-STS ausgehend erzwingen (RFC 8461, Modus enforce/testing) und DANE/TLSA prüfen (RFC 7672, wenn der Resolver DNSSEC validiert)
+- ⏳ MTA-STS-Modus der eigenen Policy in der Oberfläche umschalten (derzeit fest „testing“)
 - ✅ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
 - ✅ DMARC- und TLS-RPT-Berichte empfangen und auswerten
 - ⏳ DMARC- und TLS-RPT-Berichte selbst versenden
@@ -77,13 +78,10 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 - ✅ LDAP-Verzeichnis als Kontenquelle (Bind-Prüfung für Web, IMAP, SMTP und POP3, automatische Kontoanlage, Admin-Gruppe, Abgleich)
 - ✅ OIDC-SSO (z. B. Authentik, Keycloak) für die Weboberfläche: Authorization Code mit PKCE, automatische Kontoanlage, Admin-Claim, „nur SSO“ mit lokalem Notzugang ([Anleitung](SSO.md))
 - ⏳ OAUTHBEARER/XOAUTH2 für Mail-Programme (bis dahin App-Passwörter)
-- ⏳ Verschlüsselung im Ruhezustand: eingehende Mails mit dem S/MIME- oder OpenPGP-Schlüssel des Kontos verschlüsseln
-- ⏳ LDAP-Verzeichnis als Kontenquelle
-- ⏳ OIDC-SSO (z. B. Authentik, Keycloak) für die Weboberfläche, OAUTHBEARER für Clients
 - ✅ Verschlüsselung im Ruhezustand: eingehende Mails mit dem S/MIME- oder OpenPGP-Schlüssel des Kontos verschlüsseln (PGP/MIME bzw. S/MIME, optional mit verborgenem Betreff, bestehende Nachrichten per Hintergrundauftrag)
 - ✅ Geheimnisse in der Datenbank (API-Schlüssel, Passwörter, TOTP, DKIM, SRS) mit Master-Schlüssel verschlüsselt (AES-256-GCM, Schlüssel aus Umgebungsvariable, Datei oder `master.key`)
 - ✅ Optionale Speicherverschlüsselung aller Nachrichten-Dateien mit dem Master-Schlüssel inkl. Umwandlung vorhandener Dateien
-- ✅ DSGVO-Export: alle Daten eines Kontos als ZIP (mbox je Ordner, iCalendar, Kontodaten, Sitzungen), für Benutzer selbst und für Admins
+- ✅ DSGVO-Export: alle Daten eines Kontos als ZIP (mbox je Ordner, iCalendar je Kalender, vCard je Adressbuch, Kontodaten, Sitzungen), für Benutzer selbst und für Admins
 - ⏳ Backups: S3-Ziel, Wiederherstellen einzelner Postfächer aus einem Archiv
 - ⏳ Postgres als alternativer Metadatenspeicher, S3 für Blobs
 

@@ -3,13 +3,17 @@
 Ein selbst gehosteter Mailserver in einem einzigen Go-Binary – mit eigener Weboberfläche für
 Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 
-- **Protokolle:** SMTP, Submission (587/465), IMAP mit IDLE (993/143), POP3, Weboberfläche + REST-API
-- **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM/DMARC, Spamfilter mit Bayes, DNSBL und Greylisting,
-  ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre
+- **Protokolle:** SMTP, Submission (587/465), IMAP mit IDLE (993/143), POP3, JMAP, CalDAV/CardDAV,
+  ManageSieve (4190), Weboberfläche + REST-API
+- **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM (RSA + Ed25519, Schlüsselwechsel)/DMARC-Durchsetzung,
+  ARC, SRS, MTA-STS und DANE ausgehend, Spamfilter mit Bayes, DNSBL und Greylisting, ClamAV, 2FA mit
+  Wiederherstellungscodes, App-Passwörter, Brute-Force-Sperre, verschlüsselte Geheimnisse
+  (Master-Schlüssel), Verschlüsselung gespeicherter Mails mit dem eigenen OpenPGP-/S/MIME-Schlüssel,
+  DSGVO-Datenexport
+- **Filter & Groupware:** Sieve-Filterregeln mit Regel-Editor im Webmail, Plus-Adressen
+  (`name+stichwort@`), Kalender, Aufgaben und Kontakte mit Abgleich aufs Handy
 - **Identität:** LDAP-Verzeichnis als Kontenquelle (OpenLDAP, Active Directory, lldap …) und Single
   Sign-on per OpenID Connect für die Weboberfläche (Authentik, Keycloak …), siehe [docs/SSO.md](docs/SSO.md)
-  ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre, verschlüsselte Geheimnisse (Master-Schlüssel),
-  Verschlüsselung gespeicherter Mails mit dem eigenen OpenPGP-/S/MIME-Schlüssel, DSGVO-Datenexport
 - **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung und automatischem Eintragen der
   DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
@@ -33,7 +37,7 @@ docker compose up -d
 curl -fsSL https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/install.sh | bash
 ```
 
-Was schon fertig ist und was noch kommt (IMAP, JMAP, Sieve, CalDAV/CardDAV, LDAP/OIDC …), steht in
+Was schon fertig ist und was noch kommt, steht in
 [docs/ROADMAP.md](docs/ROADMAP.md). Die API ist in [docs/API.md](docs/API.md) beschrieben.
 
 ## Schnellstart mit Docker

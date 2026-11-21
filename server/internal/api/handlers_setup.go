@@ -33,6 +33,11 @@ func (s *Server) setupMode(ctx context.Context) (string, error) {
 	return "configure", nil
 }
 
+// SetupDone reports whether the setup assistant was completed.
+func (s *Server) SetupDone(ctx context.Context) bool {
+	return s.Store.Flag(ctx, flagSetupDone)
+}
+
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) (any, error) {
 	mode, err := s.setupMode(r.Context())
 	if err != nil {

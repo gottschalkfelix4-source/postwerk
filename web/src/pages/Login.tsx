@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Lock, Mail, ShieldCheck } from "lucide-react";
-import { authApi } from "@/api/endpoints";
+import { ArrowLeft, KeyRound, Lock, Mail, ShieldCheck } from "lucide-react";
+import { accountApi, authApi } from "@/api/endpoints";
 import { errorMessage, isApiError } from "@/api/client";
 import type { Me } from "@/api/types";
 import { homeFor } from "@/lib/auth";
@@ -16,10 +16,15 @@ export function LoginPage() {
   const qc = useQueryClient();
   const from = (location.state as { from?: string } | null)?.from;
 
-  const [step, setStep] = useState<"credentials" | "totp">("credentials");
+  const [step, setStep] = useState<"credentials" | "totp" | "change">("credentials");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [recovery, setRecovery] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [repeatPassword, setRepeatPassword] = useState("");
+  const [askCurrent, setAskCurrent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -39,6 +44,13 @@ export function LoginPage() {
   }, []);
 
   function finish(me: Me) {
+    if (me.mustChangePassword) {
+      // A generated initial password must be replaced before anything else.
+      setAskCurrent(password === "");
+      setStep("change");
+      setError(null);
+      return;
+    }
     qc.setQueryData(qk.me, me);
     const target = from && !from.startsWith("/login") && (me.role === "admin" || !from.startsWith("/admin")) ? from : homeFor(me);
     navigate(target, { replace: true });
@@ -69,10 +81,30 @@ export function LoginPage() {
     }
   }
 
+  async function changePassword() {
+    setBusy(true);
+    setError(null);
+    try {
+      await accountApi.changePassword(password, newPassword, false);
+      finish(await authApi.me(true));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const newTooShort = newPassword.length > 0 && newPassword.length < 10;
+  const newMismatch = repeatPassword.length > 0 && newPassword !== repeatPassword;
+  const changeReady = password.length > 0 && newPassword.length >= 10 && newPassword === repeatPassword;
+  const totpReady = useRecovery ? recovery.trim().length > 0 : code.length === 6;
+
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (step === "credentials") void submit();
-    else if (code.length === 6) void submit(code);
+    else if (step === "change") {
+      if (changeReady) void changePassword();
+    } else if (totpReady) void submit(useRecovery ? recovery.trim() : code);
   };
 
   return (
@@ -97,6 +129,16 @@ export function LoginPage() {
               <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Anmelden</h1>
               <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Melde dich mit deinem Postwerk-Konto an.</p>
             </>
+          ) : step === "change" ? (
+            <>
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300">
+                <KeyRound className="h-6 w-6" />
+              </div>
+              <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Neues Passwort festlegen</h1>
+              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                Dieses Konto verwendet ein automatisch erzeugtes Passwort. Bitte lege jetzt ein eigenes fest.
+              </p>
+            </>
           ) : (
             <>
               <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
@@ -104,7 +146,9 @@ export function LoginPage() {
               </div>
               <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Zwei-Faktor-Bestätigung</h1>
               <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                Gib den 6-stelligen Code aus deiner Authenticator-App ein.
+                {useRecovery
+                  ? "Gib einen deiner Wiederherstellungscodes ein. Jeder Code funktioniert nur einmal."
+                  : "Gib den 6-stelligen Code aus deiner Authenticator-App ein."}
               </p>
             </>
           )}
@@ -140,6 +184,56 @@ export function LoginPage() {
                   )}
                 </Field>
               </>
+            ) : step === "change" ? (
+              <>
+                {askCurrent && (
+                  <Field label="Aktuelles Passwort">
+                    {(id) => (
+                      <PasswordInput id={id} icon={Lock} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                    )}
+                  </Field>
+                )}
+                <Field label="Neues Passwort" error={newTooShort ? "Mindestens 10 Zeichen." : null}>
+                  {(id) => (
+                    <PasswordInput
+                      id={id}
+                      autoComplete="new-password"
+                      autoFocus
+                      invalid={newTooShort}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                    />
+                  )}
+                </Field>
+                <Field label="Wiederholen" error={newMismatch ? "Passwörter stimmen nicht überein." : null}>
+                  {(id) => (
+                    <PasswordInput
+                      id={id}
+                      autoComplete="new-password"
+                      invalid={newMismatch}
+                      value={repeatPassword}
+                      onChange={(e) => setRepeatPassword(e.target.value)}
+                    />
+                  )}
+                </Field>
+              </>
+            ) : useRecovery ? (
+              <Field label="Wiederherstellungscode">
+                {(id) => (
+                  <Input
+                    id={id}
+                    icon={KeyRound}
+                    autoComplete="one-time-code"
+                    autoFocus
+                    value={recovery}
+                    onChange={(e) => {
+                      setRecovery(e.target.value);
+                      setError(null);
+                    }}
+                    placeholder="abcd-efgh-jkmn"
+                  />
+                )}
+              </Field>
             ) : (
               <CodeInput
                 value={code}
@@ -166,10 +260,25 @@ export function LoginPage() {
               size="lg"
               className="w-full"
               loading={busy}
-              disabled={step === "credentials" ? !email || !password : code.length !== 6}
+              disabled={step === "credentials" ? !email || !password : step === "change" ? !changeReady : !totpReady}
             >
-              {step === "credentials" ? "Anmelden" : "Bestätigen"}
+              {step === "credentials" ? "Anmelden" : step === "change" ? "Passwort speichern" : "Bestätigen"}
             </Button>
+
+            {step === "totp" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setUseRecovery((v) => !v);
+                  setCode("");
+                  setRecovery("");
+                  setError(null);
+                }}
+                className="mx-auto block text-sm text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+              >
+                {useRecovery ? "Code aus der Authenticator-App verwenden" : "Wiederherstellungscode verwenden"}
+              </button>
+            )}
 
             {step === "totp" && (
               <button
@@ -177,6 +286,8 @@ export function LoginPage() {
                 onClick={() => {
                   setStep("credentials");
                   setCode("");
+                  setRecovery("");
+                  setUseRecovery(false);
                   setError(null);
                 }}
                 className="mx-auto flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"

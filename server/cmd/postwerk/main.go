@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"postwerk/internal/ai"
 	"postwerk/internal/api"
 	"postwerk/internal/auth"
@@ -30,6 +32,7 @@ import (
 	"postwerk/internal/logx"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/message"
+	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
 	"postwerk/internal/pop3"
 	"postwerk/internal/queue"
@@ -131,6 +134,12 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	guard.OnBan = func(ip, reason string) {
 		log.Warn("ip banned after failed logins", "component", "security", "ip", ip, "reason", reason)
 	}
+	guard.Store = st
+	if err := guard.Load(ctx); err != nil {
+		log.Error("loading persisted bans failed", "component", "security", "err", err)
+	} else if n := len(guard.List()); n > 0 {
+		log.Info("persisted bans restored", "component", "security", "count", n)
+	}
 	authn := &auth.Authenticator{Store: st, Guard: guard}
 
 	aiClient := ai.NewClient(settings)
@@ -202,20 +211,28 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	handler := apiSrv.Handler()
 	httpCtl := &httpport.Controller{
 		Addr: cfg.HTTPAddr, HTTPSAddr: cfg.HTTPSAddr, Handler: handler, Settings: settings, TLS: tp,
-		ForceOpen: cfg.HTTPAlwaysOpen, Log: log,
+		ForceOpen: cfg.HTTPAlwaysOpen, TrustProxy: cfg.TrustProxy, Log: log,
+		SetupDone: func() bool { return apiSrv.SetupDone(context.Background()) },
 	}
 	apiSrv.HTTPPort = httpCtl
 	go httpCtl.Run(ctx)
 	// Internal health endpoint for the Docker healthcheck (never published),
-	// so closing port 80 does not mark the container unhealthy.
+	// so closing port 80 does not mark the container unhealthy. It also
+	// serves /metrics without a token for local scraping.
 	if cfg.HealthAddr != "" {
-		healthSrv := &http.Server{Addr: cfg.HealthAddr, ReadHeaderTimeout: 5 * time.Second,
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })}
+		healthMux := http.NewServeMux()
+		healthMux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
+		healthMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+		healthSrv := &http.Server{Addr: cfg.HealthAddr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
+			IdleTimeout: 120 * time.Second, Handler: healthMux}
 		go func() { <-ctx.Done(); shutdown(healthSrv) }()
 		go func() { _ = healthSrv.ListenAndServe() }()
 	}
 	if cfg.HTTPSAddr != "" {
-		httpsSrv := &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second}
+		// No global ReadTimeout/WriteTimeout: large uploads and downloads must
+		// keep working; request bodies get per-request deadlines in the API.
+		httpsSrv := &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout: 120 * time.Second}
 		listeners = append(listeners, func(ctx context.Context) error {
 			log.Info("listening", "component", "http", "proto", "https", "addr", cfg.HTTPSAddr)
 			go func() { <-ctx.Done(); shutdown(httpsSrv) }()
@@ -316,11 +333,18 @@ func bootstrap(ctx context.Context, cfg *config.Config, st *store.Store, log *sl
 	if err != nil {
 		return "", err
 	}
-	if err := st.CreateAccount(ctx, &store.Account{Email: email, Name: "Administrator", PasswordHash: h, Role: "admin"}); err != nil {
+	// A generated password must be replaced at the first login.
+	if err := st.CreateAccount(ctx, &store.Account{Email: email, Name: "Administrator", PasswordHash: h, Role: "admin", MustChangePassword: generated}); err != nil {
 		return "", err
 	}
 	if generated {
-		log.Warn("setup_token nicht nötig: Admin-Konto aus POSTWERK_ADMIN_EMAIL angelegt – Passwort nach der ersten Anmeldung ändern", "component", "setup", "email", email, "password", pw)
+		// Never log the password itself: it goes to a file only the owner can read.
+		path := filepath.Join(cfg.DataDir, api.AdminPasswordFile)
+		if err := os.WriteFile(path, []byte(pw+"\n"), 0o600); err != nil {
+			return "", fmt.Errorf("write %s: %w", path, err)
+		}
+		log.Warn("setup_token nicht nötig: Admin-Konto aus POSTWERK_ADMIN_EMAIL angelegt – das erzeugte Passwort steht in der Datei; bei der ersten Anmeldung muss es geändert werden",
+			"component", "setup", "email", email, "password_file", path)
 	} else {
 		log.Info("setup_token nicht nötig: Admin-Konto aus POSTWERK_ADMIN_EMAIL/POSTWERK_ADMIN_PASSWORD angelegt", "component", "setup", "email", email)
 	}

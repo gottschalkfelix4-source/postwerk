@@ -17,7 +17,9 @@ import type { RouteHandle } from "./routeHandle";
 export function ProtectedLayout() {
   const location = useLocation();
   const me = useQuery({ queryKey: qk.me, queryFn: () => authApi.me(true), retry: false, staleTime: 60_000 });
-  const setupPrompt = useSetupPrompt(me.data);
+  // An account with a generated password must set its own on the login page first.
+  const mustChange = !!me.data?.mustChangePassword;
+  const setupPrompt = useSetupPrompt(mustChange ? undefined : me.data);
 
   if (me.isLoading || setupPrompt) {
     return (
@@ -37,6 +39,7 @@ export function ProtectedLayout() {
     );
   }
   if (!me.data) return null;
+  if (mustChange) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
 
   return (
     <MeProvider me={me.data}>

@@ -32,6 +32,9 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 
+	// MetricsToken protects /metrics on the public HTTP(S) listeners
+	// (Authorization: Bearer <token>). Without a token, /metrics is only
+	// served on HealthAddr.
 	MetricsToken string
 
 	// Optional smarthost for outbound mail (e.g. when port 25 is blocked).
@@ -48,7 +51,8 @@ type Config struct {
 	TrustProxy bool
 	// HTTPAlwaysOpen keeps port 80 open regardless of the setting (emergency).
 	HTTPAlwaysOpen bool
-	// HealthAddr serves /healthz for the container healthcheck.
+	// HealthAddr serves /healthz for the container healthcheck and /metrics
+	// for local scraping (keep it unpublished).
 	HealthAddr string
 	Debug      bool
 }

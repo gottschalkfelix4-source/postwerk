@@ -39,6 +39,12 @@ type Controller struct {
 	Settings  *store.SettingsCache
 	TLS       *tlsutil.Dynamic
 	ForceOpen bool // POSTWERK_HTTP_ALWAYS_OPEN
+	// TrustProxy treats the listener as behind a reverse proxy even if the
+	// setting is off (POSTWERK_TRUST_PROXY).
+	TrustProxy bool
+	// SetupDone reports whether the setup assistant was completed. While it
+	// is not, "open" never redirects so the wizard stays reachable via HTTP.
+	SetupDone func() bool
 	Log       *slog.Logger
 
 	mu        sync.Mutex
@@ -115,6 +121,33 @@ func (c *Controller) Probe(ctx context.Context, force bool) (*x509.Certificate, 
 	return cert, err
 }
 
+// ValidCert reports whether the last probe found a valid certificate from a
+// public CA on the own HTTPS listener. It never blocks.
+func (c *Controller) ValidCert() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cert != nil && c.certErr == nil && time.Now().Before(c.cert.NotAfter)
+}
+
+// ForcesHTTPS reports whether browsers only reach the web interface via
+// HTTPS with a valid certificate (port 80 redirects or is closed).
+func (c *Controller) ForcesHTTPS() bool {
+	if c == nil {
+		return false
+	}
+	st, _ := c.Status()
+	return st != Full && c.ValidCert()
+}
+
+func (c *Controller) behindProxy() bool {
+	return c.TrustProxy || c.Settings.Get().Web.BehindProxy
+}
+
+func (c *Controller) setupDone() bool { return c.SetupDone == nil || c.SetupDone() }
+
 // desired decides the listener state from settings and certificate.
 func (c *Controller) desired(ctx context.Context) (State, string) {
 	s := c.Settings.Get()
@@ -126,7 +159,29 @@ func (c *Controller) desired(ctx context.Context) (State, string) {
 		return Redirect, "Port 80 leitet auf HTTPS um und beantwortet nur Let's-Encrypt-Prüfungen"
 	case "auto-close":
 	default:
-		return Full, "Port 80 ist offen (Weboberfläche auch über HTTP)"
+		// "open": plain HTTP only as long as there is no alternative. Once the
+		// setup is completed and Postwerk itself serves a valid Let's Encrypt
+		// certificate, browsers are sent to HTTPS. With certificate files
+		// (often taken over from a reverse proxy) or behind a proxy, the
+		// proxy is responsible – redirecting there could cause loops.
+		mode := s.TLS.Mode
+		if c.TLS != nil && c.TLS.EnvCert != "" {
+			mode = "files"
+		}
+		switch {
+		case !c.setupDone():
+			return Full, "Port 80 ist offen – der Setup-Assistent ist noch nicht abgeschlossen"
+		case c.behindProxy():
+			return Full, "Port 80 ist offen (hinter einem Reverse-Proxy kümmert sich der Proxy um HTTPS)"
+		case mode != "acme":
+			return Full, "Port 80 ist offen (Weboberfläche auch über HTTP)"
+		case c.HTTPSAddr == "":
+			return Full, "Port 80 ist offen (kein HTTPS-Port aktiv)"
+		}
+		if _, err := c.Probe(ctx, false); err != nil {
+			return Full, "Port 80 ist offen – noch kein gültiges Zertifikat, daher ist die Weboberfläche auch über HTTP erreichbar"
+		}
+		return Redirect, "Port 80 leitet auf HTTPS um, da ein gültiges Zertifikat vorliegt (Let's-Encrypt-Prüfungen werden weiter beantwortet)"
 	}
 	// auto-close: only when it is safe.
 	switch {
@@ -151,6 +206,10 @@ func (c *Controller) desired(ctx context.Context) (State, string) {
 
 func (c *Controller) apply(ctx context.Context) {
 	state, reason := c.desired(ctx)
+	if c.HTTPSAddr != "" {
+		// Keep the certificate status fresh for HSTS and Secure cookies.
+		_, _ = c.Probe(ctx, false)
+	}
 	c.mu.Lock()
 	prev := c.state
 	c.state, c.reason = state, reason
@@ -168,7 +227,7 @@ func (c *Controller) apply(ctx context.Context) {
 }
 
 func (c *Controller) start() {
-	srv := &http.Server{Addr: c.Addr, Handler: c.handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: c.Addr, Handler: c.handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	ln, err := net.Listen("tcp", c.Addr)
 	if err != nil {
 		c.Log.Error("http listener failed", "component", "http", "addr", c.Addr, "err", err)
@@ -207,8 +266,8 @@ func (c *Controller) handler() http.Handler {
 		st := c.state
 		c.mu.Unlock()
 		// Behind a reverse proxy the request already arrived via HTTPS: serving
-		// it normally avoids a redirect loop.
-		viaHTTPS := strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https")
+		// it normally avoids a redirect loop. Only trusted proxies are believed.
+		viaHTTPS := c.forwardedHTTPS(r)
 		if st == Full || viaHTTPS || strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") || r.URL.Path == "/healthz" {
 			full.ServeHTTP(w, r)
 			return
@@ -222,6 +281,53 @@ func (c *Controller) handler() http.Handler {
 		}
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
 	})
+}
+
+// forwardedHTTPS reports whether a trusted reverse proxy says the original
+// request used HTTPS.
+func (c *Controller) forwardedHTTPS(r *http.Request) bool {
+	if !c.behindProxy() {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return TrustedProxy(net.ParseIP(host), c.Settings.Get().Web.TrustedProxies) && ForwardedHTTPS(r)
+}
+
+// TrustedProxy decides whether X-Forwarded-* headers from ip may be believed.
+// Without an explicit list only loopback addresses are trusted: in Docker
+// setups every container shares the private network, so "all private
+// networks" would let any neighbour spoof client addresses.
+func TrustedProxy(ip net.IP, list []string) bool {
+	if ip == nil {
+		return false
+	}
+	if len(list) == 0 {
+		return ip.IsLoopback()
+	}
+	for _, e := range list {
+		e = strings.TrimSpace(e)
+		if _, n, err := net.ParseCIDR(e); err == nil && n.Contains(ip) {
+			return true
+		}
+		if p := net.ParseIP(e); p != nil && p.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ForwardedHTTPS reports whether X-Forwarded-Proto names https (first value,
+// i.e. what the client-facing proxy saw). Only meaningful for requests from
+// a trusted proxy.
+func ForwardedHTTPS(r *http.Request) bool {
+	for _, v := range r.Header.Values("X-Forwarded-Proto") {
+		first, _, _ := strings.Cut(v, ",")
+		return strings.EqualFold(strings.TrimSpace(first), "https")
+	}
+	return false
 }
 
 // Refresh re-evaluates and applies the state immediately and returns it.

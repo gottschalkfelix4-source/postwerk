@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"postwerk/internal/spam"
 	"postwerk/internal/store"
 )
 
@@ -28,7 +29,8 @@ const (
 	netCheckTimeout = 20 * time.Second
 )
 
-// dnsblZones are checked for the server's own public IPv4 addresses.
+// dnsblZones are checked for the server's own public IPv4 and IPv6
+// addresses (both lists answer IPv6 queries per RFC 5782).
 var dnsblZones = []string{"zen.spamhaus.org", "b.barracudacentral.org"}
 
 // netChecks caches the DNS based checks (DNSBL, PTR); they run in the
@@ -71,13 +73,13 @@ func (n *netChecks) snapshot(host string) []dashWarning {
 func (n *netChecks) refresh(host string, doDNSBL, doPTR bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), netCheckTimeout)
 	defer cancel()
-	ips := publicIPv4s(ctx, n.lookupIPs, host)
+	ips := publicIPs(ctx, n.lookupIPs, host)
 	var bl, ptr []dashWarning
 	if doDNSBL {
 		bl = n.checkDNSBL(ctx, ips)
 	}
 	if doPTR {
-		ptr = n.checkPTR(ctx, host, ips)
+		ptr = n.checkPTR(ctx, host, onlyIPv4(ips))
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -94,16 +96,29 @@ func (n *netChecks) refresh(host string, doDNSBL, doPTR bool) {
 	}
 }
 
-// publicIPv4s resolves the mail hostname to its public IPv4 addresses.
-func publicIPv4s(ctx context.Context, lookup func(context.Context, string) ([]string, error), host string) []net.IP {
+// publicIPs resolves the mail hostname to its public IPv4 and IPv6 addresses.
+func publicIPs(ctx context.Context, lookup func(context.Context, string) ([]string, error), host string) []net.IP {
 	addrs, _ := lookup(ctx, host)
 	var out []net.IP
 	for _, a := range addrs {
-		ip := net.ParseIP(a).To4()
-		if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		ip := net.ParseIP(a)
+		if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
 			continue
 		}
+		if v4 := ip.To4(); v4 != nil {
+			ip = v4
+		}
 		out = append(out, ip)
+	}
+	return out
+}
+
+func onlyIPv4(ips []net.IP) []net.IP {
+	var out []net.IP
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			out = append(out, ip)
+		}
 	}
 	return out
 }
@@ -111,13 +126,16 @@ func publicIPv4s(ctx context.Context, lookup func(context.Context, string) ([]st
 func (n *netChecks) checkDNSBL(ctx context.Context, ips []net.IP) []dashWarning {
 	var out []dashWarning
 	for _, ip := range ips {
-		rev := fmt.Sprintf("%d.%d.%d.%d", ip[3], ip[2], ip[1], ip[0])
+		rev := spam.ReverseIP(ip)
+		if rev == "" {
+			continue
+		}
 		for _, zone := range dnsblZones {
 			answers, err := n.lookupA(ctx, rev+"."+zone)
 			if err != nil {
 				continue // NXDOMAIN: not listed
 			}
-			if listed(answers) {
+			if spam.DNSBLListed(answers) {
 				out = append(out, dashWarning{
 					ID: "dnsbl-" + ip.String() + "-" + zone, Severity: "error",
 					Title:  fmt.Sprintf("IP %s steht auf der Sperrliste %s", ip, zone),
@@ -127,22 +145,6 @@ func (n *netChecks) checkDNSBL(ctx context.Context, ips []net.IP) []dashWarning 
 		}
 	}
 	return out
-}
-
-// listed interprets DNSBL answers. 127.255.255.x are Spamhaus error codes
-// (query via public resolver, rate limit) and do not mean "listed".
-func listed(answers []string) bool {
-	for _, a := range answers {
-		ip := net.ParseIP(a).To4()
-		if ip == nil || ip[0] != 127 {
-			continue
-		}
-		if ip[1] == 255 && ip[2] == 255 {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func (n *netChecks) checkPTR(ctx context.Context, host string, ips []net.IP) []dashWarning {

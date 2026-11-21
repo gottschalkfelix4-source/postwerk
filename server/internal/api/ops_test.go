@@ -95,6 +95,8 @@ func TestDNSBLAndPTRChecks(t *testing.T) {
 				return []string{"127.0.0.4"}, nil
 			case "7.100.51.198.zen.spamhaus.org":
 				return []string{"127.255.255.254"}, nil // public resolver blocked: not a listing
+			case "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.b.barracudacentral.org":
+				return []string{"127.0.0.2"}, nil // IPv6 listing (RFC 5782)
 			}
 			return nil, &net.DNSError{IsNotFound: true}
 		},
@@ -106,15 +108,16 @@ func TestDNSBLAndPTRChecks(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	ips := publicIPv4s(ctx, n.lookupIPs, "mail.example.test")
-	if len(ips) != 2 {
+	ips := publicIPs(ctx, n.lookupIPs, "mail.example.test")
+	if len(ips) != 3 {
 		t.Fatalf("public IPs = %v", ips)
 	}
 	bl := n.checkDNSBL(ctx, ips)
-	if len(bl) != 1 || !strings.Contains(bl[0].Title, "192.0.2.10") || bl[0].Severity != "error" {
+	if len(bl) != 2 || !strings.Contains(bl[0].Title, "192.0.2.10") || bl[0].Severity != "error" ||
+		!strings.Contains(bl[1].Title, "2001:db8::1") || !strings.Contains(bl[1].Title, "barracudacentral") {
 		t.Fatalf("dnsbl = %+v", bl)
 	}
-	ptr := n.checkPTR(ctx, "mail.example.test", ips)
+	ptr := n.checkPTR(ctx, "mail.example.test", onlyIPv4(ips))
 	if len(ptr) != 1 || !strings.Contains(ptr[0].Title, "198.51.100.7") || !strings.Contains(ptr[0].Detail, "static.provider.test") {
 		t.Fatalf("ptr = %+v", ptr)
 	}
@@ -126,12 +129,12 @@ func TestDNSBLAndPTRChecks(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var w []dashWarning
 	for time.Now().Before(deadline) {
-		if w = n.snapshot("mail.example.test"); len(w) == 2 {
+		if w = n.snapshot("mail.example.test"); len(w) == 3 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(w) != 2 {
+	if len(w) != 3 {
 		t.Fatalf("cached warnings = %+v", w)
 	}
 }

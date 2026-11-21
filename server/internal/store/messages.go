@@ -87,6 +87,8 @@ type Message struct {
 	References []string         `json:"-"`
 	SearchText string           `json:"-"`
 	BlobHash   string           `json:"-"`
+	// AISuspicious marks messages the AI analysis suspects of prompt injection.
+	AISuspicious bool `json:"aiSuspicious"`
 }
 
 // ---- mailboxes ----
@@ -182,7 +184,7 @@ func (s *Store) DeleteMailbox(ctx context.Context, accountID, id int64) error {
 
 const msgCols = `id, account_id, mailbox_id, thread_id, uid, message_id, in_reply_to, subject, from_name, from_email,
 	to_json, cc_json, reply_to_json, preview, received_at, size, seen, flagged, answered, draft, has_attachments,
-	tags_json, category, priority, spam_score, auth_json, virus, ai_summary, ai_reasons_json, ai_events_json, ai_tasks_json, ai_done, blob_hash`
+	tags_json, category, priority, spam_score, auth_json, virus, ai_summary, ai_reasons_json, ai_events_json, ai_tasks_json, ai_done, blob_hash, ai_suspicious`
 
 func scanMessage(sc interface{ Scan(...any) error }) (*Message, error) {
 	var m Message
@@ -191,7 +193,7 @@ func scanMessage(sc interface{ Scan(...any) error }) (*Message, error) {
 	var received int64
 	err := sc.Scan(&m.ID, &m.AccountID, &m.MailboxID, &m.ThreadID, &m.UID, &m.MessageID, &m.InReplyTo, &m.Subject, &m.From.Name, &m.From.Email,
 		&to, &cc, &rt, &m.Preview, &received, &m.Size, &m.Seen, &m.Flagged, &m.Answered, &m.Draft, &m.HasAttachments,
-		&tags, &cat, &m.Priority, &m.SpamScore, &auth, &virus, &summary, &reasons, &events, &tasks, &m.AIDone, &m.BlobHash)
+		&tags, &cat, &m.Priority, &m.SpamScore, &auth, &virus, &summary, &reasons, &events, &tasks, &m.AIDone, &m.BlobHash, &m.AISuspicious)
 	if err != nil {
 		return nil, err
 	}
@@ -458,14 +460,16 @@ type AIResult struct {
 	Events    []ExtractedEvent
 	Tasks     []ExtractedTask
 	SpamScore *float64
+	// Suspicious flags a suspected prompt injection.
+	Suspicious bool
 }
 
 func (s *Store) SetAIResult(ctx context.Context, id int64, r AIResult) error {
 	if r.Priority == "" {
 		r.Priority = "normal"
 	}
-	q := `UPDATE messages SET category = ?, priority = ?, tags_json = ?, ai_summary = ?, ai_reasons_json = ?, ai_events_json = ?, ai_tasks_json = ?, ai_done = 1`
-	args := []any{toNull(r.Category), r.Priority, js(nonNil(r.Tags)), toNull(r.Summary), js(nonNil(r.Reasons)), js(r.Events), js(r.Tasks)}
+	q := `UPDATE messages SET category = ?, priority = ?, tags_json = ?, ai_summary = ?, ai_reasons_json = ?, ai_events_json = ?, ai_tasks_json = ?, ai_done = 1, ai_suspicious = ?`
+	args := []any{toNull(r.Category), r.Priority, js(nonNil(r.Tags)), toNull(r.Summary), js(nonNil(r.Reasons)), js(r.Events), js(r.Tasks), r.Suspicious}
 	if r.SpamScore != nil {
 		q += `, spam_score = ?`
 		args = append(args, *r.SpamScore)

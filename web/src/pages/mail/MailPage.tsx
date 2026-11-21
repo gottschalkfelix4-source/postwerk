@@ -230,8 +230,9 @@ export default function MailPage() {
     (m: MessageDetail, d: { subject: string; body: string }) => {
       const base = replyInit(m, false, me.email);
       composer.open({ ...base, subject: d.subject || base.subject, text: `${d.body}${base.text ?? ""}` });
+      toast.info("Automatisch erstellter Entwurf", "Kann Fehler enthalten – bitte vor dem Senden prüfen.");
     },
-    [composer, me.email],
+    [composer, me.email, toast],
   );
 
   // --- keyboard shortcuts ---------------------------------------------------

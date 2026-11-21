@@ -513,6 +513,7 @@ var migrations = []string{
 		modseq INTEGER NOT NULL,
 		PRIMARY KEY(collection_id, name)
 	);`,
+	`ALTER TABLE messages ADD COLUMN ai_suspicious INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func migrate(db *sql.DB) error {

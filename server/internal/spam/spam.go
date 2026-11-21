@@ -325,12 +325,55 @@ func isPrivate(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
-func checkDNSBL(ctx context.Context, ip net.IP, servers []string) []string {
-	v4 := ip.To4()
-	if v4 == nil {
-		return nil // IPv6 DNSBL lookups are not supported yet
+// lookupHost resolves DNSBL queries; tests replace it.
+var lookupHost = net.DefaultResolver.LookupHost
+
+// ReverseIP returns the DNSBL query label of ip (RFC 5782): the reversed
+// octets for IPv4 ("4.3.2.1") and the 32 reversed nibbles for IPv6
+// ("1.0.0.0.<...>.8.b.d.0.1.0.0.2"). IPv4-mapped IPv6 addresses are treated
+// as IPv4. It returns "" for invalid addresses.
+func ReverseIP(ip net.IP) string {
+	if v4 := ip.To4(); v4 != nil {
+		return fmt.Sprintf("%d.%d.%d.%d", v4[3], v4[2], v4[1], v4[0])
 	}
-	rev := fmt.Sprintf("%d.%d.%d.%d", v4[3], v4[2], v4[1], v4[0])
+	v6 := ip.To16()
+	if v6 == nil {
+		return ""
+	}
+	const digits = "0123456789abcdef"
+	b := make([]byte, 0, 63)
+	for i := len(v6) - 1; i >= 0; i-- {
+		if i < len(v6)-1 {
+			b = append(b, '.')
+		}
+		b = append(b, digits[v6[i]&0x0f], '.', digits[v6[i]>>4])
+	}
+	return string(b)
+}
+
+// DNSBLListed interprets the A records of a DNSBL answer: only addresses in
+// 127.0.0.0/8 mean "listed". 127.255.255.x are error codes (Spamhaus: query
+// refused, e.g. via a public resolver, or rate limited) and not a listing.
+// IPv6 queries are answered with A records as well (RFC 5782).
+func DNSBLListed(answers []string) bool {
+	for _, a := range answers {
+		ip := net.ParseIP(strings.TrimSpace(a)).To4()
+		if ip == nil || ip[0] != 127 {
+			continue
+		}
+		if ip[1] == 255 && ip[2] == 255 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func checkDNSBL(ctx context.Context, ip net.IP, servers []string) []string {
+	rev := ReverseIP(ip)
+	if rev == "" {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var mu sync.Mutex
@@ -344,22 +387,19 @@ func checkDNSBL(ctx context.Context, ip net.IP, servers []string) []string {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addrs, err := net.DefaultResolver.LookupHost(ctx, rev+"."+s)
-			if err != nil || len(addrs) == 0 {
+			// NXDOMAIN means "not listed"; lists without IPv6 support
+			// simply never answer for IPv6 queries.
+			addrs, err := lookupHost(ctx, rev+"."+strings.TrimSuffix(s, "."))
+			if err != nil || !DNSBLListed(addrs) {
 				return
 			}
-			// 127.255.255.x answers from Spamhaus mean "query refused", not listed.
-			if strings.HasPrefix(addrs[0], "127.255.255.") {
-				return
-			}
-			if strings.HasPrefix(addrs[0], "127.") {
-				mu.Lock()
-				hits = append(hits, s)
-				mu.Unlock()
-			}
+			mu.Lock()
+			hits = append(hits, s)
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+	sort.Strings(hits)
 	return hits
 }
 

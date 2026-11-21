@@ -423,7 +423,7 @@ func paperlessHook(st *store.Store, settings *store.SettingsCache, log *slog.Log
 	log = log.With("component", "dms")
 	return func(ctx context.Context, m *store.Message, a *ai.Analysis) {
 		cfg := settings.Get().DMS.Paperless
-		if !cfg.Enabled || !cfg.AutoForward || !m.HasAttachments || a.Category == "" {
+		if !cfg.Enabled || !cfg.AutoForward || !m.HasAttachments || a.Category == "" || a.Suspicious {
 			return
 		}
 		match := false

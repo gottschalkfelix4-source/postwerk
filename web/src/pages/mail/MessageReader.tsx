@@ -218,6 +218,11 @@ function ReaderContent({
                   Hohe Priorität
                 </Badge>
               )}
+              {m.aiSuspicious && (
+                <Badge tone="amber" icon={TriangleAlert} title="Die Nachricht enthält möglicherweise versteckte Anweisungen an die KI. Automatische Ablage wurde übersprungen.">
+                  Verdacht auf Prompt-Injection
+                </Badge>
+              )}
               {m.category && <Badge tone={toneFor(m.category)}>{m.category}</Badge>}
               {m.tags.map((t) => (
                 <Badge key={t}>#{t}</Badge>

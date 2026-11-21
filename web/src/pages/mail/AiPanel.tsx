@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, Check, ChevronDown, Flame, ListPlus, MapPin, PenLine, RefreshCw, Sparkles, Wand2 } from "lucide-react";
+import { CalendarPlus, Check, ChevronDown, Flame, Info, ListPlus, MapPin, PenLine, RefreshCw, Sparkles, TriangleAlert, Wand2 } from "lucide-react";
 import { aiApi, calendarApi, tasksApi } from "@/api/endpoints";
 import type { ExtractedEvent, ExtractedTask, MessageDetail, MessageSummary, Paged, ReplyTone, SummarizeResult } from "@/api/types";
 import { useStoredFlag } from "@/lib/hooks";
@@ -36,11 +36,22 @@ export function AiPanel({
           <Sparkles className="h-3.5 w-3.5" />
         </span>
         <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">KI-Assistent</span>
+        {message.aiSuspicious && (
+          <Badge tone="amber" icon={TriangleAlert}>
+            Injection-Verdacht
+          </Badge>
+        )}
         {!open && message.ai.summary && (
-          <span className="ml-2 hidden min-w-0 flex-1 truncate text-xs text-zinc-500 dark:text-zinc-400 md:block">{message.ai.summary}</span>
+          <span
+            className="ml-2 hidden min-w-0 flex-1 truncate text-xs text-zinc-500 dark:text-zinc-400 md:block"
+            title="Automatisch erstellt – kann Fehler enthalten"
+          >
+            {message.ai.summary}
+          </span>
         )}
         <ChevronDown className={cn("ml-auto h-4 w-4 text-zinc-400 transition-transform", open && "rotate-180")} />
       </button>
+      {open && message.aiSuspicious && <InjectionWarning />}
       {open && (
         <div className="grid gap-px border-t border-violet-200/60 bg-violet-200/40 dark:border-violet-500/15 dark:bg-violet-500/10 2xl:grid-cols-2">
           {f.summarize && <SummaryBlock message={message} threadSize={threadSize} />}
@@ -63,6 +74,36 @@ function Block({ title, icon: Icon, children, action }: { title: string; icon: t
         {action}
       </div>
       {children}
+    </div>
+  );
+}
+
+/** Marks text produced by the AI. */
+function GeneratedNote({ className }: { className?: string }) {
+  return (
+    <p className={cn("mt-2 flex items-center gap-1 text-[11px] text-zinc-400 dark:text-zinc-500", className)}>
+      <Info className="h-3 w-3 shrink-0" /> Automatisch erstellt – kann Fehler enthalten
+    </p>
+  );
+}
+
+/** Shown when the mail may contain hidden instructions aimed at the AI. */
+function InjectionWarning({ compact }: { compact?: boolean }) {
+  return (
+    <div
+      role="alert"
+      className={cn(
+        "flex items-start gap-2 border-amber-200 bg-amber-50 text-xs text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200",
+        compact ? "mt-2 rounded-md border px-2.5 py-1.5" : "border-t px-4 py-2.5",
+      )}
+    >
+      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>
+        <strong className="font-semibold">Verdacht auf Prompt-Injection.</strong>{" "}
+        {compact
+          ? "Die Nachricht versucht möglicherweise, die KI zu steuern – Ergebnis besonders kritisch prüfen."
+          : "Die Nachricht enthält möglicherweise versteckte Anweisungen an die KI. Automatische Ablage und hohe Priorität wurden unterdrückt; KI-Ergebnisse besonders kritisch prüfen."}
+      </span>
     </div>
   );
 }
@@ -96,6 +137,8 @@ function SummaryBlock({ message, threadSize }: { message: MessageDetail; threadS
               ))}
             </ul>
           )}
+          {result?.suspicious && !message.aiSuspicious && <InjectionWarning compact />}
+          <GeneratedNote />
         </div>
       ) : (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">Noch keine Zusammenfassung vorhanden.</p>
@@ -122,7 +165,10 @@ function ReplyBlock({ message, onDraft }: { message: MessageDetail; onDraft: (d:
 
   const run = useMutation({
     mutationFn: () => aiApi.reply({ messageId: message.id, tone, ...(instruction.trim() ? { instruction: instruction.trim() } : {}) }),
-    onSuccess: onDraft,
+    onSuccess: (d) => {
+      onDraft(d);
+      if (d.suspicious) toast.error("Verdacht auf Prompt-Injection", "Die Nachricht versucht möglicherweise, die KI zu steuern. Entwurf besonders sorgfältig prüfen.");
+    },
     onError: (err) => toast.error(err, "Entwurf konnte nicht erstellt werden"),
   });
 
@@ -150,6 +196,9 @@ function ReplyBlock({ message, onDraft }: { message: MessageDetail; onDraft: (d:
         <Button size="sm" variant="primary" icon={Wand2} loading={run.isPending} onClick={() => run.mutate()} className="w-full bg-violet-600 hover:bg-violet-500 dark:bg-violet-500 dark:hover:bg-violet-400">
           Entwurf erstellen
         </Button>
+        <p className="flex items-center gap-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+          <Info className="h-3 w-3 shrink-0" /> Entwürfe werden automatisch erstellt – vor dem Senden prüfen
+        </p>
       </div>
     </Block>
   );
@@ -161,11 +210,13 @@ function ExtractBlock({ message }: { message: MessageDetail }) {
   const [events, setEvents] = useState<ExtractedEvent[]>(message.ai.events);
   const [tasks, setTasks] = useState<ExtractedTask[]>(message.ai.tasks);
   const [added, setAdded] = useState<Set<string>>(new Set());
+  const [suspicious, setSuspicious] = useState(false);
 
   useEffect(() => {
     setEvents(message.ai.events);
     setTasks(message.ai.tasks);
     setAdded(new Set());
+    setSuspicious(false);
   }, [message.id, message.ai.events, message.ai.tasks]);
 
   const extract = useMutation({
@@ -173,6 +224,7 @@ function ExtractBlock({ message }: { message: MessageDetail }) {
     onSuccess: (r) => {
       setEvents(r.events);
       setTasks(r.tasks);
+      setSuspicious(!!r.suspicious);
       if (r.events.length + r.tasks.length === 0) toast.info("Keine Termine oder Aufgaben gefunden");
     },
     onError: (err) => toast.error(err, "Erkennung fehlgeschlagen"),
@@ -265,6 +317,8 @@ function ExtractBlock({ message }: { message: MessageDetail }) {
           })}
         </ul>
       )}
+      {suspicious && !message.aiSuspicious && <InjectionWarning compact />}
+      {events.length + tasks.length > 0 && <GeneratedNote />}
     </Block>
   );
 }
@@ -276,7 +330,7 @@ function ClassificationBlock({ message }: { message: MessageDetail }) {
     mutationFn: () => aiApi.reclassify(message.id),
     onSuccess: (s: MessageSummary) => {
       qc.setQueryData<MessageDetail>(qk.message(message.id), (old) =>
-        old ? { ...old, category: s.category, priority: s.priority, summary: s.summary, spamScore: s.spamScore, tags: s.tags } : old,
+        old ? { ...old, category: s.category, priority: s.priority, summary: s.summary, spamScore: s.spamScore, tags: s.tags, aiSuspicious: s.aiSuspicious } : old,
       );
       qc.setQueriesData<Paged<MessageSummary>>({ queryKey: qk.messages }, (old) =>
         old ? { ...old, items: old.items.map((m) => (m.id === s.id ? { ...m, ...s } : m)) } : old,
@@ -317,7 +371,7 @@ function ClassificationBlock({ message }: { message: MessageDetail }) {
       </dl>
       {message.ai.reasons.length > 0 && (
         <div className="mt-3">
-          <div className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">Begründung</div>
+          <div className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">Begründung (automatisch erstellt – kann Fehler enthalten)</div>
           <ul className="space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
             {message.ai.reasons.map((r, i) => (
               <li key={i} className="flex gap-1.5">

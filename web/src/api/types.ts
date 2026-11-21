@@ -272,6 +272,7 @@ export interface MessageSummary {
   receivedAt: string; size: number; seen: boolean; flagged: boolean; hasAttachments: boolean;
   tags: string[]; category: string | null; priority: "high" | "normal" | "low";
   spamScore: number; summary: string | null;  // short AI summary, if available
+  aiSuspicious?: boolean;                      // AI analysis suspects a prompt injection
 }
 
 export interface Attachment { id: number; filename: string; contentType: string; size: number; }
@@ -404,17 +405,17 @@ export interface AiStatus { enabled: boolean; features: Settings["ai"]["features
 
 export type SummarizeRequest = { messageId: number } | { threadId: number };
 
-export interface SummarizeResult { summary: string; bullets: string[]; }
+export interface SummarizeResult { summary: string; bullets: string[]; suspicious?: boolean; }
 
 export type ReplyTone = "formal" | "friendly" | "short";
 
 export interface ReplyRequest { messageId: number; instruction?: string; tone?: ReplyTone; }
 
-export interface ReplyDraft { subject: string; body: string; }
+export interface ReplyDraft { subject: string; body: string; suspicious?: boolean; }
 
 export type ScoredMessage = MessageSummary & { score: number };
 
-export interface ExtractResult { events: ExtractedEvent[]; tasks: ExtractedTask[]; }
+export interface ExtractResult { events: ExtractedEvent[]; tasks: ExtractedTask[]; suspicious?: boolean; }
 
 export interface CreateTaskRequest { calendarId?: number; title: string; due?: string | null; description?: string | null; sourceMessageId?: number | null; }
 

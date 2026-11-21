@@ -15,6 +15,7 @@ import {
   Sparkles,
   Star,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import type { BulkAction, Mailbox, MessageSummary } from "@/api/types";
@@ -477,15 +478,23 @@ function MessageRow({
           </button>
         </div>
         {showSummary && m.summary ? (
-          <p className="mt-0.5 flex items-start gap-1 text-xs text-violet-700 dark:text-violet-300">
-            <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
+          <p
+            className="mt-0.5 flex items-start gap-1 text-xs text-violet-700 dark:text-violet-300"
+            title="Automatisch erstellte Zusammenfassung – kann Fehler enthalten"
+          >
+            <Sparkles className="mt-0.5 h-3 w-3 shrink-0" aria-label="Automatisch erstellt" />
             <span className="line-clamp-1">{m.summary}</span>
           </p>
         ) : (
           <p className="mt-0.5 line-clamp-1 text-xs text-zinc-500 dark:text-zinc-400">{m.preview}</p>
         )}
-        {(m.category || m.tags.length > 0 || m.score !== undefined || m.spamScore >= 5) && (
+        {(m.category || m.tags.length > 0 || m.score !== undefined || m.spamScore >= 5 || m.aiSuspicious) && (
           <div className="mt-1.5 flex flex-wrap gap-1">
+            {m.aiSuspicious && (
+              <Badge tone="amber" icon={TriangleAlert} title="Verdacht auf Prompt-Injection: versteckte Anweisungen an die KI möglich">
+                Injection-Verdacht
+              </Badge>
+            )}
             {m.category && <Badge tone={toneFor(m.category)}>{m.category}</Badge>}
             {m.tags.slice(0, 3).map((t) => (
               <Badge key={t}>#{t}</Badge>

@@ -24,7 +24,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | Empfohlene DNS-Einträge je Domain (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, SRV) | ✅ |
 | Filter | Spam-Scoring (Auth-Ergebnisse, Header-Heuristiken, Phishing-Muster, gefährliche Anhänge) | ✅ |
 | | Bayes-Filter mit Auto-Learn und Training über „Spam / kein Spam“ | ✅ |
-| | DNSBL, Greylisting | ✅ |
+| | DNSBL (IPv4 und IPv6 nach RFC 5782), Greylisting | ✅ |
 | | Virenscan über ClamAV (INSTREAM) mit Ablehnen oder Quarantäne | ✅ |
 | Sicherheit | 2FA (TOTP), App-Passwörter, Brute-Force-Sperre für Web, SMTP, IMAP und POP3 | ✅ |
 | Betrieb | Web-Verwaltung, REST-API, Live-Logs, Prometheus-Metriken, Dashboard | ✅ |
@@ -43,6 +43,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | Import von .mbox, .eml und .zip im Webmail | ✅ |
 | KI | OpenAI-kompatible Endpunkte (Ollama, vLLM, LocalAI, OpenAI …) und Anthropic-kompatible API, eigener Embedding-Endpunkt | ✅ |
 | | LLM-Spam- und Phishing-Erkennung | ✅ |
+| | Schutz vor Prompt-Injection (nur sichtbarer Text, Zufallsmarkierungen, Verdachtserkennung ohne automatische Ablage, Warnhinweis im Webmail) | ✅ |
 | | Kategorien und Tags, Priorität / dringende Mails | ✅ |
 | | Automatisch in Ordner einsortieren (je Kategorie oder in die eigenen Ordner der Benutzer) | ✅ |
 | | Zusammenfassungen von Mails und Threads | ✅ |
@@ -71,7 +72,8 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 - ✅ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
 - ✅ DMARC- und TLS-RPT-Berichte empfangen und auswerten
 - ⏳ DMARC- und TLS-RPT-Berichte selbst versenden
-- ⏳ IPv6-DNSBL, Rate-Limits pro Konto, ausgehender Spam-Schutz
+- ✅ DNSBL-Abfragen für IPv6-Absender (RFC 5782), auch für die eigene IPv6-Adresse im Dashboard
+- ⏳ Rate-Limits pro Konto, ausgehender Spam-Schutz
 
 ## Meilenstein 4 – Identität und Datenschutz
 

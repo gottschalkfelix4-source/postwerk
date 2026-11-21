@@ -96,6 +96,7 @@ interface MessageSummary {
   receivedAt: string; size: number; seen: boolean; flagged: boolean; hasAttachments: boolean;
   tags: string[]; category: string | null; priority: "high" | "normal" | "low";
   spamScore: number; summary: string | null;  // kurze KI-Zusammenfassung, falls vorhanden
+  aiSuspicious: boolean;                       // KI-Analyse vermutet Prompt-Injection
 }
 
 interface Attachment { id: number; filename: string; contentType: string; size: number; }
@@ -201,11 +202,19 @@ interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt:
 | Methode | Pfad | Body | Antwort |
 |---|---|---|---|
 | GET | `/status` | – | `{ enabled, features: Settings["ai"]["features"], categories: string[], dmsEnabled: boolean }` |
-| POST | `/summarize` | `{ messageId } \| { threadId }` | `{ summary, bullets: string[] }` |
-| POST | `/reply` | `{ messageId, instruction?, tone?: "formal"\|"friendly"\|"short" }` | `{ subject, body }` |
+| POST | `/summarize` | `{ messageId } \| { threadId }` | `{ summary, bullets: string[], suspicious: boolean }` |
+| POST | `/reply` | `{ messageId, instruction?, tone?: "formal"\|"friendly"\|"short" }` | `{ subject, body, suspicious: boolean }` |
 | GET | `/search?q=&limit=` | – | `{ items: (MessageSummary & { score: number })[] }` |
-| POST | `/extract` | `{ messageId }` | `{ events: ExtractedEvent[], tasks: ExtractedTask[] }` |
+| POST | `/extract` | `{ messageId }` | `{ events: ExtractedEvent[], tasks: ExtractedTask[], suspicious: boolean }` |
 | POST | `/reclassify` | `{ messageId }` | `MessageSummary` |
+
+Schutz vor Prompt-Injection: An das Modell geht nur der Text, den ein Mensch in der Mail sieht (ohne
+HTML-Kommentare, per CSS versteckte Elemente, winzige oder hintergrundfarbene Schrift und unsichtbare
+Unicode-Zeichen), eingerahmt von zufälligen Markierungen je Anfrage. Fällt eine Mail durch typische
+Steuerversuche oder viel versteckten Text auf (oder meldet das Modell selbst einen Verdacht), wird sie nicht
+automatisch einsortiert oder an Paperless weitergeleitet, bekommt keine hohe Priorität und die KI kann ihren
+Spam-Wert nur erhöhen. `suspicious`/`aiSuspicious` zeigen den Verdacht an; Antworten des Modells werden auf
+erlaubte Werte, Längen und reinen Text geprüft.
 
 ## Kalender, Aufgaben, DMS
 

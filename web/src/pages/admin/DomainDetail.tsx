@@ -24,6 +24,7 @@ import {
 } from "@/components/ui";
 import { DnsAutoSetup } from "./dns/DnsAutoSetup";
 import { DnsRecordGuide } from "./dns/DnsRecordGuide";
+import { DkimKeysCard } from "./dns/DkimKeys";
 
 export default function DomainDetailPage() {
   const { name = "" } = useParams();
@@ -133,6 +134,8 @@ export default function DomainDetailPage() {
         </CardFooter>
       </Card>
 
+      {domain && <DkimKeysCard domain={domain.name} />}
+
       <DnsAutoSetup
         open={autoOpen}
         onClose={() => setAutoOpen(false)}
@@ -141,6 +144,7 @@ export default function DomainDetailPage() {
         onApplied={() => {
           void qc.invalidateQueries({ queryKey: ["admin", "dns-check", name] });
           void qc.invalidateQueries({ queryKey: ["admin", "domain-dns", name] });
+          void qc.invalidateQueries({ queryKey: ["admin", "dkim", name] });
         }}
       />
     </>

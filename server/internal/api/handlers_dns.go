@@ -71,7 +71,9 @@ func (s *Server) dnsPlan(r *http.Request, ctx context.Context) (dnsprov.Provider
 		return nil, nil, nil, err
 	}
 	cfg := s.Settings.Get()
-	desired := dnsprov.DesiredRecords(d.Name, cfg.Server.Hostname, d.DKIMSelector, dkim, ipv4, ipv6, s.dnsOptions(cfg))
+	opts := s.dnsOptions(cfg)
+	opts.ExtraDKIM = s.extraDKIMDesired(ctx, d)
+	desired := dnsprov.DesiredRecords(d.Name, cfg.Server.Hostname, d.DKIMSelector, dkim, ipv4, ipv6, opts)
 	plan, err := dnsprov.MakePlan(ctx, p, info, d.Name, desired)
 	if err != nil {
 		return nil, nil, nil, dnsErr(err)

@@ -102,6 +102,7 @@ func (s *Server) setupInitialize(w http.ResponseWriter, r *http.Request) (any, e
 		if err := s.Store.CreateDomain(ctx, domain, "pw"+time.Now().Format("200601"), key); err != nil {
 			return nil, err
 		}
+		s.addInitialEd25519Key(ctx, domain)
 	}
 	h, err := auth.HashPassword(req.AdminPassword)
 	if err != nil {

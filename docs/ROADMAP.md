@@ -14,7 +14,11 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | | POP3 / POP3S mit STLS, UIDL, TOP | ✅ |
 | | Ausgehende Warteschlange: MX-Auflösung, Wiederholungen, Bounces, optionaler Smarthost | ✅ |
 | TLS | Let’s Encrypt über ACME (HTTP-01/TLS-ALPN-01), eigene Zertifikate, selbstsigniert als Fallback | ✅ |
-| Authentifizierung | SPF-, DKIM- und DMARC-Prüfung eingehend, DKIM-Signatur ausgehend (RSA-2048) | ✅ |
+| Authentifizierung | SPF-, DKIM- und DMARC-Prüfung eingehend (auch Ed25519-Signaturen), DKIM-Signatur ausgehend | ✅ |
+| | DKIM-Schlüsselwechsel je Domain (neu → prüfen → aktivieren, alter Schlüssel 7 Tage veröffentlicht), Doppelsignatur RSA + Ed25519 (RFC 8463) | ✅ |
+| | ARC (RFC 8617): Kette eingehend prüfen, vertrauenswürdige Weiterleiter schwächen DMARC-Ablehnungen ab, weitergeleitete Mails werden versiegelt | ✅ |
+| | DMARC-Aggregat- und TLS-RPT-Berichte (RFC 8460) empfangen, auswerten und unter „Berichte“ anzeigen | ✅ |
+| | postmaster@ und abuse@ für jede Domain automatisch (an das erste Admin-Konto oder eine eingestellte Adresse) | ✅ |
 | Verzeichnis | Mehrere Domains, Konten, Aliase (auch extern), Catch-all, Quotas | ✅ |
 | | Empfohlene DNS-Einträge je Domain (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, SRV) | ✅ |
 | Filter | Spam-Scoring (Auth-Ergebnisse, Header-Heuristiken, Phishing-Muster, gefährliche Anhänge) | ✅ |
@@ -57,8 +61,9 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 - ⏳ CalDAV und CardDAV (Kalender, Kontakte, Aufgaben als VTODO); der interne Kalender wird darauf migriert
 - ⏳ MTA-STS-Policy ausliefern und ausgehend erzwingen, DANE (TLSA) ausgehend prüfen
-- ⏳ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
-- ⏳ DMARC- und TLS-RPT-Berichte empfangen und auswerten
+- ✅ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
+- ✅ DMARC- und TLS-RPT-Berichte empfangen und auswerten
+- ⏳ DMARC- und TLS-RPT-Berichte selbst versenden
 - ⏳ IPv6-DNSBL, Rate-Limits pro Konto, ausgehender Spam-Schutz
 
 ## Meilenstein 4 – Identität und Datenschutz

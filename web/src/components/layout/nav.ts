@@ -4,6 +4,7 @@ import {
   ArchiveRestore,
   AtSign,
   CalendarDays,
+  FileBarChart,
   Globe,
   Inbox,
   LayoutDashboard,
@@ -60,6 +61,7 @@ export const adminNav: NavGroup[] = [
       { to: "/admin/logs", label: "Logs", icon: ScrollText, keywords: "protokoll" },
       { to: "/admin/security", label: "Sicherheit", icon: ShieldAlert, keywords: "sperren ban ip" },
       { to: "/admin/metrics", label: "Metriken", icon: Activity, keywords: "prometheus" },
+      { to: "/admin/reports", label: "Berichte", icon: FileBarChart, keywords: "dmarc tls-rpt rua aggregat" },
     ],
   },
   {

@@ -1,16 +1,10 @@
-// Package mailauth evaluates SPF, DKIM and DMARC for inbound mail and signs
-// outbound mail with DKIM.
+// Package mailauth evaluates SPF, DKIM, DMARC and ARC for inbound mail and
+// signs outbound mail with DKIM and ARC.
 package mailauth
 
 import (
 	"bytes"
 	"context"
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
@@ -34,6 +28,14 @@ type Result struct {
 	// and pct= have been taken into account: none, quarantine, reject.
 	DMARCPolicy string
 	FromDomain  string
+	// ARC is the result of the ARC chain validation (none, pass, fail);
+	// empty when no validation took place.
+	ARC string
+	// ARCChain holds the details of the validated ARC sets.
+	ARCChain ARCResult
+	// DMARCOverride names the reason a failed DMARC policy was relaxed
+	// locally, e.g. "arc=pass, sealed by google.com".
+	DMARCOverride string
 }
 
 // Hooks for tests.
@@ -61,7 +63,10 @@ func Check(ctx context.Context, ip net.IP, helo, mailFrom, fromDomain string, ra
 	}
 
 	// DKIM
-	verifs, err := dkim.VerifyWithOptions(bytes.NewReader(raw), &dkim.VerifyOptions{MaxVerifications: 5})
+	verifs, err := dkim.VerifyWithOptions(bytes.NewReader(raw), &dkim.VerifyOptions{
+		MaxVerifications: 5,
+		LookupTXT:        func(name string) ([]string, error) { return lookupTXT(ctx, name) },
+	})
 	r.DKIM = "none"
 	if err == nil {
 		for _, v := range verifs {
@@ -73,6 +78,10 @@ func Check(ctx context.Context, ip net.IP, helo, mailFrom, fromDomain string, ra
 			}
 		}
 	}
+
+	// ARC
+	r.ARCChain = VerifyARC(ctx, raw)
+	r.ARC = r.ARCChain.Result
 
 	// DMARC
 	if fromDomain == "" {
@@ -180,68 +189,44 @@ func domainOf(addr string) string {
 
 // Header renders an Authentication-Results header line (without CRLF).
 func (r Result) Header(authserv string) string {
-	return fmt.Sprintf("Authentication-Results: %s; spf=%s smtp.mailfrom=%s; dkim=%s; dmarc=%s header.from=%s",
-		authserv, r.SPF, r.SPFDomain, r.DKIM, r.DMARC, r.FromDomain)
+	return "Authentication-Results: " + authserv + "; " + r.ResultsString()
 }
 
-// ---- DKIM keys and signing ----
-
-func GenerateKey() (string, error) {
-	k, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return "", err
+// ResultsString renders the method results of an Authentication-Results
+// header (everything after the authserv-id), as used in our
+// Authentication-Results and ARC-Authentication-Results headers.
+func (r Result) ResultsString() string {
+	dmarcRes := r.DMARC
+	if dmarcRes == "" {
+		dmarcRes = "none"
 	}
-	der := x509.MarshalPKCS1PrivateKey(k)
-	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der})), nil
+	if r.DMARCOverride != "" {
+		dmarcRes += " (policy overridden: " + r.DMARCOverride + ")"
+	}
+	s := fmt.Sprintf("spf=%s smtp.mailfrom=%s; dkim=%s; dmarc=%s header.from=%s",
+		r.SPF, r.SPFDomain, r.DKIM, dmarcRes, r.FromDomain)
+	if r.ARC != "" {
+		s += "; arc=" + r.ARC
+		if r.ARC == "fail" && r.ARCChain.Reason != "" {
+			s += " (" + sanitizeComment(r.ARCChain.Reason) + ")"
+		}
+	}
+	return s
 }
 
-func parseKey(p string) (*rsa.PrivateKey, error) {
-	blk, _ := pem.Decode([]byte(p))
-	if blk == nil {
-		return nil, errors.New("invalid PEM")
+// sanitizeComment keeps a string safe for use inside a header comment.
+func sanitizeComment(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '(' || r == ')' || r == '\\':
+			return -1
+		case r < 0x20 || r == 0x7f:
+			return ' '
+		}
+		return r
+	}, s)
+	if len(s) > 120 {
+		s = s[:120]
 	}
-	return x509.ParsePKCS1PrivateKey(blk.Bytes)
-}
-
-// DNSValue returns the TXT value for <selector>._domainkey.<domain>.
-func DNSValue(privPEM string) (string, error) {
-	k, err := parseKey(privPEM)
-	if err != nil {
-		return "", err
-	}
-	der, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
-	if err != nil {
-		return "", err
-	}
-	return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der), nil
-}
-
-// SignedHeaders lists the header fields covered by our DKIM signatures.
-// From, Subject, To, Date and Message-ID appear twice (oversigning): the
-// second, non-existent instance makes the signature break if anyone adds
-// another copy of these fields later.
-var SignedHeaders = []string{
-	"From", "From", "Subject", "Subject", "To", "To", "Date", "Date", "Message-ID", "Message-ID",
-	"Cc", "Reply-To", "In-Reply-To", "References", "MIME-Version", "Content-Type", "Content-Transfer-Encoding",
-}
-
-// Sign prepends a DKIM-Signature header to raw.
-func Sign(raw []byte, domain, selector, privPEM string) ([]byte, error) {
-	k, err := parseKey(privPEM)
-	if err != nil {
-		return nil, err
-	}
-	opts := &dkim.SignOptions{
-		Domain:                 domain,
-		Selector:               selector,
-		Signer:                 crypto.Signer(k),
-		HeaderCanonicalization: dkim.CanonicalizationRelaxed,
-		BodyCanonicalization:   dkim.CanonicalizationRelaxed,
-		HeaderKeys:             SignedHeaders,
-	}
-	var out bytes.Buffer
-	if err := dkim.Sign(&out, bytes.NewReader(raw), opts); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return s
 }

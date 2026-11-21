@@ -27,6 +27,8 @@ type Store struct {
 	Vault *vault.Key
 
 	changes changeHub
+	// settings is set by LoadSettings (postmaster routing reads it).
+	settings *SettingsCache
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -373,6 +375,68 @@ var migrations = []string{
 		expires_at INTEGER
 	);
 	CREATE INDEX data_exports_account ON data_exports(account_id, created_at DESC);`,
+	// Mail authentication: several DKIM keys per domain (rotation, RSA and
+	// Ed25519) with the existing key migrated as active RSA key, and stored
+	// DMARC aggregate and TLS-RPT reports.
+	`CREATE TABLE dkim_keys (
+		id INTEGER PRIMARY KEY,
+		domain TEXT NOT NULL REFERENCES domains(name) ON DELETE CASCADE,
+		selector TEXT NOT NULL,
+		algorithm TEXT NOT NULL,
+		private_key TEXT NOT NULL,
+		state TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		activated_at INTEGER,
+		retired_at INTEGER,
+		UNIQUE(domain, selector)
+	);
+	INSERT INTO dkim_keys(domain, selector, algorithm, private_key, state, created_at, activated_at)
+		SELECT name, dkim_selector, 'rsa', dkim_private_key, 'active', created_at, created_at FROM domains WHERE dkim_private_key <> '';
+	CREATE TABLE dmarc_reports (
+		id INTEGER PRIMARY KEY,
+		domain TEXT NOT NULL,
+		org_name TEXT NOT NULL,
+		email TEXT NOT NULL DEFAULT '',
+		report_id TEXT NOT NULL,
+		date_begin INTEGER NOT NULL,
+		date_end INTEGER NOT NULL,
+		policy_json TEXT NOT NULL DEFAULT '{}',
+		messages INTEGER NOT NULL DEFAULT 0,
+		failed INTEGER NOT NULL DEFAULT 0,
+		received_at INTEGER NOT NULL,
+		UNIQUE(org_name, report_id)
+	);
+	CREATE INDEX dmarc_reports_domain ON dmarc_reports(domain, date_end);
+	CREATE TABLE dmarc_records (
+		id INTEGER PRIMARY KEY,
+		report_id INTEGER NOT NULL REFERENCES dmarc_reports(id) ON DELETE CASCADE,
+		source_ip TEXT NOT NULL,
+		count INTEGER NOT NULL,
+		disposition TEXT NOT NULL DEFAULT '',
+		dkim TEXT NOT NULL DEFAULT '',
+		spf TEXT NOT NULL DEFAULT '',
+		header_from TEXT NOT NULL DEFAULT '',
+		envelope_from TEXT NOT NULL DEFAULT '',
+		auth_json TEXT NOT NULL DEFAULT '{}'
+	);
+	CREATE INDEX dmarc_records_report ON dmarc_records(report_id);
+	CREATE TABLE tls_reports (
+		id INTEGER PRIMARY KEY,
+		domain TEXT NOT NULL,
+		org_name TEXT NOT NULL,
+		email TEXT NOT NULL DEFAULT '',
+		report_id TEXT NOT NULL,
+		date_begin INTEGER NOT NULL,
+		date_end INTEGER NOT NULL,
+		policy_type TEXT NOT NULL DEFAULT '',
+		policy_json TEXT NOT NULL DEFAULT '{}',
+		success_count INTEGER NOT NULL DEFAULT 0,
+		failure_count INTEGER NOT NULL DEFAULT 0,
+		failures_json TEXT NOT NULL DEFAULT '[]',
+		received_at INTEGER NOT NULL,
+		UNIQUE(org_name, report_id, domain, policy_type)
+	);
+	CREATE INDEX tls_reports_domain ON tls_reports(domain, date_end);`,
 }
 
 func migrate(db *sql.DB) error {

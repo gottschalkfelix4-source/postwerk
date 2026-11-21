@@ -52,6 +52,17 @@ type Options struct {
 	SPFInclude string
 	// DynDNS reports that the host's A record is maintained by DynDNS.
 	DynDNS bool
+	// ExtraDKIM lists further DKIM keys to publish besides the primary one
+	// (pending keys of a rotation, the Ed25519 key for dual signing).
+	ExtraDKIM []DKIMRecord
+}
+
+// DKIMRecord is an additional DKIM key record.
+type DKIMRecord struct {
+	Selector string
+	Value    string
+	Purpose  string
+	Required bool
 }
 
 // DesiredRecords builds the record set for a mail domain.
@@ -90,6 +101,10 @@ func DesiredRecords(domain, host, dkimSelector, dkimValue, ipv4, ipv6 string, op
 		Desired{Key: "srv-pop3s", Record: Record{Name: "_pop3s._tcp." + domain, Type: "SRV", Value: "1 995 " + hostDot}, Purpose: "Autokonfiguration: POP3 (TLS)"},
 		Desired{Key: "autoconfig", Record: Record{Name: "autoconfig." + domain, Type: "CNAME", Value: hostDot}, Purpose: "Thunderbird-Autokonfiguration"},
 	)
+	for _, k := range opt.ExtraDKIM {
+		d = append(d, Desired{Key: "dkim-" + k.Selector, Record: Record{Name: k.Selector + "._domainkey." + domain, Type: "TXT", Value: k.Value},
+			Purpose: k.Purpose, Required: k.Required, Match: "v=DKIM1"})
+	}
 	return d
 }
 

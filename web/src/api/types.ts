@@ -169,6 +169,11 @@ export interface Settings {
   backup: BackupSettings;
   ldap: LdapSettings;
   oidc: OidcSettings;
+  /** Sender authentication: trusted ARC sealers and the postmaster@/abuse@ target. */
+  mailauth: {
+    trustedArcSealers: string[];
+    postmasterAddress: string;   // empty = first admin account
+  };
 }
 
 /** LDAP directory as account source (secrets masked). */

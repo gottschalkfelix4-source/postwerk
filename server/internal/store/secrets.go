@@ -43,6 +43,9 @@ func (s *Store) initSecrets(ctx context.Context) error {
 	if err := s.encryptColumn(ctx, "domains", "name", "dkim_private_key"); err != nil {
 		return fmt.Errorf("encrypt dkim keys: %w", err)
 	}
+	if err := s.encryptColumn(ctx, "dkim_keys", "id", "private_key"); err != nil {
+		return err
+	}
 	if err := s.encryptSetting(ctx, srsSecretKey); err != nil {
 		return err
 	}

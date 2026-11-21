@@ -32,12 +32,12 @@ type Account struct {
 	TOTPSecret   string `json:"-"`
 	TOTPEnabled  bool   `json:"totpEnabled"`
 	// TOTPLastStep is the last accepted TOTP time step (replay protection).
-	TOTPLastStep       int64     `json:"-"`
-	MustChangePassword bool      `json:"mustChangePassword"`
+	TOTPLastStep       int64 `json:"-"`
+	MustChangePassword bool  `json:"mustChangePassword"`
 	// Source tells where the password lives: SourceLocal, SourceLDAP or SourceOIDC.
 	Source    string    `json:"source"`
 	Aliases   []string  `json:"aliases"`
-	CreatedAt          time.Time `json:"createdAt"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type Alias struct {
@@ -115,13 +115,22 @@ func (s *Store) DomainExists(ctx context.Context, name string) (bool, error) {
 	return n > 0, err
 }
 
+// CreateDomain adds a domain; its DKIM key becomes the active RSA key.
 func (s *Store) CreateDomain(ctx context.Context, name, selector, privKeyPEM string) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO domains(name, dkim_selector, dkim_private_key, created_at) VALUES (?,?,?,?)`,
-		Normalize(name), selector, s.Vault.Encrypt(privKeyPEM), now())
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
-		return ErrConflict
-	}
-	return err
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		t := now()
+		_, err := tx.ExecContext(ctx, `INSERT INTO domains(name, dkim_selector, dkim_private_key, created_at) VALUES (?,?,?,?)`,
+			Normalize(name), selector, s.Vault.Encrypt(privKeyPEM), t)
+		if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+			return ErrConflict
+		}
+		if err != nil || privKeyPEM == "" {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO dkim_keys(domain, selector, algorithm, private_key, state, created_at, activated_at) VALUES (?,?,?,?,?,?,?)`,
+			Normalize(name), selector, DKIMAlgRSA, s.Vault.Encrypt(privKeyPEM), DKIMActive, t, t)
+		return err
+	})
 }
 
 func (s *Store) SetCatchAll(ctx context.Context, name string, target *string) error {
@@ -479,6 +488,12 @@ func (s *Store) ResolveRecipient(ctx context.Context, addr string) (local []stri
 			external = append(external, a)
 			return nil
 		}
+		// postmaster@ and abuse@ without own account or alias.
+		if IsSystemAddress(a) {
+			if t := s.PostmasterTarget(ctx); t != "" {
+				return walk(t, depth+1)
+			}
+		}
 		// Local domain but unknown mailbox: try catch-all once.
 		if depth == 0 {
 			d, err := s.GetDomain(ctx, DomainOf(a))
@@ -749,4 +764,5 @@ func (s *Store) PurgeExpired(ctx context.Context) {
 	_, _ = s.DB.ExecContext(ctx, `DELETE FROM auth_bans WHERE until < ?`, now())
 	_, _ = s.DB.ExecContext(ctx, `DELETE FROM greylist WHERE last_seen < ?`, time.Now().Add(-40*24*time.Hour).Unix())
 	_, _ = s.DB.ExecContext(ctx, `DELETE FROM stats WHERE hour < ?`, time.Now().Add(-90*24*time.Hour).Unix()/3600)
+	s.purgeReports(ctx)
 }

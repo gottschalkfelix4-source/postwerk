@@ -368,6 +368,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /.well-known/mta-sts.txt", s.mtaSTS)
 	mux.HandleFunc("GET /mail/config-v1.1.xml", s.autoconfig)
 	mux.HandleFunc("GET /.well-known/autoconfig/mail/config-v1.1.xml", s.autoconfig)
+	s.mountDAV(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	metricsHandler := promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{})
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -605,11 +606,13 @@ func (s *Server) routes(m *http.ServeMux) {
 	// calendar, tasks, dms
 	m.HandleFunc("GET /api/calendar/events", s.user(s.listEvents))
 	m.HandleFunc("POST /api/calendar/events", s.user(s.createEvent))
-	m.HandleFunc("DELETE /api/calendar/events/{id}", s.user(s.deleteEvent))
+	m.HandleFunc("PUT /api/calendar/events/{id}", s.user(s.updateEvent))
+	m.HandleFunc("DELETE /api/calendar/events/{id}", s.user(s.deleteCalendarObject("VEVENT")))
 	m.HandleFunc("GET /api/tasks", s.user(s.listTasks))
 	m.HandleFunc("POST /api/tasks", s.user(s.createTask))
 	m.HandleFunc("PATCH /api/tasks/{id}", s.user(s.patchTask))
-	m.HandleFunc("DELETE /api/tasks/{id}", s.user(s.deleteTask))
+	m.HandleFunc("DELETE /api/tasks/{id}", s.user(s.deleteCalendarObject("VTODO")))
+	s.pimRoutes(m)
 	m.HandleFunc("POST /api/dms/forward", s.user(s.dmsForward))
 
 	// encryption at rest & data export

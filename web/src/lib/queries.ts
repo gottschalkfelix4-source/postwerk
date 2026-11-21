@@ -13,6 +13,10 @@ export const qk = {
   thread: (id: number) => ["mail", "thread", id] as const,
   tasks: ["tasks"] as const,
   calendar: ["calendar"] as const,
+  calendars: ["calendars"] as const,
+  addressBooks: ["addressbooks"] as const,
+  contacts: ["contacts"] as const,
+  davInfo: ["account", "dav"] as const,
 };
 
 const disabledStatus: AiStatus = {

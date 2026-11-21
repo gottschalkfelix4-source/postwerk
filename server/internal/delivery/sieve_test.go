@@ -164,8 +164,12 @@ if header :contains "subject" "Kopie" { redirect :copy "bob@example.test"; }`)
 		t.Fatalf("redirect without SRS: %q", items[0].From)
 	}
 	raw, _ := e.st.Blobs.Get(items[0].BlobHash)
-	if !strings.HasPrefix(string(raw), "X-Sieve-Redirected-By: alice@example.test\r\n") {
+	// ARC headers (if the domain has a signing key) precede the marker.
+	if !strings.Contains("\r\n"+string(raw), "\r\nX-Sieve-Redirected-By: alice@example.test\r\n") {
 		t.Fatalf("redirect header missing:\n%s", raw)
+	}
+	if keys, _ := e.st.SigningKeys(context.Background(), "example.test"); len(keys) > 0 && !strings.HasPrefix(string(raw), "ARC-Seal: i=1;") {
+		t.Fatalf("external redirect not ARC-sealed:\n%s", raw)
 	}
 	if n := inboxCount(t, e.st, "alice@example.test"); n != 0 {
 		t.Fatalf("redirect without :copy kept a copy: %d", n)

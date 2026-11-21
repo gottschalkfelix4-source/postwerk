@@ -289,8 +289,35 @@ export interface MessageDetail extends MessageSummary {
   ai: { summary: string | null; reasons: string[]; events: ExtractedEvent[]; tasks: ExtractedTask[] } ;
 }
 
-export interface CalendarEvent { id: number; title: string; start: string; end: string | null; location: string | null; description: string | null; sourceMessageId: number | null; }
-export interface Task { id: number; title: string; due: string | null; done: boolean; sourceMessageId: number | null; createdAt: string; }
+/** Event or occurrence of a recurring event. All-day events use plain dates with an exclusive end. */
+export interface CalendarEvent {
+  id: number; calendarId: number; uid: string; title: string; start: string; end: string | null; allDay: boolean;
+  location: string | null; description: string | null; rrule: string | null; instance: string | null; sourceMessageId: number | null;
+}
+export interface EventInput {
+  calendarId?: number; title: string; start: string; end?: string | null; allDay?: boolean;
+  location?: string | null; description?: string | null; rrule?: string; sourceMessageId?: number | null;
+  /** On update: occurrence start the edit is based on; the server shifts the series by start - instance. */
+  instance?: string | null;
+}
+export interface Task {
+  id: number; calendarId: number; uid: string; title: string; due: string | null; done: boolean;
+  description: string | null; sourceMessageId: number | null; createdAt: string;
+}
+
+export interface Calendar { id: number; name: string; color: string; description: string; components: string[]; url: string; }
+export interface CalendarInput { name?: string; color?: string; description?: string; components?: string[]; }
+export interface AddressBook { id: number; name: string; description: string; url: string; count: number; }
+export interface DavImportResult { imported: number; updated: number; skipped: number; }
+
+export interface ContactEntry { type: string; value: string; }
+export interface ContactInput {
+  addressBookId?: number; name: string; firstName: string; lastName: string; emails: ContactEntry[]; phones: ContactEntry[];
+  organization: string; title: string; notes: string; birthday: string | null;
+}
+export interface Contact extends ContactInput { id: number; addressBookId: number; uid: string; updatedAt: string; }
+export interface AddressSuggestion { name: string; email: string; source: "contact" | "recent"; }
+export interface DavInfo { caldavUrl: string; carddavUrl: string; principalUrl: string; server: string; username: string; }
 
 export interface Vacation { enabled: boolean; subject: string; body: string; from: string | null; until: string | null; }
 export interface AppPassword { id: number; name: string; createdAt: string; lastUsedAt: string | null; }
@@ -389,9 +416,9 @@ export type ScoredMessage = MessageSummary & { score: number };
 
 export interface ExtractResult { events: ExtractedEvent[]; tasks: ExtractedTask[]; }
 
-export interface CreateTaskRequest { title: string; due?: string | null; sourceMessageId?: number | null; }
+export interface CreateTaskRequest { calendarId?: number; title: string; due?: string | null; description?: string | null; sourceMessageId?: number | null; }
 
-export interface UpdateTaskRequest { title?: string; due?: string | null; done?: boolean; }
+export interface UpdateTaskRequest { title?: string; due?: string | null; done?: boolean; description?: string | null; }
 
 // ---------------------------------------------------------------------------
 // Setup wizard (docs/API.md, "Einrichtung (Setup-Assistent)").

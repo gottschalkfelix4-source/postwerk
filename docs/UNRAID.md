@@ -314,6 +314,38 @@ gespeichert; nach einem Neustart fragt „Erneut starten“ sie neu ab.
 **Selbst importieren:** Jeder Benutzer kann im Webmail unter **Einstellungen → Import** eigene Exporte
 hochladen (`.mbox` aus Thunderbird oder Apple Mail, `.eml`, `.zip`).
 
+---
+
+## 7b. Kalender und Kontakte auf dem iPhone
+
+Postwerk ist zugleich CalDAV- und CardDAV-Server: Kalender, Aufgaben (Erinnerungen) und Kontakte aus
+dem Webmail lassen sich mit iPhone, iPad, Mac, Android (DAVx⁵) und Thunderbird abgleichen. Das läuft
+über die Weboberfläche per HTTPS (Port 443 bzw. der Reverse-Proxy); eine zusätzliche Portweiterleitung
+ist nicht nötig.
+
+**Am einfachsten:** Im Webmail unter **Konto & Sicherheit → Kalender & Kontakte synchronisieren** das
+**Apple-Profil herunterladen** und auf dem Gerät installieren (Einstellungen → Allgemein → VPN und
+Geräteverwaltung). Es richtet Mail, Kalender und Kontakte zusammen ein; das Passwort fragt das Gerät ab.
+
+**Von Hand:** Einstellungen → Apps → Kalender (bzw. Kontakte) → Kalender-Accounts → Account hinzufügen →
+Andere → **CalDAV-Account hinzufügen** (bzw. **CardDAV-Account hinzufügen**):
+
+| Feld | Eintrag |
+|---|---|
+| Server | `mail.deinedomain.de` |
+| Benutzername | volle E-Mail-Adresse |
+| Passwort | Kontopasswort, mit aktivierter Zwei-Faktor-Anmeldung ein **App-Passwort** |
+
+Findet das Gerät den Server nicht von selbst, unter „Erweiterte Einstellungen“ die Account-URL
+`https://mail.deinedomain.de/dav/principals/<E-Mail>/` eintragen. Die DNS-Einträge `_caldavs._tcp` und
+`_carddavs._tcp` aus Schritt 5 helfen Apps, die nur die E-Mail-Adresse abfragen.
+
+> **Nur über HTTPS.** Postwerk nimmt Kalender-/Kontakt-Anmeldungen nicht über unverschlüsseltes HTTP an.
+> Hinter Nginx Proxy Manager, SWAG, Traefik oder Caddy funktioniert es mit der Konfiguration aus dem
+> Setup-Assistenten (der Proxy setzt `X-Forwarded-Proto: https` und ist als vertrauenswürdig eingetragen).
+
+---
+
 ## Backup, Update, Fehlersuche
 
 **Backup** – unter **Verwaltung → Backup** im laufenden Betrieb, mit Zeitplan, Aufbewahrung und

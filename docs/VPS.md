@@ -168,6 +168,38 @@ Mail-Account hinzufügen. Nach dem Klick auf „Weiter“ **IMAP** wählen und b
 Port 993 muss in der Firewall offen sein (Schritt 4) und in der `docker-compose.yml` stehen. Ältere
 Compose-Dateien ohne die Zeile `"993:9930"` ergänzen und `docker compose up -d` ausführen.
 
+## Kalender und Kontakte auf dem iPhone
+
+Postwerk ist zugleich CalDAV- und CardDAV-Server. Kalender, Aufgaben (Erinnerungen) und Kontakte aus
+dem Webmail erscheinen damit auf iPhone, iPad und Mac; Änderungen auf dem Gerät landen sofort im Webmail.
+Der Zugang läuft über HTTPS (Port 443), es wird kein weiterer Port gebraucht.
+
+**Am einfachsten:** Im Webmail unter **Konto & Sicherheit → Kalender & Kontakte synchronisieren** das
+**Apple-Profil herunterladen** und auf dem Gerät installieren (Einstellungen → Allgemein → VPN und
+Geräteverwaltung). Das Profil richtet Mail, Kalender und Kontakte in einem Schritt ein; das Passwort
+fragt das Gerät bei der Installation ab.
+
+**Von Hand:** Einstellungen → Apps → Kalender (bzw. Kontakte) → Kalender-Accounts → Account hinzufügen →
+Andere → **CalDAV-Account hinzufügen** (bzw. **CardDAV-Account hinzufügen**):
+
+| Feld | Eintrag |
+|---|---|
+| Server | `mail.deinedomain.de` |
+| Benutzername | volle E-Mail-Adresse |
+| Passwort | Kontopasswort, mit aktivierter Zwei-Faktor-Anmeldung ein **App-Passwort** |
+| Beschreibung | frei wählbar |
+
+Das iPhone findet die richtigen Adressen selbst (`/.well-known/caldav`). Klappt das nicht, unter
+„Erweiterte Einstellungen“ die Account-URL `https://mail.deinedomain.de/dav/principals/<E-Mail>/` eintragen.
+Android (DAVx⁵), Thunderbird und macOS nutzen dieselben Angaben; die genauen URLs zeigt das Webmail an.
+Mit den DNS-Einträgen `_caldavs._tcp` und `_carddavs._tcp` (DNS-Anleitung im Admin-Bereich) reicht
+in vielen Apps sogar die E-Mail-Adresse.
+
+Aus Sicherheitsgründen nimmt Postwerk Anmeldungen für Kalender und Kontakte nur über HTTPS an. Hinter
+einem Reverse-Proxy muss dieser `X-Forwarded-Proto: https` setzen und als vertrauenswürdig eingetragen
+sein (macht die Konfiguration aus dem Setup-Assistenten bereits); WebDAV-Methoden wie `PROPFIND` und
+`REPORT` und den `Authorization`-Header unverändert durchreichen.
+
 ## Betrieb
 
 **Updates:**

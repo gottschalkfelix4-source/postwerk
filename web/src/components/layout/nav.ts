@@ -3,6 +3,7 @@ import {
   ArrowRightLeft,
   ArchiveRestore,
   AtSign,
+  BookUser,
   CalendarDays,
   FileBarChart,
   Filter,
@@ -76,5 +77,6 @@ export const mailPages: NavItem[] = [
   { to: "/mail/calendar", label: "Kalender", icon: CalendarDays, keywords: "termine" },
   { to: "/mail/tasks", label: "Aufgaben", icon: ListTodo, keywords: "todo" },
   { to: "/mail/filters", label: "Filterregeln", icon: Filter, keywords: "sieve regeln sortieren weiterleiten managesieve" },
+  { to: "/mail/contacts", label: "Kontakte", icon: BookUser, keywords: "adressbuch carddav vcard" },
   { to: "/mail/settings", label: "Konto & Sicherheit", icon: UserCog, keywords: "passwort 2fa abwesenheit import mbox eml" },
 ];

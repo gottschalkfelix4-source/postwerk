@@ -2,12 +2,12 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, CircleCheckBig, ListTodo, Mail, Plus, Trash2 } from "lucide-react";
-import { tasksApi } from "@/api/endpoints";
+import { calendarApi, tasksApi } from "@/api/endpoints";
 import type { Task } from "@/api/types";
 import { qk } from "@/lib/queries";
 import { formatDate, fromDateTimeInput, isSameDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Badge, Button, Card, Checkbox, EmptyState, ErrorState, Input, PageHeader, Segmented, SkeletonRows, useToast } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, EmptyState, ErrorState, Input, PageHeader, Segmented, Select, SkeletonRows, useToast } from "@/components/ui";
 import { mailLink } from "./mailUtils";
 
 type Filter = "open" | "done" | "all";
@@ -32,10 +32,20 @@ export default function TasksPage() {
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
 
+  const [calendarId, setCalendarId] = useState("");
+
   const q = useQuery({ queryKey: qk.tasks, queryFn: tasksApi.list });
+  const calendars = useQuery({ queryKey: qk.calendars, queryFn: calendarApi.calendars });
+  const taskCalendars = (calendars.data ?? []).filter((c) => c.components.includes("VTODO"));
+  const calendarName = (id: number) => taskCalendars.find((c) => c.id === id)?.name;
 
   const create = useMutation({
-    mutationFn: () => tasksApi.create({ title: title.trim(), due: due ? fromDateTimeInput(due, "12:00") : null }),
+    mutationFn: () =>
+      tasksApi.create({
+        title: title.trim(),
+        due: due ? fromDateTimeInput(due, "12:00") : null,
+        ...(calendarId ? { calendarId: Number(calendarId) } : {}),
+      }),
     onSuccess: (t) => {
       qc.setQueryData<Task[]>(qk.tasks, (old) => (old ? [t, ...old] : [t]));
       setTitle("");
@@ -93,6 +103,15 @@ export default function TasksPage() {
             <Input icon={Plus} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Neue Aufgabe …" />
           </div>
           <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} className="w-40" aria-label="Fällig am" />
+          {taskCalendars.length > 1 && (
+            <Select
+              value={calendarId || String(taskCalendars[0].id)}
+              onChange={(e) => setCalendarId(e.target.value)}
+              options={taskCalendars.map((c) => ({ value: String(c.id), label: c.name }))}
+              className="w-40"
+              aria-label="Kalender"
+            />
+          )}
           <Button type="submit" variant="primary" disabled={!title.trim()} loading={create.isPending}>
             Hinzufügen
           </Button>
@@ -138,6 +157,9 @@ export default function TasksPage() {
                         <Badge tone={info.tone} icon={CalendarClock}>
                           {info.label}
                         </Badge>
+                      )}
+                      {taskCalendars.length > 1 && calendarName(t.calendarId) && (
+                        <span className="text-xs text-zinc-400">{calendarName(t.calendarId)}</span>
                       )}
                       {t.sourceMessageId !== null && (
                         <Link

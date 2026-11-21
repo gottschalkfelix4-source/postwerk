@@ -126,23 +126,9 @@ func Build(ctx context.Context, st *store.Store, accountID int64, w io.Writer, p
 		return err
 	}
 
-	progress("Kalender und Aufgaben", done, total)
-	events, err := st.ListEvents(ctx, accountID, "", "")
-	if err != nil {
+	progress("Kalender, Aufgaben und Kontakte", done, total)
+	if err := writeCollections(ctx, st, accountID, add); err != nil {
 		return err
-	}
-	tasks, err := st.ListTasks(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	if len(events) > 0 || len(tasks) > 0 {
-		f, err := add("kalender.ics")
-		if err != nil {
-			return err
-		}
-		if _, err := io.WriteString(f, ICalendar(acct.Email, events, tasks, created)); err != nil {
-			return err
-		}
 	}
 
 	for _, s := range registered() {
@@ -299,7 +285,8 @@ sitzungen.json        Aktive Anmeldungen an der Weboberfläche
 mail/*.mbox           Ein mbox-Archiv (mboxrd) pro Ordner, z. B. mit Thunderbird
                       (Add-on „ImportExportTools NG“) oder mutt lesbar
 mail/ordner.json      Zuordnung der Ordner zu den Dateien
-kalender.ics          Termine und Aufgaben im iCalendar-Format (falls vorhanden)
+kalender/*.ics        Ein iCalendar-Archiv pro Kalender (Termine und Aufgaben)
+kontakte/*.vcf        Ein vCard-Archiv pro Adressbuch
 %s
 Verschlüsselt gespeicherte Nachrichten („Verschlüsselung im Ruhezustand“)
 sind so exportiert, wie sie gespeichert sind – zum Lesen wird der eigene

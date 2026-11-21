@@ -45,12 +45,50 @@ func setup(t *testing.T) (*store.Store, *store.Account, string) {
 	if _, err := st.CreateMailbox(ctx, a.ID, "Projekte/2026"); err != nil {
 		t.Fatal(err)
 	}
-	loc := "Büro"
-	if err := st.CreateEvent(ctx, a.ID, &store.CalendarEvent{Title: "Besprechung, wichtig", Start: "2026-11-25T10:00", Location: &loc}); err != nil {
+	if err := st.EnsureDefaultCollections(ctx, a.ID); err != nil {
 		t.Fatal(err)
 	}
-	due := "2026-11-30"
-	if err := st.CreateTask(ctx, a.ID, &store.Task{Title: "Steuer", Due: &due}); err != nil {
+	cals, _ := st.ListCollections(ctx, a.ID, store.KindCalendar)
+	crlf := func(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
+	ev := crlf(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//DE
+BEGIN:VEVENT
+UID:ev1@test
+DTSTAMP:20261101T000000Z
+DTSTART:20261125T100000
+SUMMARY:Besprechung\, wichtig
+LOCATION:Büro
+END:VEVENT
+END:VCALENDAR
+`)
+	if _, _, err := st.PutObject(ctx, cals[0], "ev1.ics", []byte(ev), store.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	todo := crlf(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//DE
+BEGIN:VTODO
+UID:todo1@test
+DTSTAMP:20261101T000000Z
+DUE;VALUE=DATE:20261130
+SUMMARY:Steuer
+STATUS:NEEDS-ACTION
+END:VTODO
+END:VCALENDAR
+`)
+	if _, _, err := st.PutObject(ctx, cals[0], "todo1.ics", []byte(todo), store.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	books, _ := st.ListCollections(ctx, a.ID, store.KindAddressBook)
+	card := crlf(`BEGIN:VCARD
+VERSION:3.0
+UID:c1@test
+FN:Bernd Beispiel
+EMAIL:bernd@example.org
+END:VCARD
+`)
+	if _, _, err := st.PutObject(ctx, books[0], "c1.vcf", []byte(card), store.PutOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	st.CreateAppPassword(ctx, a.ID, "Thunderbird", "app-hash-value")
@@ -81,7 +119,7 @@ func TestBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := unzip(t, buf.Bytes())
-	for _, name := range []string{"konto.json", "app-passwoerter.json", "sitzungen.json", "mail/Posteingang.mbox", "mail/Projekte_2026.mbox", "mail/ordner.json", "kalender.ics", "LIESMICH.txt"} {
+	for _, name := range []string{"konto.json", "app-passwoerter.json", "sitzungen.json", "mail/Posteingang.mbox", "mail/Projekte_2026.mbox", "mail/ordner.json", "LIESMICH.txt"} {
 		if _, ok := files[name]; !ok {
 			t.Errorf("missing %s (have %v)", name, keys(files))
 		}
@@ -105,12 +143,23 @@ func TestBuild(t *testing.T) {
 	if !strings.HasPrefix(mbox, "From alice@example.org Mon Nov  2 10:00:00 2026\n") {
 		t.Fatalf("from line: %q", strings.SplitN(mbox, "\n", 2)[0])
 	}
-	ics := files["kalender.ics"]
+	var ics, vcf string
+	for name, body := range files {
+		if strings.HasPrefix(name, "kalender/") && strings.HasSuffix(name, ".ics") {
+			ics += body
+		}
+		if strings.HasPrefix(name, "kontakte/") && strings.HasSuffix(name, ".vcf") {
+			vcf += body
+		}
+	}
 	for _, want := range []string{"BEGIN:VEVENT", "DTSTART:20261125T100000", "SUMMARY:Besprechung\\, wichtig", "LOCATION:Büro",
 		"BEGIN:VTODO", "DUE;VALUE=DATE:20261130", "STATUS:NEEDS-ACTION"} {
 		if !strings.Contains(ics, want) {
 			t.Errorf("ics missing %q:\n%s", want, ics)
 		}
+	}
+	if !strings.Contains(vcf, "FN:Bernd Beispiel") {
+		t.Errorf("vcf missing contact:\n%s", vcf)
 	}
 	if len(phases) == 0 || phases[len(phases)-1] != "Abschluss" {
 		t.Fatalf("phases = %v", phases)
@@ -193,18 +242,6 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 }
 
-func TestFold(t *testing.T) {
-	long := "DESCRIPTION:" + strings.Repeat("ä", 60)
-	folded := fold(long)
-	for _, l := range strings.Split(folded, "\r\n") {
-		if len(l) > 75 {
-			t.Fatalf("line too long: %d", len(l))
-		}
-	}
-	if strings.ReplaceAll(folded, "\r\n ", "") != long {
-		t.Fatal("unfold differs")
-	}
-}
 
 func keys(m map[string]string) []string {
 	var out []string

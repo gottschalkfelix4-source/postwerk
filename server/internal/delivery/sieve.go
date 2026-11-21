@@ -202,6 +202,7 @@ func (s *Service) applySieve(ctx context.Context, acct *store.Account, raw []byt
 		}
 		allowed = append(allowed, r)
 	}
+	allowed = s.limitRedirects(ctx, acct, allowed, log)
 	if len(redirects) > 0 && len(allowed) == 0 && len(targets) == 0 {
 		// Never lose a message because all its redirects were dropped.
 		addTarget(inbox, res.KeepFlags)

@@ -1,6 +1,6 @@
 import { NavLink, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Building2, FileStack, KeyRound, Lock, RefreshCw, Send, ServerCog, ShieldAlert, ShieldCheck, Bug, Waypoints, type LucideIcon } from "lucide-react";
+import { BellRing, Bot, Building2, FileStack, Gauge, KeyRound, Lock, RefreshCw, Send, ServerCog, ShieldAlert, ShieldCheck, Bug, Waypoints, type LucideIcon } from "lucide-react";
 import { LdapSection, OidcSection } from "./directory";
 import { adminApi } from "@/api/endpoints";
 import type { Settings, SettingsUpdate } from "@/api/types";
@@ -24,6 +24,8 @@ import {
 import { MailAuthCard } from "./MailAuthCard";
 import { MtaStsCard } from "./MtaStsCard";
 import { CleanupCard } from "./CleanupCard";
+import { LimitsSection } from "./LimitsSection";
+import { NotificationsSection } from "./NotificationsSection";
 
 const icons: Record<SettingsSectionId, LucideIcon> = {
   server: ServerCog,
@@ -36,6 +38,8 @@ const icons: Record<SettingsSectionId, LucideIcon> = {
   ai: Bot,
   dms: FileStack,
   security: ShieldCheck,
+  limits: Gauge,
+  notifications: BellRing,
   ldap: Building2,
   oidc: KeyRound,
 };
@@ -145,6 +149,10 @@ export default function SettingsPage() {
             <LdapSection key={id} {...props} />
           ) : id === "oidc" ? (
             <OidcSection key={id} {...props} />
+          ) : id === "limits" ? (
+            <LimitsSection key={id} {...props} />
+          ) : id === "notifications" ? (
+            <NotificationsSection key={id} {...props} />
           ) : (
             <>
               <SecuritySection key={id} {...props} />

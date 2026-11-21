@@ -47,6 +47,8 @@ type Manager struct {
 	// Restart is called once a restore has been prepared; the restore is
 	// applied by ApplyPending on the next start.
 	Restart func()
+	// OnFailure is called after a backup run failed (optional).
+	OnFailure func()
 
 	mu   sync.Mutex
 	job  *Job
@@ -202,6 +204,9 @@ func (m *Manager) runBackup(trigger string) {
 	if err != nil {
 		m.Log.Error("backup failed", "component", "backup", "target", desc, "err", err)
 		m.finish("backup", name, err)
+		if m.OnFailure != nil {
+			m.OnFailure()
+		}
 		return
 	}
 	m.Log.Info("backup created", "component", "backup", "archive", name, "target", desc, "size", size, "files", files,

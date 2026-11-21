@@ -47,8 +47,15 @@ type Service struct {
 	// VirusScan replaces the ClamAV client (nil: av.Scan).
 	VirusScan func(addr string, data []byte) (string, error)
 
+	// OnSendLimit is called (at most once a minute per account and kind)
+	// when an account reaches a send limit.
+	OnSendLimit func(acct *store.Account, kind string, limit int)
+
 	srsMu sync.Mutex
 	srs   *srs.Rewriter
+
+	hitMu   sync.Mutex
+	lastHit map[string]time.Time
 }
 
 func (s *Service) hostname() string { return s.Settings.Get().Server.Hostname }
@@ -145,7 +152,7 @@ func (s *Service) CheckSender(ctx context.Context, env *smtp.Envelope, from stri
 
 func (s *Service) CheckRecipient(ctx context.Context, env *smtp.Envelope, rcpt string) *smtp.Reply {
 	if env.Mode == smtp.ModeSubmission {
-		return nil
+		return s.checkSubmissionRecipient(ctx, env, rcpt)
 	}
 	if s.localSRS(ctx, rcpt) {
 		// Bounce to a message we forwarded: only valid, unexpired SRS
@@ -706,6 +713,36 @@ func (s *Service) Submit(ctx context.Context, acct *store.Account, from string, 
 	if err := s.checkSubmittedHeaders(ctx, acct, data); err != nil {
 		return nil, err
 	}
+
+	// Resolve all recipients first: the send limits count only those that
+	// leave the server, and nothing may be delivered when a limit is hit.
+	lim := s.SendLimits(ctx, acct)
+	if err := s.checkRecipientCount(ctx, acct, lim, len(rcpts), "submit"); err != nil {
+		return nil, err
+	}
+	type localRcpt struct{ addr, rcpt string }
+	var locals []localRcpt
+	var remote []string
+	seenRemote := map[string]bool{}
+	for _, r := range rcpts {
+		local, external, err := s.Store.ResolveRecipient(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range local {
+			locals = append(locals, localRcpt{l, r})
+		}
+		for _, e := range external {
+			if !seenRemote[e] {
+				seenRemote[e] = true
+				remote = append(remote, e)
+			}
+		}
+	}
+	if err := s.reserveSend(ctx, acct, lim, len(remote), "submit"); err != nil {
+		return nil, err
+	}
+
 	signed := s.sign(ctx, from, data)
 
 	var sent *store.Message
@@ -720,22 +757,14 @@ func (s *Service) Submit(ctx context.Context, acct *store.Account, from string, 
 		}
 	}
 
-	var remote []string
 	var failed []failedRcpt
-	for _, r := range rcpts {
-		local, external, err := s.Store.ResolveRecipient(ctx, r)
-		if err != nil {
-			return nil, err
+	for _, l := range locals {
+		if err := s.deliverLocal(ctx, l.addr, signed, nil, deliveryMeta{Rcpt: l.rcpt}, from); err != nil {
+			var rep *smtp.Reply
+			errors.As(err, &rep)
+			s.Log.Warn("local delivery failed", "rcpt", l.addr, "err", err)
+			failed = append(failed, failedRcpt{l.addr, rep})
 		}
-		for _, l := range local {
-			if err := s.deliverLocal(ctx, l, signed, nil, deliveryMeta{Rcpt: r}, from); err != nil {
-				var rep *smtp.Reply
-				errors.As(err, &rep)
-				s.Log.Warn("local delivery failed", "rcpt", l, "err", err)
-				failed = append(failed, failedRcpt{l, rep})
-			}
-		}
-		remote = append(remote, external...)
 	}
 	if len(remote) > 0 {
 		if err := s.enqueue(ctx, from, remote, signed); err != nil {

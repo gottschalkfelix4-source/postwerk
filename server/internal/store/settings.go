@@ -27,6 +27,10 @@ type Settings struct {
 	LDAP      LDAPSettings      `json:"ldap"`
 	OIDC      OIDCSettings      `json:"oidc"`
 	MailAuth  MailAuthSettings  `json:"mailauth"`
+	// Limits are the outbound send limits per account (sendlimits.go).
+	Limits SendLimitSettings `json:"limits"`
+	// Notifications send operational warnings by mail/webhook (notify.go).
+	Notifications NotificationSettings `json:"notifications"`
 }
 
 // MailAuthSettings tune sender authentication and the system addresses.
@@ -303,6 +307,8 @@ func DefaultSettings(hostname string) Settings {
 	s.MailAuth.MTASTS = MTASTSSettings{Mode: "testing", MaxAge: 604800}
 	s.Server.Retention.DKIMCleanup = true
 	s.Server.Retention.DAVTombstoneDays = 90
+	applySendLimitDefaults(&s)
+	applyNotificationDefaults(&s)
 	return s
 }
 
@@ -361,6 +367,12 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	}
 	if cur.MailAuth.MTASTS.MaxAge <= 0 {
 		cur.MailAuth.MTASTS.MaxAge = 604800
+	}
+	if cur.Notifications.Recipients == nil {
+		cur.Notifications.Recipients = []string{}
+	}
+	if cur.Notifications.Categories == nil {
+		cur.Notifications.Categories = []string{}
 	}
 	c := &SettingsCache{cur: cur, st: s}
 	s.settings = c

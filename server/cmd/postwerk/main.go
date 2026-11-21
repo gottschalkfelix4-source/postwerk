@@ -38,6 +38,7 @@ import (
 	"postwerk/internal/message"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
+	"postwerk/internal/notify"
 	"postwerk/internal/pop3"
 	"postwerk/internal/queue"
 	"postwerk/internal/smtp"
@@ -165,8 +166,14 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	dyn := dyndns.New(settings, log)
 	go dyn.Run(ctx)
 
+	// Operational notifications; the warning source is attached once the
+	// API server exists. Send limit hits and failed backups trigger an
+	// immediate evaluation.
+	notifier := &notify.Service{Store: st, Settings: settings, Mailer: svc, Log: log}
+	svc.OnSendLimit = func(*store.Account, string, int) { notifier.Trigger() }
+
 	backups := &backup.Manager{Store: st, Settings: settings, DataDir: cfg.DataDir, Version: version, Log: log,
-		Restart: func() { restart = true; cancel() }}
+		Restart: func() { restart = true; cancel() }, OnFailure: notifier.Trigger}
 	go backups.Run(ctx)
 
 	logMasterKey(st, log)
@@ -186,11 +193,13 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.SubmissionAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SubmissionAddr, Mode: smtp.ModeSubmission, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog, AllowInsecureAuth: cfg.AllowInsecureAuth}
+		srv := &smtp.Server{Addr: cfg.SubmissionAddr, Mode: smtp.ModeSubmission, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog, AllowInsecureAuth: cfg.AllowInsecureAuth,
+			MaxRcpts: store.MaxSendLimitRecipientsPerMessage}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	if cfg.SubmissionsAddr != "" {
-		srv := &smtp.Server{Addr: cfg.SubmissionsAddr, Mode: smtp.ModeSubmission, ImplicitTLS: true, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog}
+		srv := &smtp.Server{Addr: cfg.SubmissionsAddr, Mode: smtp.ModeSubmission, ImplicitTLS: true, TLSConfig: smtpTLS, Hostname: hostname, MaxSize: maxSize, Backend: svc, Log: smtpLog,
+			MaxRcpts: store.MaxSendLimitRecipientsPerMessage}
 		listeners = append(listeners, srv.ListenAndServe)
 	}
 	popAuth := func(ctx context.Context, ip, user, pass string) (*store.Account, error) {
@@ -233,8 +242,10 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		Cfg: cfg, Store: st, Settings: settings, Auth: authn, Delivery: svc, AI: aiClient, AIWorker: aiWorker,
 		Spam: spamFilter, Logs: ring, Log: log, UI: webui.FS(), TLS: tp, Version: version, Started: time.Now(), SetupToken: setupToken, Migrations: migrations, DynDNS: dyn, Backups: backups,
 		JMAP: jmapSrv,
-		AtRest: atRest, Exports: exports,
+		AtRest: atRest, Exports: exports, Notifier: notifier,
 	}
+	notifier.Warnings = apiSrv.OpsWarnings
+	go notifier.Run(ctx)
 	handler := apiSrv.Handler()
 	httpCtl := &httpport.Controller{
 		Addr: cfg.HTTPAddr, HTTPSAddr: cfg.HTTPSAddr, Handler: handler, Settings: settings, TLS: tp,
@@ -405,6 +416,9 @@ func housekeeping(ctx context.Context, st *store.Store, settings *store.Settings
 	lastDaily := time.Now().Add(-23 * time.Hour)
 	for {
 		st.PurgeExpired(ctx)
+		if err := st.PruneSendLog(ctx, time.Now()); err != nil {
+			log.Error("send log cleanup failed", "err", err)
+		}
 		if time.Since(lastDaily) >= 24*time.Hour {
 			lastDaily = time.Now()
 			dailyCleanup(ctx, st, settings.Get().Server.Retention, log)

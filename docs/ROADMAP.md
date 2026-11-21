@@ -74,7 +74,9 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 - ✅ DMARC- und TLS-RPT-Berichte empfangen und auswerten
 - ⏳ DMARC- und TLS-RPT-Berichte selbst versenden
 - ✅ DNSBL-Abfragen für IPv6-Absender (RFC 5782), auch für die eigene IPv6-Adresse im Dashboard
-- ⏳ Rate-Limits pro Konto, ausgehender Spam-Schutz
+- ✅ Sendelimits pro Konto (Empfänger pro Nachricht, Nachrichten pro Stunde, externe Empfänger pro Tag) mit Ausnahmen pro Konto
+- ✅ Benachrichtigungen bei Betriebswarnungen per Mail und Webhook (neu, tägliche Erinnerung, behoben)
+- ⏳ Weiterer ausgehender Spam-Schutz (z. B. Inhaltsprüfung ausgehender Mails)
 
 ## Meilenstein 4 – Identität und Datenschutz
 

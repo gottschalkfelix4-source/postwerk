@@ -34,6 +34,7 @@ import (
 	"postwerk/internal/logx"
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
+	"postwerk/internal/notify"
 	"postwerk/internal/spam"
 	"postwerk/internal/sso"
 	"postwerk/internal/store"
@@ -78,6 +79,8 @@ type Server struct {
 	SSO *sso.Manager
 	AtRest     *atrest.Manager
 	Exports    *export.Manager
+	// Notifier sends operational warnings by mail/webhook (optional).
+	Notifier *notify.Service
 
 	setupMu sync.Mutex
 	ssoOnce sync.Once
@@ -620,6 +623,9 @@ func (s *Server) routes(m *http.ServeMux) {
 
 	// encryption at rest & data export
 	s.routesAtRest(m)
+
+	// send limits and notifications
+	s.limitsRoutes(m)
 }
 
 // background returns a context detached from the request for slow work.

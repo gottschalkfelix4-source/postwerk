@@ -1197,3 +1197,83 @@ und das Adressbuch „Kontakte“; sie werden beim ersten Zugriff angelegt.
 - Gespeichert wird der Text so, wie der Client ihn schickt; die ETag-Antwort auf `PUT` entspricht deshalb
   exakt dem gespeicherten Objekt. Wiederholungsregeln bleiben unverändert erhalten.
 - DNS: `_caldavs._tcp` / `_carddavs._tcp` (SRV auf Port 443) und je ein TXT `path=/dav/` stehen in der DNS-Anleitung.
+
+## Sendelimits und Benachrichtigungen
+
+### Sendelimits pro Konto
+
+Begrenzt den Versand jedes Kontos (auch Admins), damit ein übernommenes Konto nicht unbegrenzt Spam
+verschicken kann. Gezählt werden Versand über SMTP (587/465), Webmail (`POST /api/mail/send`), JMAP
+`EmailSubmission/set` und Sieve-Weiterleitungen (`redirect`) an externe Adressen. Die Stunden- und
+Tagesfenster gleiten und liegen in SQLite (überstehen Neustarts).
+
+- **Empfänger pro Nachricht:** alle Umschlag-Empfänger, auch lokale. SMTP lehnt jeden weiteren
+  `RCPT TO` mit `452 4.5.3 Too many recipients` ab; Webmail antwortet `429 send_limit`, JMAP mit
+  dem SetError `tooManyRecipients`.
+- **Nachrichten pro Stunde / externe Empfänger pro Tag:** nur Empfänger, die den Server verlassen.
+  SMTP antwortet vorübergehend mit `450 4.7.1` (schon beim `RCPT TO` externer Empfänger, sonst nach `DATA`),
+  Webmail mit `429 send_limit`, JMAP mit `forbiddenToSend` (deutsche Beschreibung). Eine Sieve-
+  Weiterleitung über dem Limit entfällt, die Nachricht bleibt im Posteingang.
+- Jeder Treffer wird protokolliert, zählt `postwerk_send_limit_hits_total{kind}` hoch, erscheint
+  24 Stunden als Dashboard-Warnung `sendlimit-<Konto-ID>` und löst – falls eingerichtet – sofort eine
+  Benachrichtigung aus.
+
+```ts
+// GET/PUT /api/admin/settings, Abschnitt "limits" (0 = unbegrenzt)
+interface SendLimitSettings {
+  maxRecipientsPerMessage: number;   // Standard 100, höchstens 1000
+  maxMessagesPerHour: number;        // Standard 300
+  maxRecipientsPerDay: number;       // Standard 2000
+}
+// pro Konto: null = Standard, 0 = unbegrenzt; exempt hebt alle Limits auf
+interface SendLimitOverride {
+  maxRecipientsPerMessage: number | null;
+  maxMessagesPerHour: number | null;
+  maxRecipientsPerDay: number | null;
+  exempt: boolean;
+}
+interface SendLimitInfo {
+  override: SendLimitOverride;
+  defaults: SendLimitSettings;
+  effective: SendLimitSettings & { exempt: boolean };
+  usage: { messagesLastHour: number; recipientsLastHour: number; messagesLastDay: number; recipientsLastDay: number };
+  hitsToday: number;                 // Limit-Treffer in den letzten 24 Stunden
+  lastHit: string | null;
+}
+```
+
+### Benachrichtigungen
+
+Die Warnungen des Dashboards (Zertifikat, Sicherung, Warteschlange, Sperrlisten, PTR, Sendelimits)
+werden alle 5 Minuten geprüft; fehlgeschlagene Sicherungen und Sendelimit-Treffer sofort. Jede neue
+Warnung erzeugt eine Mail, solange sie aktiv bleibt höchstens alle 24 Stunden eine Erinnerung, und
+nach dem Verschwinden eine kurze „Behoben“-Mail. Der Zustand liegt in der Tabelle `notify_state`.
+Absender ist `postmaster@` der zum Hostnamen passenden Domain; die Mails sind DKIM-signiert und gehen
+mit leerem Umschlag-Absender in die Warteschlange, Fehlschläge erzeugen daher keine Bounces.
+
+```ts
+// GET/PUT /api/admin/settings, Abschnitt "notifications"
+interface NotificationSettings {
+  enabled: boolean;
+  recipients: string[];              // leer = alle Admin-Konten
+  categories: ("certificate" | "backup" | "queue" | "blacklist" | "dns" | "sendlimit" | "system")[];
+  minSeverity: "warning" | "error";
+  webhookUrl: string;                // optional, http:// oder https://
+  webhookToken: string;              // maskiert; als "Authorization: Bearer …" gesendet
+}
+// Webhook: POST application/json
+interface WebhookPayload {
+  event: "new" | "reminder" | "resolved" | "test";
+  id: string; category: string; severity: "warning" | "error";
+  title: string; message: string;
+  priority: number;                  // Gotify-Skala: 8 Fehler, 5 Warnung, 3 behoben/Test
+  host: string; link?: string; since: string; time: string;
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/accounts/{id}/send-limits` | – | `SendLimitInfo` |
+| PUT | `/api/admin/accounts/{id}/send-limits` | `SendLimitOverride` | `SendLimitInfo` |
+| GET | `/api/admin/notifications/state` | – | `{ key, severity, title, firstSeen, lastSeen, lastNotified }[]` |
+| POST | `/api/admin/notifications/test` | – | `{ recipients: string[]; mailError?: string; webhook: boolean; webhookError?: string }` |

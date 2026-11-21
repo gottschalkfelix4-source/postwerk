@@ -12,6 +12,8 @@ export const settingsSections = [
   { id: "ai", label: "KI" },
   { id: "dms", label: "DMS / Paperless" },
   { id: "security", label: "Sicherheit" },
+  { id: "limits", label: "Sendelimits" },
+  { id: "notifications", label: "Benachrichtigungen" },
   { id: "ldap", label: "Verzeichnis (LDAP)" },
   { id: "oidc", label: "Single Sign-on" },
 ] as const;

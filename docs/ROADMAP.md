@@ -71,7 +71,9 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 - ✅ ARC-Signatur und -Prüfung (wichtig für Weiterleitungen), SRS für Alias-Weiterleitungen
 - ✅ DMARC- und TLS-RPT-Berichte empfangen und auswerten
 - ⏳ DMARC- und TLS-RPT-Berichte selbst versenden
-- ⏳ IPv6-DNSBL, Rate-Limits pro Konto, ausgehender Spam-Schutz
+- ✅ Sendelimits pro Konto (Empfänger pro Nachricht, Nachrichten pro Stunde, externe Empfänger pro Tag) mit Ausnahmen pro Konto
+- ✅ Benachrichtigungen bei Betriebswarnungen per Mail und Webhook (neu, tägliche Erinnerung, behoben)
+- ⏳ IPv6-DNSBL, weiterer ausgehender Spam-Schutz (z. B. Inhaltsprüfung ausgehender Mails)
 
 ## Meilenstein 4 – Identität und Datenschutz
 

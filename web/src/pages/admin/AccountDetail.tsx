@@ -30,6 +30,7 @@ import {
 } from "@/components/ui";
 import { generatePassword, QuotaInput } from "./shared";
 import { AccountExportCard } from "./AccountExportCard";
+import { AccountSendLimitsCard } from "./AccountSendLimitsCard";
 
 interface FormState {
   name: string;
@@ -325,6 +326,8 @@ export default function AccountDetailPage() {
               </div>
             </CardBody>
           </Card>
+
+          <AccountSendLimitsCard accountId={a.id} />
 
           <AccountExportCard accountId={a.id} />
 

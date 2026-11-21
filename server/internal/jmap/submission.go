@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"postwerk/internal/delivery"
 	"postwerk/internal/message"
 	"postwerk/internal/smtp"
 	"postwerk/internal/store"
@@ -446,15 +447,19 @@ func (c *call) createSubmission(objRaw json.RawMessage) (*store.Submission, *set
 	if len(rcpts) == 0 {
 		return nil, setErr("noRecipients", "the email has no recipients")
 	}
-	if len(rcpts) > 100 {
-		return nil, setErr("tooManyRecipients", "at most 100 recipients per submission")
-	}
 	if c.srv.Delivery == nil {
 		return nil, setErr("forbiddenToSend", "sending is not available")
 	}
 	// Bcc recipients must not see each other.
 	data := message.StripHeaders(raw, func(name, _ string) bool { return strings.EqualFold(name, "Bcc") })
 	if _, err := c.srv.Delivery.Submit(c.ctx, c.acct, store.Normalize(env.MailFrom.Email), rcpts, data, false); err != nil {
+		var limit *delivery.SendLimitError
+		if errors.As(err, &limit) {
+			if limit.Kind == store.SendLimitRecipients {
+				return nil, setErr("tooManyRecipients", limit.Message())
+			}
+			return nil, setErr("forbiddenToSend", limit.Message())
+		}
 		var rep *smtp.Reply
 		if errors.As(err, &rep) {
 			if strings.Contains(rep.Text, "From") || strings.Contains(rep.Text, "Sender") {

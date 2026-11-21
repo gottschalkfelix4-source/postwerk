@@ -513,6 +513,37 @@ var migrations = []string{
 		modseq INTEGER NOT NULL,
 		PRIMARY KEY(collection_id, name)
 	);`,
+	// Outbound send limits (sliding windows, per-account overrides, hits)
+	// and the state of operational notifications.
+	`CREATE TABLE send_log (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL,
+		at INTEGER NOT NULL,
+		rcpts INTEGER NOT NULL
+	);
+	CREATE INDEX send_log_account ON send_log(account_id, at);
+	CREATE TABLE send_limit_hits (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL,
+		at INTEGER NOT NULL,
+		kind TEXT NOT NULL
+	);
+	CREATE INDEX send_limit_hits_at ON send_limit_hits(at);
+	CREATE TABLE account_send_limits (
+		account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+		max_rcpts_msg INTEGER,
+		max_msgs_hour INTEGER,
+		max_rcpts_day INTEGER,
+		exempt INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE notify_state (
+		key TEXT PRIMARY KEY,
+		severity TEXT NOT NULL,
+		title TEXT NOT NULL,
+		first_seen INTEGER NOT NULL,
+		last_seen INTEGER NOT NULL,
+		last_notified INTEGER NOT NULL
+	);`,
 }
 
 func migrate(db *sql.DB) error {

@@ -174,6 +174,28 @@ export interface Settings {
     trustedArcSealers: string[];
     postmasterAddress: string;   // empty = first admin account
   };
+  /** Outbound send limits per account (defaults; overrides per account). */
+  limits: SendLimitSettings;
+  /** Operational warnings by mail and webhook. */
+  notifications: NotificationSettings;
+}
+
+/** Server-wide default send limits; 0 = unlimited. */
+export interface SendLimitSettings {
+  maxRecipientsPerMessage: number; // local and remote envelope recipients (max. 1000)
+  maxMessagesPerHour: number;      // messages with at least one remote recipient
+  maxRecipientsPerDay: number;     // remote recipients in 24 hours
+}
+
+export type NotificationCategory = "certificate" | "backup" | "queue" | "blacklist" | "dns" | "sendlimit" | "system";
+
+export interface NotificationSettings {
+  enabled: boolean;
+  recipients: string[];            // empty = all admin accounts
+  categories: NotificationCategory[];
+  minSeverity: "warning" | "error";
+  webhookUrl: string;              // optional, http(s)
+  webhookToken: string;            // masked; sent as Bearer token
 }
 
 /** LDAP directory as account source (secrets masked). */

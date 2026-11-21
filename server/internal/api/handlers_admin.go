@@ -607,7 +607,7 @@ func (s *Server) maskedSettings() store.Settings {
 		cur.Relay.Password = mask
 	}
 	for _, p := range []*string{&cur.Backup.Password, &cur.Backup.Target.WebDAV.Password, &cur.Backup.Target.SMB.Password,
-		&cur.LDAP.BindPassword, &cur.OIDC.ClientSecret} {
+		&cur.LDAP.BindPassword, &cur.OIDC.ClientSecret, &cur.Notifications.WebhookToken} {
 		if *p != "" {
 			*p = mask
 		}
@@ -638,6 +638,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
 		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security, "dyndns": &cur.DynDNS, "relay": &cur.Relay,
 		"backup": &cur.Backup, "ldap": &cur.LDAP, "oidc": &cur.OIDC, "mailauth": &cur.MailAuth,
+		"limits": &cur.Limits, "notifications": &cur.Notifications,
 	}
 	for k, raw := range patch {
 		target, known := sections[k]
@@ -661,6 +662,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 		{&cur.Backup.Target.SMB.Password, oldBackup.Target.SMB.Password, cur.Backup.Target.SMB.Host, oldBackup.Target.SMB.Host, smbSecretMsg},
 		{&cur.LDAP.BindPassword, old.LDAP.BindPassword, cur.LDAP.URL, old.LDAP.URL, ldapSecretMsg},
 		{&cur.OIDC.ClientSecret, old.OIDC.ClientSecret, cur.OIDC.IssuerURL, old.OIDC.IssuerURL, oidcSecretMsg},
+		{&cur.Notifications.WebhookToken, old.Notifications.WebhookToken, cur.Notifications.WebhookURL, old.Notifications.WebhookURL, "Benachrichtigungen: Die Webhook-URL wurde geändert – bitte das Token erneut eingeben."},
 	} {
 		if err := sc.restore(); err != nil {
 			return nil, err
@@ -704,6 +706,9 @@ func validateSettings(c, old *store.Settings) error {
 		return err
 	}
 	if err := validateMailAuth(&c.MailAuth); err != nil {
+		return err
+	}
+	if err := validateLimitsAndNotifications(c); err != nil {
 		return err
 	}
 	switch c.AI.AutoFile.Mode {

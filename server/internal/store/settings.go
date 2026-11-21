@@ -27,6 +27,10 @@ type Settings struct {
 	LDAP      LDAPSettings      `json:"ldap"`
 	OIDC      OIDCSettings      `json:"oidc"`
 	MailAuth  MailAuthSettings  `json:"mailauth"`
+	// Limits are the outbound send limits per account (sendlimits.go).
+	Limits SendLimitSettings `json:"limits"`
+	// Notifications send operational warnings by mail/webhook (notify.go).
+	Notifications NotificationSettings `json:"notifications"`
 }
 
 // MailAuthSettings tune sender authentication and the system addresses.
@@ -285,6 +289,8 @@ func DefaultSettings(hostname string) Settings {
 	s.Security.BruteForce.BanSeconds = 3600
 	applyDirectoryDefaults(&s)
 	s.MailAuth.TrustedARCSealers = append([]string{}, DefaultTrustedARCSealers...)
+	applySendLimitDefaults(&s)
+	applyNotificationDefaults(&s)
 	return s
 }
 
@@ -337,6 +343,12 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	}
 	if cur.MailAuth.TrustedARCSealers == nil {
 		cur.MailAuth.TrustedARCSealers = []string{}
+	}
+	if cur.Notifications.Recipients == nil {
+		cur.Notifications.Recipients = []string{}
+	}
+	if cur.Notifications.Categories == nil {
+		cur.Notifications.Categories = []string{}
 	}
 	c := &SettingsCache{cur: cur, st: s}
 	s.settings = c

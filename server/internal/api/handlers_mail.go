@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"postwerk/internal/delivery"
 	"postwerk/internal/message"
 	"postwerk/internal/smtp"
 	"postwerk/internal/spam"
@@ -26,9 +27,12 @@ func virusBlocked(m *store.Message, u *store.Account) bool {
 // mailErr turns delivery errors into API errors with a German message.
 func mailErr(err error) error {
 	var r *smtp.Reply
+	var limit *delivery.SendLimitError
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &limit):
+		return errf(429, "send_limit", limit.Message())
 	case errors.Is(err, store.ErrQuota):
 		return errf(507, "quota", "Speicherplatz voll: Das Postfach hat sein Speicherlimit erreicht")
 	case errors.As(err, &r):

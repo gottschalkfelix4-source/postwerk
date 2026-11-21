@@ -6,6 +6,8 @@ import { accountApi } from "@/api/endpoints";
 import type { CreatedAppPassword, TotpSetup, Vacation } from "@/api/types";
 import { useMe } from "@/lib/auth";
 import { ImportCard } from "./ImportCard";
+import { AtRestCard } from "./AtRestCard";
+import { DataExportCard } from "./DataExportCard";
 import { qk } from "@/lib/queries";
 import { formatBytes, formatDate, formatRelative, fromDateTimeInput, toDateInput } from "@/lib/format";
 import { useDraft } from "@/lib/hooks";
@@ -67,6 +69,8 @@ export default function MailSettingsPage() {
         <SessionsCard />
         <VacationCard />
         <ImportCard />
+        <AtRestCard />
+        <DataExportCard />
       </div>
     </div>
   );

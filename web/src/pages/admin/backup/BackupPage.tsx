@@ -45,6 +45,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { BackupSettingsForm } from "./BackupSettingsForm";
+import { MasterKeyNotice } from "@/pages/admin/EncryptionParts";
 
 type Tab = "archives" | "settings";
 
@@ -324,6 +325,7 @@ function ArchivesTab({ onOpenSettings }: { onOpenSettings: () => void }) {
         />
       </div>
 
+      <MasterKeyNotice />
       {job && <JobPanel job={job} />}
       {!job && last && !last.ok && (
         <Notice tone="error" title={last.kind === "restore" ? "Wiederherstellung fehlgeschlagen" : "Letzte Sicherung fehlgeschlagen"}>

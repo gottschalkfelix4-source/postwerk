@@ -641,3 +641,115 @@ interface AutoFile {
 
 Verschoben werden nur Nachrichten, die nach der Analyse noch im Posteingang liegen. Im Modus
 `categories` werden fehlende Ordner pro Konto angelegt, im Modus `folders` nie.
+
+## Verschlüsselung im Ruhezustand
+
+### Master-Schlüssel (Geheimnisse in der Datenbank)
+
+Geheimnisse werden in SQLite mit AES-256-GCM verschlüsselt gespeichert (`enc:v1:<base64(nonce|ciphertext)>`):
+alle Einstellungsfelder mit dem Struct-Tag `secret:"true"` (KI-/Embedding-Schlüssel, Paperless-Token,
+DynDNS-, Relay-, Backup-, WebDAV- und SMB-Passwort; neue Felder wie LDAP/OIDC-Secrets brauchen nur den
+Tag), TOTP-Geheimnisse, DKIM-Schlüssel und das SRS-Geheimnis. Klartext aus älteren Versionen wird beim
+Start automatisch verschlüsselt. Die API liefert Geheimnisse weiterhin maskiert (`••••`).
+
+Schlüsselquelle in dieser Reihenfolge:
+
+1. `POSTWERK_MASTER_KEY` – 32 Byte, base64 (`openssl rand -base64 32`)
+2. `POSTWERK_MASTER_KEY_FILE` – Pfad zu einer Datei mit dem base64-Schlüssel
+3. `/data/master.key` – wird beim ersten Start erzeugt (Modus 0600)
+
+Ein verschlüsselter Prüfwert in der Datenbank erkennt einen falschen Schlüssel: Postwerk startet dann
+nicht, statt Geheimnisse zu verlieren.
+
+**Backups:** Liegt der Schlüssel als `master.key` im Datenverzeichnis, ist er **immer** im Archiv
+enthalten – ohne ihn wären nach einer Wiederherstellung alle Geheimnisse verloren. Unverschlüsselte
+Archive schützen die Geheimnisse deshalb nicht; die Backup-Seite weist darauf hin. Kommt der Schlüssel
+aus `POSTWERK_MASTER_KEY` oder einer Datei außerhalb des Datenverzeichnisses, ist er in keinem Archiv
+(auch eine liegengebliebene `master.key` wird dann ausgelassen) – für jede Wiederherstellung muss
+derselbe Schlüssel gesetzt sein. `GET /api/admin/backups/status` enthält dazu
+`status.masterKey: { source: "env" | "env-file" | "data-file"; inArchive: boolean; fingerprint: string }`.
+
+### Speicherverschlüsselung der Nachrichten (Admin, optional)
+
+Mit eingeschalteter Option werden neue Blobs mit einem aus dem Master-Schlüssel abgeleiteten Schlüssel
+verschlüsselt (Datei beginnt mit `\0PWBLOB1`, 16-Byte-Salt, AES-256-GCM-Blöcke à 64 KiB, Blockzähler und
+Ende-Markierung im Nonce). Der Dateiname bleibt der SHA-256 des Klartexts, das Lesen ist transparent.
+Schützt vor Festplatten-/Backup-Diebstahl nur, wenn der Master-Schlüssel außerhalb des Datenverzeichnisses
+liegt. Standard: aus.
+
+```ts
+interface EncryptionStatus {
+  masterKey: { source: "env" | "env-file" | "data-file"; file?: string; inDataDir: boolean; fingerprint: string };
+  blobs: { enabled: boolean; stats?: { total: number; encrypted: number; bytes: number }; job: ConversionJob | null };
+  mailEncryptionAccounts: number;
+  protectedSecrets: string[];
+}
+interface ConversionJob {
+  running: boolean; encrypt: boolean; done: number; total: number;
+  converted: number; skipped: number; failed: number; error?: string;
+  startedAt: string; finishedAt: string | null;
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/admin/security/encryption` | `?stats=1` zählt die Blob-Dateien | `EncryptionStatus` |
+| PUT | `/api/admin/security/encryption/blobs` | `{ enabled, migrate }` | `EncryptionStatus` (`migrate`: vorhandene Blobs sofort umwandeln) |
+| POST | `/api/admin/security/encryption/blobs/migrate` | `{ encrypt }` | `EncryptionStatus` (409, wenn schon eine Umwandlung läuft) |
+
+### Mails mit dem eigenen Schlüssel verschlüsseln (pro Konto)
+
+Benutzer hinterlegen einen öffentlichen OpenPGP-Schlüssel oder ein S/MIME-Zertifikat (RSA). Jede danach
+gespeicherte Nachricht (Zustellung, Sieve, Import, IMAP-APPEND, Gesendet-Kopie; nicht: Entwürfe) wird als
+letzter Schritt vor dem Speichern verschlüsselt – PGP/MIME (RFC 3156, `multipart/encrypted`) bzw. S/MIME
+(`application/pkcs7-mime; smime-type=enveloped-data`, AES-256-CBC). Der verschlüsselte Teil ist die
+komplette Originalnachricht; außen bleiben nur `From`, `To`, `Subject` (optional als `...`), `Date` und
+`Message-ID`. Bereits verschlüsselte Nachrichten werden nicht doppelt verschlüsselt. KI-Analyse,
+Paperless, Vorschau und Volltextsuche entfallen für verschlüsselte Nachrichten. Schlägt die
+Verschlüsselung fehl, wird nicht im Klartext gespeichert (die Zustellung wird temporär abgelehnt).
+Abgelaufene OpenPGP-Schlüssel werden weiter verwendet, widerrufene nicht.
+`GET /api/mail/messages/{id}` enthält `encrypted: boolean`.
+
+```ts
+interface MailEncryptionConfig {
+  kind: "pgp" | "smime"; publicKey: string; fingerprint: string; description: string;
+  algorithm: string; expires: string | null; hideSubject: boolean; createdAt: string; updatedAt: string;
+}
+interface KeyInfo { kind: "pgp" | "smime"; fingerprint: string; description: string; emails: string[]; algorithm: string; expires: string | null }
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/account/encryption` | – | `{ config: MailEncryptionConfig \| null; job: ConversionJob \| null; messages: number }` |
+| POST | `/api/account/encryption/inspect` | `{ kind, publicKey }` | `{ key: KeyInfo; matchesAccount: boolean }` (400 bei ungültigem oder privatem Schlüssel) |
+| PUT | `/api/account/encryption` | `{ kind, publicKey, hideSubject }` (ohne `publicKey`: nur Optionen ändern) | wie GET |
+| DELETE | `/api/account/encryption` | – | wie GET (neue Mails wieder im Klartext, verschlüsselte bleiben verschlüsselt) |
+| POST | `/api/account/encryption/encrypt-existing` | – | wie GET; verschlüsselt vorhandene Nachrichten im Hintergrund (neue UID, Vorschau/KI-Daten werden entfernt) |
+
+## Datenexport (DSGVO)
+
+ZIP mit `konto.json` (Kontodaten, Abwesenheitsnotiz, Verschlüsselungs-Einstellung – ohne Geheimnisse),
+`app-passwoerter.json` (nur Namen/Nutzung), `sitzungen.json`, `mail/<Ordner>.mbox` (mboxrd, eine Datei pro
+Ordner), `mail/ordner.json`, `kalender.ics` (VEVENT/VTODO) und `LIESMICH.txt`. Weitere Bereiche (z. B.
+Kontakte) hängen sich über `export.RegisterSection` ein. Verschlüsselte Nachrichten werden so exportiert,
+wie sie gespeichert sind. Erstellt wird im Hintergrund nach `data/exports/` (nicht im Backup); der
+Download ist 24 Stunden gültig, danach löscht der Aufräumjob die Datei. Selbst angeforderte Exporte sind
+auf einen pro Stunde begrenzt (429 `rate_limited`), Admin-Exporte nicht.
+
+```ts
+interface DataExport {
+  id: number; accountId: number; requestedBy: number;
+  status: "pending" | "running" | "done" | "failed" | "expired";
+  phase: string; done: number; total: number; size: number; error?: string;
+  createdAt: string; finishedAt: string | null; expiresAt: string | null;
+}
+```
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/account/exports` | – | `DataExport[]` (eigene, neueste zuerst) |
+| POST | `/api/account/exports` | – | `DataExport` (429 bei mehr als einem Export pro Stunde, 409 während ein Export läuft) |
+| GET | `/api/account/exports/{id}/download` | – | ZIP |
+| GET | `/api/admin/accounts/{id}/exports` | – | `DataExport[]` des Kontos |
+| POST | `/api/admin/accounts/{id}/exports` | – | `DataExport` |
+| GET | `/api/admin/exports/{id}/download` | – | ZIP (wird protokolliert) |

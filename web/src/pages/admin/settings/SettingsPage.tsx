@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Card, ErrorState, PageHeader, Skeleton, useToast } from "@/components/ui";
 import { settingsSections, type SettingsSectionId } from "../crumbs";
 import { dynIpKeys } from "@/pages/admin/dynip/DynIpParts";
+import { EncryptionCard } from "@/pages/admin/EncryptionParts";
 import {
   AiSection,
   AntivirusSection,
@@ -126,7 +127,10 @@ export default function SettingsPage() {
           ) : id === "dms" ? (
             <DmsSection key={id} {...props} />
           ) : (
-            <SecuritySection key={id} {...props} />
+            <>
+              <SecuritySection key={id} {...props} />
+              <EncryptionCard />
+            </>
           )}
         </div>
       </div>

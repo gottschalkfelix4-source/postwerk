@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	blitiri.com.ar/go/spf v1.6.0
+	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/emersion/go-imap v1.2.1
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
@@ -11,6 +12,7 @@ require (
 	github.com/hirochachacha/go-smb2 v1.1.0
 	github.com/miekg/dns v1.1.73
 	github.com/prometheus/client_golang v1.25.0
+	github.com/smallstep/pkcs7 v0.2.3
 	golang.org/x/crypto v0.59.0
 	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
@@ -20,6 +22,7 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect

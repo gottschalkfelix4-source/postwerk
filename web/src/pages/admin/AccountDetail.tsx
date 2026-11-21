@@ -28,6 +28,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { generatePassword, QuotaInput } from "./shared";
+import { AccountExportCard } from "./AccountExportCard";
 
 interface FormState {
   name: string;
@@ -287,6 +288,8 @@ export default function AccountDetailPage() {
               </div>
             </CardBody>
           </Card>
+
+          <AccountExportCard accountId={a.id} />
 
           <Card className="border-red-200 dark:border-red-500/30">
             <CardHeader title="Gefahrenzone" />

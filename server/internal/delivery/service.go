@@ -593,6 +593,10 @@ func (s *Service) deliverLocal(ctx context.Context, email string, raw []byte, pa
 // StoreMessage writes the blob and metadata into a mailbox. It fails with
 // store.ErrQuota when the account quota would be exceeded.
 func (s *Service) StoreMessage(ctx context.Context, accountID, mailboxID int64, raw []byte, parsed *message.Parsed, meta *deliveryMeta) (*store.Message, error) {
+	raw, parsed, sealed, err := s.sealForStorage(ctx, accountID, mailboxID, raw, parsed)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.Store.CheckQuota(ctx, accountID, int64(len(raw))); err != nil {
 		return nil, err
 	}
@@ -627,6 +631,9 @@ func (s *Service) StoreMessage(ctx context.Context, accountID, mailboxID int64, 
 		ReceivedAt: received, Size: int64(len(raw)), HasAttachments: len(parsed.Attachments) > 0,
 		SpamScore: score, Auth: auth, Virus: virus, BlobHash: hash,
 		SearchText: parsed.Subject + " " + parsed.From.Name + " " + parsed.From.Email + " " + addrText(parsed.To) + " " + message.Preview(parsed.Text, 20000),
+	}
+	if sealed {
+		sealedMeta(m)
 	}
 	if err := s.Store.InsertMessage(ctx, m); err != nil {
 		return nil, err
@@ -928,15 +935,21 @@ type ImportOptions struct {
 // ImportMessage stores a message from a migration or file import without
 // running spam filtering. It respects the account quota.
 func (s *Service) ImportMessage(ctx context.Context, acct *store.Account, mailboxID int64, raw []byte, opt ImportOptions) (*store.Message, error) {
+	raw, sealedParse, sealed, err := s.sealForStorage(ctx, acct.ID, mailboxID, raw, nil)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.Store.CheckQuota(ctx, acct.ID, int64(len(raw))); err != nil {
 		if errors.Is(err, store.ErrQuota) {
 			return nil, fmt.Errorf("Quota von %s überschritten: %w", acct.Email, err)
 		}
 		return nil, err
 	}
-	parsed, err := message.Parse(raw, false)
-	if err != nil {
-		parsed = &message.Parsed{}
+	parsed := sealedParse
+	if parsed == nil {
+		if parsed, err = message.Parse(raw, false); err != nil {
+			parsed = &message.Parsed{}
+		}
 	}
 	hash, err := s.Store.Blobs.Put(raw)
 	if err != nil {
@@ -959,6 +972,9 @@ func (s *Service) ImportMessage(ctx context.Context, acct *store.Account, mailbo
 		Auth:       store.AuthResults{SPF: "none", DKIM: "none", DMARC: "none"},
 		BlobHash:   hash,
 		SearchText: parsed.Subject + " " + parsed.From.Name + " " + parsed.From.Email + " " + addrText(parsed.To) + " " + message.Preview(parsed.Text, 20000),
+	}
+	if sealed {
+		sealedMeta(m)
 	}
 	if err := s.Store.InsertMessage(ctx, m); err != nil {
 		return nil, err

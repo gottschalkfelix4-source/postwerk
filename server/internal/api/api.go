@@ -22,11 +22,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"postwerk/internal/ai"
+	"postwerk/internal/atrest"
 	"postwerk/internal/auth"
 	"postwerk/internal/backup"
 	"postwerk/internal/config"
 	"postwerk/internal/delivery"
 	"postwerk/internal/dyndns"
+	"postwerk/internal/export"
 	"postwerk/internal/httpport"
 	"postwerk/internal/logx"
 	"postwerk/internal/metrics"
@@ -68,6 +70,8 @@ type Server struct {
 	DynDNS     *dyndns.Updater
 	HTTPPort   *httpport.Controller
 	Backups    *backup.Manager
+	AtRest     *atrest.Manager
+	Exports    *export.Manager
 
 	setupMu sync.Mutex
 }
@@ -571,6 +575,9 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("PATCH /api/tasks/{id}", s.user(s.patchTask))
 	m.HandleFunc("DELETE /api/tasks/{id}", s.user(s.deleteTask))
 	m.HandleFunc("POST /api/dms/forward", s.user(s.dmsForward))
+
+	// encryption at rest & data export
+	s.routesAtRest(m)
 }
 
 // background returns a context detached from the request for slow work.

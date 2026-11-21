@@ -63,7 +63,10 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 - ⏳ LDAP-Verzeichnis als Kontenquelle
 - ⏳ OIDC-SSO (z. B. Authentik, Keycloak) für die Weboberfläche, OAUTHBEARER für Clients
-- ⏳ Verschlüsselung im Ruhezustand: eingehende Mails mit dem S/MIME- oder OpenPGP-Schlüssel des Kontos verschlüsseln
+- ✅ Verschlüsselung im Ruhezustand: eingehende Mails mit dem S/MIME- oder OpenPGP-Schlüssel des Kontos verschlüsseln (PGP/MIME bzw. S/MIME, optional mit verborgenem Betreff, bestehende Nachrichten per Hintergrundauftrag)
+- ✅ Geheimnisse in der Datenbank (API-Schlüssel, Passwörter, TOTP, DKIM, SRS) mit Master-Schlüssel verschlüsselt (AES-256-GCM, Schlüssel aus Umgebungsvariable, Datei oder `master.key`)
+- ✅ Optionale Speicherverschlüsselung aller Nachrichten-Dateien mit dem Master-Schlüssel inkl. Umwandlung vorhandener Dateien
+- ✅ DSGVO-Export: alle Daten eines Kontos als ZIP (mbox je Ordner, iCalendar, Kontodaten, Sitzungen), für Benutzer selbst und für Admins
 - ⏳ Backups: S3-Ziel, Wiederherstellen einzelner Postfächer aus einem Archiv
 - ⏳ Postgres als alternativer Metadatenspeicher, S3 für Blobs
 

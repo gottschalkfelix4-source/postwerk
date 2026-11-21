@@ -292,14 +292,21 @@ function StatusCard({ data }: { data: DashboardData }) {
             </div>
             <div className="mt-0.5 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{formatDuration(data.uptimeSeconds)}</div>
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="text-xs text-zinc-500 dark:text-zinc-400">Version</div>
-            <div className="mt-0.5 font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">{data.version}</div>
+            <div className="mt-0.5 truncate font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100" title={data.version}>
+              {shortVersion(data.version)}
+            </div>
           </div>
         </div>
       </CardBody>
     </Card>
   );
+}
+
+// Builds from a commit carry the full 40-digit hash; show the usual short form.
+function shortVersion(v: string) {
+  return v.replace(/\b([0-9a-f]{7})[0-9a-f]{33}\b/, "$1");
 }
 
 function CategoriesCard({ categories }: { categories: DashboardData["categories"] }) {

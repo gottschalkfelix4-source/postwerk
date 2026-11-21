@@ -61,8 +61,9 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 
 ## Meilenstein 4 – Identität und Datenschutz
 
-- ⏳ LDAP-Verzeichnis als Kontenquelle
-- ⏳ OIDC-SSO (z. B. Authentik, Keycloak) für die Weboberfläche, OAUTHBEARER für Clients
+- ✅ LDAP-Verzeichnis als Kontenquelle (Bind-Prüfung für Web, IMAP, SMTP und POP3, automatische Kontoanlage, Admin-Gruppe, Abgleich)
+- ✅ OIDC-SSO (z. B. Authentik, Keycloak) für die Weboberfläche: Authorization Code mit PKCE, automatische Kontoanlage, Admin-Claim, „nur SSO“ mit lokalem Notzugang ([Anleitung](SSO.md))
+- ⏳ OAUTHBEARER/XOAUTH2 für Mail-Programme (bis dahin App-Passwörter)
 - ⏳ Verschlüsselung im Ruhezustand: eingehende Mails mit dem S/MIME- oder OpenPGP-Schlüssel des Kontos verschlüsseln
 - ⏳ Backups: S3-Ziel, Wiederherstellen einzelner Postfächer aus einem Archiv
 - ⏳ Postgres als alternativer Metadatenspeicher, S3 für Blobs

@@ -1,6 +1,7 @@
 import { NavLink, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, FileStack, Lock, RefreshCw, Send, ServerCog, ShieldAlert, ShieldCheck, Bug, Waypoints, type LucideIcon } from "lucide-react";
+import { Bot, Building2, FileStack, KeyRound, Lock, RefreshCw, Send, ServerCog, ShieldAlert, ShieldCheck, Bug, Waypoints, type LucideIcon } from "lucide-react";
+import { LdapSection, OidcSection } from "./directory";
 import { adminApi } from "@/api/endpoints";
 import type { Settings, SettingsUpdate } from "@/api/types";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,8 @@ const icons: Record<SettingsSectionId, LucideIcon> = {
   ai: Bot,
   dms: FileStack,
   security: ShieldCheck,
+  ldap: Building2,
+  oidc: KeyRound,
 };
 
 export interface SectionProps {
@@ -125,6 +128,10 @@ export default function SettingsPage() {
             <AiSection key={id} {...props} />
           ) : id === "dms" ? (
             <DmsSection key={id} {...props} />
+          ) : id === "ldap" ? (
+            <LdapSection key={id} {...props} />
+          ) : id === "oidc" ? (
+            <OidcSection key={id} {...props} />
           ) : (
             <SecuritySection key={id} {...props} />
           )}

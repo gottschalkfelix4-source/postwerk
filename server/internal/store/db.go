@@ -285,6 +285,8 @@ var migrations = []string{
 		until INTEGER NOT NULL,
 		failures INTEGER NOT NULL
 	);`,
+	`ALTER TABLE accounts ADD COLUMN source TEXT NOT NULL DEFAULT 'local';
+	ALTER TABLE sessions ADD COLUMN method TEXT NOT NULL DEFAULT 'password';`,
 }
 
 func migrate(db *sql.DB) error {

@@ -14,12 +14,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"postwerk/internal/ldapdir"
 	"postwerk/internal/store"
 )
 
@@ -189,6 +191,11 @@ func isTOTPCode(code string) bool {
 type Authenticator struct {
 	Store *store.Store
 	Guard *Guard
+	// Settings (optional) enable LDAP accounts and the "only SSO" rule.
+	Settings *store.SettingsCache
+	// LDAP replaces the directory client (tests); nil uses ldapdir.New().
+	LDAP ldapdir.Directory
+	Log  *slog.Logger
 }
 
 // VerifyTOTP checks a TOTP code for acct and marks its time step as used, so
@@ -232,16 +239,21 @@ func (a *Authenticator) Interactive(ctx context.Context, ip, email, password, to
 		return nil, err
 	}
 	if err != nil {
-		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-		a.Guard.FailAccount(ip, email, "web login")
-		return nil, ErrInvalid
+		acct = nil
 	}
-	if !CheckPassword(acct.PasswordHash, password) {
+	acct, ok, err := a.primary(ctx, email, password, acct)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		a.Guard.FailAccount(ip, email, "web login")
 		return nil, ErrInvalid
 	}
 	if acct.Disabled {
 		return nil, ErrAccountLocked
+	}
+	if !a.PasswordLoginAllowed(acct) {
+		return nil, ErrPasswordLoginDisabled
 	}
 	if acct.TOTPEnabled {
 		if strings.TrimSpace(totp) == "" {
@@ -267,7 +279,11 @@ func (a *Authenticator) Reauth(ctx context.Context, ip string, acct *store.Accou
 	if a.Guard.Banned(ip) {
 		return ErrBanned
 	}
-	if !CheckPassword(acct.PasswordHash, password) {
+	_, ok, err := a.primary(ctx, acct.Email, password, acct)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		a.Guard.FailAccount(ip, acct.Email, "password confirmation")
 		return ErrInvalid
 	}
@@ -302,30 +318,48 @@ func (a *Authenticator) Protocol(ctx context.Context, ip, email, password, proto
 		return nil, err
 	}
 	if err != nil {
-		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-		a.Guard.FailAccount(ip, email, proto+" auth")
-		return nil, ErrInvalid
-	}
-	ok := false
-	if acct.TOTPEnabled {
-		// The main password is not accepted, but costs the same time.
-		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-	} else {
-		ok = CheckPassword(acct.PasswordHash, password)
-	}
-	if !ok {
-		apps, err := a.Store.ListAppPasswords(ctx, acct.ID)
+		// Unknown address: only a directory user can be provisioned here.
+		acct, ok, err := a.primary(ctx, email, password, nil)
 		if err != nil {
 			return nil, err
 		}
-		normalized := NormalizeAppPassword(password)
-		for _, p := range apps {
-			if CheckPassword(p.Hash, normalized) {
-				a.Store.TouchAppPassword(ctx, p.ID)
-				ok = true
-				break
+		if !ok {
+			a.Guard.FailAccount(ip, email, proto+" auth")
+			return nil, ErrInvalid
+		}
+		if acct.Disabled {
+			return nil, ErrAccountLocked
+		}
+		a.Guard.Success(ip, acct.Email)
+		return acct, nil
+	}
+	ok := false
+	// For LDAP accounts, app passwords are tried before the directory bind.
+	appFirst := acct.Source == store.SourceLDAP && looksLikeAppPassword(password)
+	if appFirst {
+		if ok, err = a.appPassword(ctx, acct, password); err != nil {
+			return nil, err
+		}
+	}
+	var dirErr error
+	if !ok {
+		if acct.TOTPEnabled {
+			// The main password is not accepted, but costs the same time.
+			_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		} else {
+			_, ok, dirErr = a.primary(ctx, email, password, acct)
+			if dirErr != nil && !errors.Is(dirErr, ErrDirectoryUnavailable) {
+				return nil, dirErr
 			}
 		}
+	}
+	if !ok && !appFirst {
+		if ok, err = a.appPassword(ctx, acct, password); err != nil {
+			return nil, err
+		}
+	}
+	if !ok && dirErr != nil {
+		return nil, dirErr
 	}
 	if !ok {
 		a.Guard.FailAccount(ip, email, proto+" auth")

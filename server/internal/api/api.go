@@ -32,6 +32,7 @@ import (
 	"postwerk/internal/metrics"
 	"postwerk/internal/migrate"
 	"postwerk/internal/spam"
+	"postwerk/internal/sso"
 	"postwerk/internal/store"
 	"postwerk/internal/tlsutil"
 )
@@ -68,8 +69,11 @@ type Server struct {
 	DynDNS     *dyndns.Updater
 	HTTPPort   *httpport.Controller
 	Backups    *backup.Manager
+	// SSO handles OpenID Connect logins (created on first use if nil).
+	SSO *sso.Manager
 
 	setupMu sync.Mutex
+	ssoOnce sync.Once
 }
 
 type apiError struct {
@@ -448,6 +452,13 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/auth/login", s.wrap(s.login))
 	m.HandleFunc("POST /api/auth/logout", s.wrap(s.logout))
 	m.HandleFunc("GET /api/auth/me", s.user(s.me))
+	m.HandleFunc("GET /api/auth/sso", s.wrap(s.ssoStatus))
+	m.HandleFunc("GET /api/auth/oidc/start", s.oidcStart)
+	m.HandleFunc("GET "+oidcCallbackPath, s.oidcCallback)
+	m.HandleFunc("GET /api/admin/sso/info", s.admin(s.ssoInfo))
+	m.HandleFunc("POST /api/admin/oidc/test", s.admin(s.oidcTest))
+	m.HandleFunc("POST /api/admin/ldap/test", s.admin(s.ldapTest))
+	m.HandleFunc("POST /api/admin/ldap/sync", s.admin(s.ldapSync))
 
 	// setup
 	m.HandleFunc("GET /api/setup/status", s.wrap(s.setupStatus))

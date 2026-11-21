@@ -259,9 +259,16 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request, u *store.
 		Password   string `json:"password"`
 		Role       string `json:"role"`
 		QuotaBytes int64  `json:"quotaBytes"`
+		Source     string `json:"source"`
 	}
 	if err := decode(r, &req); err != nil {
 		return nil, err
+	}
+	if req.Source == "" {
+		req.Source = store.SourceLocal
+	}
+	if !accountSourceValid(req.Source) {
+		return nil, invalid("Ungültige Anmeldequelle")
 	}
 	email := store.Normalize(req.Email)
 	if !validEmail(email) {
@@ -273,17 +280,21 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request, u *store.
 	if _, err := s.Store.GetAlias(r.Context(), email); err == nil {
 		return nil, errf(409, "conflict", "Es gibt bereits einen Alias mit dieser Adresse")
 	}
-	if err := validPassword(req.Password); err != nil {
-		return nil, err
-	}
 	if req.Role != "admin" {
 		req.Role = "user"
 	}
-	h, err := auth.HashPassword(req.Password)
-	if err != nil {
-		return nil, err
+	// LDAP and SSO accounts have no local password.
+	h := noPasswordHash
+	if req.Source == store.SourceLocal {
+		if err := validPassword(req.Password); err != nil {
+			return nil, err
+		}
+		var err error
+		if h, err = auth.HashPassword(req.Password); err != nil {
+			return nil, err
+		}
 	}
-	a := &store.Account{Email: email, Name: strings.TrimSpace(req.Name), PasswordHash: h, Role: req.Role, QuotaBytes: req.QuotaBytes}
+	a := &store.Account{Email: email, Name: strings.TrimSpace(req.Name), PasswordHash: h, Role: req.Role, QuotaBytes: req.QuotaBytes, Source: req.Source}
 	if err := s.Store.CreateAccount(r.Context(), a); err != nil {
 		return nil, err
 	}
@@ -311,11 +322,40 @@ func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request, u *store.A
 		QuotaBytes *int64  `json:"quotaBytes"`
 		Disabled   *bool   `json:"disabled"`
 		ResetTOTP  bool    `json:"resetTotp"`
+		Source     *string `json:"source"`
 	}
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
+	target, err := s.Store.GetAccount(r.Context(), id)
+	if err != nil {
+		return nil, err
+	}
+	source := target.Source
+	if req.Source != nil && *req.Source != target.Source {
+		if !accountSourceValid(*req.Source) {
+			return nil, invalid("Ungültige Anmeldequelle")
+		}
+		if id == u.ID {
+			return nil, invalid("Du kannst die Anmeldequelle deines eigenen Kontos nicht ändern")
+		}
+		if *req.Source == store.SourceLocal && (req.Password == nil || *req.Password == "") {
+			return nil, invalid("Für ein lokales Konto bitte ein Passwort festlegen")
+		}
+		source = *req.Source
+	}
+	if req.Password != nil && *req.Password != "" && source != store.SourceLocal {
+		return nil, invalid("Das Passwort dieses Kontos wird extern verwaltet (LDAP oder Single Sign-on)")
+	}
 	p := store.AccountPatch{Name: req.Name, QuotaBytes: req.QuotaBytes, Disabled: req.Disabled}
+	if source != target.Source {
+		p.Source = &source
+		if source != store.SourceLocal && target.Source == store.SourceLocal {
+			// The local password no longer applies.
+			h, f := noPasswordHash, false
+			p.PasswordHash, p.MustChangePassword = &h, &f
+		}
+	}
 	if req.Role != nil {
 		if *req.Role != "admin" && *req.Role != "user" {
 			return nil, invalid("Ungültige Rolle")
@@ -553,7 +593,8 @@ func (s *Server) maskedSettings() store.Settings {
 	if cur.Relay.Password != "" {
 		cur.Relay.Password = mask
 	}
-	for _, p := range []*string{&cur.Backup.Password, &cur.Backup.Target.WebDAV.Password, &cur.Backup.Target.SMB.Password} {
+	for _, p := range []*string{&cur.Backup.Password, &cur.Backup.Target.WebDAV.Password, &cur.Backup.Target.SMB.Password,
+		&cur.LDAP.BindPassword, &cur.OIDC.ClientSecret} {
 		if *p != "" {
 			*p = mask
 		}
@@ -583,7 +624,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	sections := map[string]any{
 		"server": &cur.Server, "web": &cur.Web, "tls": &cur.TLS, "spam": &cur.Spam, "antivirus": &cur.Antivirus,
 		"ai": &cur.AI, "dms": &cur.DMS, "security": &cur.Security, "dyndns": &cur.DynDNS, "relay": &cur.Relay,
-		"backup": &cur.Backup,
+		"backup": &cur.Backup, "ldap": &cur.LDAP, "oidc": &cur.OIDC,
 	}
 	for k, raw := range patch {
 		target, known := sections[k]
@@ -605,6 +646,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 		{&cur.Backup.Password, oldBackup.Password, "", "", ""},
 		{&cur.Backup.Target.WebDAV.Password, oldBackup.Target.WebDAV.Password, cur.Backup.Target.WebDAV.URL, oldBackup.Target.WebDAV.URL, webdavSecretMsg},
 		{&cur.Backup.Target.SMB.Password, oldBackup.Target.SMB.Password, cur.Backup.Target.SMB.Host, oldBackup.Target.SMB.Host, smbSecretMsg},
+		{&cur.LDAP.BindPassword, old.LDAP.BindPassword, cur.LDAP.URL, old.LDAP.URL, ldapSecretMsg},
+		{&cur.OIDC.ClientSecret, old.OIDC.ClientSecret, cur.OIDC.IssuerURL, old.OIDC.IssuerURL, oidcSecretMsg},
 	} {
 		if err := sc.restore(); err != nil {
 			return nil, err
@@ -612,6 +655,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u *store.Ac
 	}
 	cur.TLS.Status = ""
 	if err := validateSettings(&cur, &old); err != nil {
+		return nil, err
+	}
+	if err := s.validateDirectorySettings(r.Context(), &cur); err != nil {
 		return nil, err
 	}
 	if err := s.Settings.Save(r.Context(), cur); err != nil {

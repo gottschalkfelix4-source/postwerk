@@ -140,7 +140,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	} else if n := len(guard.List()); n > 0 {
 		log.Info("persisted bans restored", "component", "security", "count", n)
 	}
-	authn := &auth.Authenticator{Store: st, Guard: guard}
+	authn := &auth.Authenticator{Store: st, Guard: guard, Settings: settings, Log: log}
 
 	aiClient := ai.NewClient(settings)
 	aiWorker := ai.NewWorker(aiClient, st, log)

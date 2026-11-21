@@ -61,8 +61,8 @@ export default function MailSettingsPage() {
             </div>
           </div>
         </Card>
-        <PasswordCard />
-        <TotpCard />
+        {me.source === "ldap" || me.source === "oidc" ? <ExternalPasswordCard source={me.source} /> : <PasswordCard />}
+        {me.source !== "oidc" && <TotpCard />}
         <AppPasswordsCard />
         <SessionsCard />
         <VacationCard />
@@ -77,6 +77,23 @@ const MAX_APP_PASSWORDS = 20;
 /** Byte length as the server counts it (bcrypt only uses 72 bytes). */
 function byteLength(s: string): number {
   return new TextEncoder().encode(s).length;
+}
+
+/** Shown instead of the password form when the password is not managed by Postwerk. */
+function ExternalPasswordCard({ source }: { source: "ldap" | "oidc" }) {
+  return (
+    <Card>
+      <CardHeader
+        title="Passwort"
+        description={
+          source === "ldap"
+            ? "Dein Passwort wird im Verzeichnis (LDAP) deiner Organisation verwaltet und dort geändert. Es gilt auch für Mail-Programme – App-Passwörter sind trotzdem empfohlen."
+            : "Du meldest dich per Single Sign-on an und hast kein Postwerk-Passwort. Für Mail-Programme (IMAP, SMTP, CalDAV) legst du unten App-Passwörter an. Die Zwei-Faktor-Anmeldung übernimmt dein Identitätsanbieter."
+        }
+        icon={<Lock className="h-4 w-4 text-zinc-400" />}
+      />
+    </Card>
+  );
 }
 
 function PasswordCard() {
@@ -467,7 +484,9 @@ function AppPasswordsCard() {
     onError: (err) => toast.error(err, "Widerrufen fehlgeschlagen"),
   });
 
-  const createReady = name.trim().length > 0 && password.length > 0 && (!me.totpEnabled || code.trim().length > 0);
+  // SSO accounts have no password; a fresh SSO login confirms instead.
+  const sso = me.source === "oidc";
+  const createReady = name.trim().length > 0 && (sso || password.length > 0) && (sso || !me.totpEnabled || code.trim().length > 0);
 
   return (
     <Card>
@@ -532,7 +551,11 @@ function AppPasswordsCard() {
         onClose={closeCreate}
         size="sm"
         title="Neues App-Passwort"
-        description="Zur Sicherheit bitte mit deinem Passwort bestätigen."
+        description={
+          sso
+            ? "Zur Sicherheit ist das nur bis 15 Minuten nach einer Single-Sign-on-Anmeldung möglich – sonst bitte ab- und wieder anmelden."
+            : "Zur Sicherheit bitte mit deinem Passwort bestätigen."
+        }
         footer={
           <>
             <Button onClick={closeCreate}>Abbrechen</Button>
@@ -552,10 +575,12 @@ function AppPasswordsCard() {
           <Field label="Bezeichnung" help="Damit du später erkennst, wofür das Passwort gedacht ist.">
             {(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} placeholder="z. B. Thunderbird Laptop" maxLength={100} />}
           </Field>
-          <Field label="Dein Passwort">
-            {(id) => <PasswordInput id={id} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />}
-          </Field>
-          {me.totpEnabled && (
+          {!sso && (
+            <Field label="Dein Passwort">
+              {(id) => <PasswordInput id={id} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />}
+            </Field>
+          )}
+          {me.totpEnabled && !sso && (
             <Field label="Code" help="6-stelliger Code aus der Authenticator-App oder ein Wiederherstellungscode.">
               {(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" placeholder="123456" />}
             </Field>

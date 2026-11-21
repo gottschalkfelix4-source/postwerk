@@ -1,20 +1,38 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, KeyRound, Lock, Mail, ShieldCheck } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, KeyRound, Lock, LogIn, Mail, ShieldCheck } from "lucide-react";
 import { accountApi, authApi } from "@/api/endpoints";
 import { errorMessage, isApiError } from "@/api/client";
+import { ssoApi, ssoStartUrl } from "@/api/sso";
 import type { Me } from "@/api/types";
 import { homeFor } from "@/lib/auth";
 import { qk } from "@/lib/queries";
 import { Button, CodeInput, Field, Input, PasswordInput } from "@/components/ui";
 import { Logo } from "@/components/layout/Logo";
 
+/** Messages for /login?sso_error=… (set by the SSO callback). */
+const ssoErrors: Record<string, string> = {
+  state: "Die Anmeldung ist abgelaufen oder wurde in einem anderen Browser begonnen. Bitte erneut versuchen.",
+  denied: "Die Anmeldung wurde beim Identitätsanbieter abgebrochen oder abgelehnt.",
+  email_unverified: "Der Identitätsanbieter hat die E-Mail-Adresse nicht als bestätigt gemeldet.",
+  email_missing: "Der Identitätsanbieter hat keine E-Mail-Adresse übermittelt.",
+  no_account: "Für diese E-Mail-Adresse gibt es kein Postwerk-Konto.",
+  disabled: "Dieses Konto ist deaktiviert.",
+  sso_disabled: "Single Sign-on ist nicht eingerichtet.",
+  unavailable: "Der Identitätsanbieter ist gerade nicht erreichbar.",
+  rate_limited: "Zu viele Fehlversuche. Bitte später erneut versuchen.",
+  failed: "Die Anmeldung per Single Sign-on ist fehlgeschlagen.",
+};
+
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const qc = useQueryClient();
   const from = (location.state as { from?: string } | null)?.from;
+  const ssoError = new URLSearchParams(location.search).get("sso_error");
+  const sso = useQuery({ queryKey: ["auth", "sso"], queryFn: ssoApi.status, staleTime: 60_000, retry: false });
+  const ssoOn = sso.data?.enabled === true;
 
   const [step, setStep] = useState<"credentials" | "totp" | "change">("credentials");
   const [email, setEmail] = useState("");
@@ -25,8 +43,11 @@ export function LoginPage() {
   const [newPassword, setNewPassword] = useState("");
   const [repeatPassword, setRepeatPassword] = useState("");
   const [askCurrent, setAskCurrent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(ssoError ? (ssoErrors[ssoError] ?? ssoErrors.failed) : null);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  // With "only SSO", the password form is a break-glass option for local administrators.
+  const passwordHidden = ssoOn && sso.data?.onlySso === true && !showPassword;
 
   // Skip the form when a valid session already exists.
   useEffect(() => {
@@ -70,6 +91,8 @@ export function LoginPage() {
         } else {
           setStep("totp");
         }
+      } else if (isApiError(err, "sso_only")) {
+        setError("Die Anmeldung mit Passwort ist deaktiviert – bitte Single Sign-on verwenden.");
       } else if (isApiError(err, "unauthorized")) {
         setError(step === "totp" ? "Der Code ist ungültig." : "E-Mail-Adresse oder Passwort ist falsch.");
         if (step === "totp") setCode("");
@@ -127,7 +150,9 @@ export function LoginPage() {
           {step === "credentials" ? (
             <>
               <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Anmelden</h1>
-              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Melde dich mit deinem Postwerk-Konto an.</p>
+              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                {passwordHidden ? "Melde dich über den Identitätsanbieter deiner Organisation an." : "Melde dich mit deinem Postwerk-Konto an."}
+              </p>
             </>
           ) : step === "change" ? (
             <>
@@ -153,6 +178,43 @@ export function LoginPage() {
             </>
           )}
 
+          {step === "credentials" && ssoOn && sso.data && (
+            <div className="mt-6 space-y-4">
+              <Button
+                variant={passwordHidden ? "primary" : "secondary"}
+                size="lg"
+                className="w-full"
+                icon={LogIn}
+                onClick={() => window.location.assign(ssoStartUrl)}
+              >
+                {sso.data.label}
+              </Button>
+              {passwordHidden ? (
+                <>
+                  {error && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300" role="alert">
+                      {error}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(true)}
+                    className="mx-auto block text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  >
+                    Mit lokalem Administratorkonto anmelden
+                  </button>
+                </>
+              ) : (
+                <div className="flex items-center gap-3 text-xs text-zinc-400 dark:text-zinc-500">
+                  <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+                  oder mit Passwort
+                  <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+                </div>
+              )}
+            </div>
+          )}
+
+          {!passwordHidden && (
           <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
             {step === "credentials" ? (
               <>
@@ -296,6 +358,7 @@ export function LoginPage() {
               </button>
             )}
           </form>
+          )}
         </div>
 
         <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-500">

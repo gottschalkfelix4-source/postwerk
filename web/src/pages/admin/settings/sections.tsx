@@ -84,7 +84,7 @@ import type { SectionProps } from "./SettingsPage";
 
 const MASK = "••••";
 
-function Shell({
+export function Shell({
   title,
   description,
   dirty,

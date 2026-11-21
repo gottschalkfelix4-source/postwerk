@@ -20,6 +20,8 @@ type Settings struct {
 	DynDNS    DynDNSSettings    `json:"dyndns"`
 	Relay     RelaySettings     `json:"relay"`
 	Backup    BackupSettings    `json:"backup"`
+	LDAP      LDAPSettings      `json:"ldap"`
+	OIDC      OIDCSettings      `json:"oidc"`
 }
 
 // BackupSettings configure automatic archives of the whole system.
@@ -263,6 +265,7 @@ func DefaultSettings(hostname string) Settings {
 	s.Security.BruteForce.MaxAttempts = 5
 	s.Security.BruteForce.WindowSeconds = 600
 	s.Security.BruteForce.BanSeconds = 3600
+	applyDirectoryDefaults(&s)
 	return s
 }
 

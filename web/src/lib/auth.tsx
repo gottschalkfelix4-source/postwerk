@@ -22,7 +22,13 @@ export function useLogout(): () => Promise<void> {
   const navigate = useNavigate();
   return useCallback(async () => {
     try {
-      await authApi.logout();
+      const res = await authApi.logout();
+      if (res.endSessionUrl) {
+        // Signed in via SSO: end the session at the identity provider too.
+        qc.clear();
+        window.location.assign(res.endSessionUrl);
+        return;
+      }
     } catch {
       // The session may already be gone; leave anyway.
     }

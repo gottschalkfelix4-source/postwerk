@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, AtSign, KeyRound, ShieldCheck, ShieldOff, Trash2, UserX, Wand2 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { Account, Role, UpdateAccountRequest } from "@/api/types";
+import type { Account, AccountSource, Role, UpdateAccountRequest } from "@/api/types";
+import { SourceBadge } from "./sso/SourceBadge";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   Avatar,
@@ -35,10 +36,11 @@ interface FormState {
   quotaBytes: number;
   disabled: boolean;
   password: string;
+  source: AccountSource;
 }
 
 function toForm(a: Account): FormState {
-  return { name: a.name, role: a.role, quotaBytes: a.quotaBytes, disabled: a.disabled, password: "" };
+  return { name: a.name, role: a.role, quotaBytes: a.quotaBytes, disabled: a.disabled, password: "", source: a.source ?? "local" };
 }
 
 export default function AccountDetailPage() {
@@ -108,7 +110,9 @@ export default function AccountDetailPage() {
   const a = q.data;
   const original = toForm(a);
   const dirty = JSON.stringify(original) !== JSON.stringify(form);
-  const pwError = form.password && form.password.length < 10 ? "Mindestens 10 Zeichen." : null;
+  const toLocal = form.source === "local" && original.source !== "local";
+  const pwError =
+    form.password && form.password.length < 10 ? "Mindestens 10 Zeichen." : toLocal && !form.password ? "Für ein lokales Konto bitte ein Passwort festlegen." : null;
 
   const submit = () => {
     if (pwError) return;
@@ -117,7 +121,8 @@ export default function AccountDetailPage() {
     if (form.role !== original.role) body.role = form.role;
     if (form.quotaBytes !== original.quotaBytes) body.quotaBytes = form.quotaBytes;
     if (form.disabled !== original.disabled) body.disabled = form.disabled;
-    if (form.password) body.password = form.password;
+    if (form.password && form.source === "local") body.password = form.password;
+    if (form.source !== original.source) body.source = form.source;
     save.mutate(body);
   };
 
@@ -136,6 +141,7 @@ export default function AccountDetailPage() {
               <Badge tone={a.role === "admin" ? "indigo" : "neutral"}>{a.role === "admin" ? "Administrator" : "Benutzer"}</Badge>
               {a.disabled ? <Badge tone="red" dot>Deaktiviert</Badge> : <Badge tone="green" dot>Aktiv</Badge>}
               {a.totpEnabled && <Badge tone="indigo" icon={ShieldCheck}>2FA aktiv</Badge>}
+              <SourceBadge source={a.source} />
             </div>
             <div className="mt-1 flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
               {a.email} <CopyButton value={a.email} />
@@ -190,7 +196,37 @@ export default function AccountDetailPage() {
                 </Field>
               </FormSection>
               <FormSection title="Zugang" description="Passwort neu setzen oder das Konto sperren.">
-                <Field label="Neues Passwort" error={pwError} help="Leer lassen, um das Passwort nicht zu ändern.">
+                <Field
+                  label="Anmeldung"
+                  help={
+                    form.source === "ldap"
+                      ? "Das Passwort wird im LDAP-Verzeichnis geprüft und dort geändert."
+                      : form.source === "oidc"
+                        ? "Kein Postwerk-Passwort: Weboberfläche per Single Sign-on, Mail-Programme mit App-Passwörtern."
+                        : undefined
+                  }
+                >
+                  {(id) => (
+                    <Select
+                      id={id}
+                      value={form.source}
+                      onChange={(e) => setForm({ ...form, source: e.target.value as AccountSource, password: "" })}
+                      options={[
+                        { value: "local", label: "Postwerk-Passwort" },
+                        { value: "ldap", label: "LDAP-Verzeichnis" },
+                        { value: "oidc", label: "Nur Single Sign-on" },
+                      ]}
+                      className="max-w-xs"
+                    />
+                  )}
+                </Field>
+                {form.source !== original.source && original.source === "local" && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Beim Speichern wird das bisherige Passwort entfernt; Sitzungen und App-Passwörter werden beendet.
+                  </p>
+                )}
+                {form.source === "local" && (
+                <Field label="Neues Passwort" error={pwError} help={toLocal ? "Pflicht beim Wechsel auf ein Postwerk-Passwort." : "Leer lassen, um das Passwort nicht zu ändern."}>
                   {(id) => (
                     <div className="flex gap-2">
                       <div className="flex-1">
@@ -209,6 +245,7 @@ export default function AccountDetailPage() {
                     </div>
                   )}
                 </Field>
+                )}
                 <SwitchRow
                   label="Konto deaktivieren"
                   description="Deaktivierte Konten können sich nicht anmelden; eingehende Nachrichten werden abgelehnt."

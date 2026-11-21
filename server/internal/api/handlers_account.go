@@ -24,10 +24,12 @@ type meResp struct {
 	QuotaBytes         int64  `json:"quotaBytes"`
 	UsedBytes          int64  `json:"usedBytes"`
 	MustChangePassword bool   `json:"mustChangePassword"`
+	// Source: "local", "ldap" or "oidc" (see store.SourceLocal, ...).
+	Source string `json:"source"`
 }
 
 func toMe(a *store.Account) meResp {
-	return meResp{a.ID, a.Email, a.Name, a.Role, a.TOTPEnabled, a.QuotaBytes, a.UsedBytes, a.MustChangePassword}
+	return meResp{a.ID, a.Email, a.Name, a.Role, a.TOTPEnabled, a.QuotaBytes, a.UsedBytes, a.MustChangePassword, a.Source}
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
@@ -44,6 +46,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, errf(429, "rate_limited", "Zu viele Fehlversuche. Bitte später erneut versuchen.")
 	case errors.Is(err, auth.ErrAccountLocked):
 		return nil, errf(403, "forbidden", "Konto ist deaktiviert")
+	case errors.Is(err, auth.ErrPasswordLoginDisabled):
+		return nil, errf(403, "sso_only", "Die Anmeldung mit Passwort ist deaktiviert – bitte Single Sign-on verwenden.")
+	case errors.Is(err, auth.ErrDirectoryUnavailable):
+		return nil, errf(503, "directory_unavailable", "Der Verzeichnisdienst (LDAP) ist nicht erreichbar. Bitte später erneut versuchen.")
 	case errors.Is(err, auth.ErrInvalid):
 		s.Log.Warn("web login failed", "component", "auth", "ip", ip, "user", req.Email)
 		return nil, errf(401, "unauthorized", "E-Mail oder Passwort falsch")
@@ -58,11 +64,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) (any, error) {
+	out := map[string]any{"ok": true}
 	if h := sessionHash(r); h != "" {
+		// After an SSO login, optionally end the session at the identity provider too.
+		if method, _, err := s.Store.SessionMeta(r.Context(), h); err == nil && method == store.SessionOIDC {
+			if cfg := s.Settings.Get().OIDC; cfg.RPLogout {
+				if u, err := s.ssoManager().EndSessionURL(r.Context(), cfg, s.publicBase(r)+"/login"); err == nil && u != "" {
+					out["endSessionUrl"] = u
+				}
+			}
+		}
 		_ = s.Store.DeleteSession(r.Context(), h)
 	}
 	s.clearSessionCookie(w, r)
-	return ok(), nil
+	return out, nil
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +112,8 @@ func reauthError(err error) error {
 		return errf(400, "invalid_code", "Code ist ungültig")
 	case errors.Is(err, auth.ErrTOTPReused):
 		return errf(400, "code_reused", "Dieser Code wurde bereits verwendet – bitte den nächsten Code abwarten")
+	case errors.Is(err, auth.ErrDirectoryUnavailable):
+		return errf(503, "directory_unavailable", "Der Verzeichnisdienst (LDAP) ist nicht erreichbar. Bitte später erneut versuchen.")
 	}
 	return err
 }
@@ -108,6 +125,9 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u *store
 		RevokeAppPasswords bool   `json:"revokeAppPasswords"`
 	}
 	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := externalPassword(u); err != nil {
 		return nil, err
 	}
 	if err := s.Auth.Reauth(r.Context(), s.clientIP(r), u, req.Current, "", false); err != nil {
@@ -147,6 +167,9 @@ func (s *Server) totpSetup(w http.ResponseWriter, r *http.Request, u *store.Acco
 	if u.TOTPEnabled {
 		return nil, invalid("2FA ist bereits aktiv")
 	}
+	if u.Source == store.SourceOIDC {
+		return nil, invalid("Dieses Konto meldet sich per Single Sign-on an – die Zwei-Faktor-Anmeldung übernimmt der Identitätsanbieter.")
+	}
 	secret := auth.NewTOTPSecret()
 	if err := s.Store.UpdateAccount(r.Context(), u.ID, store.AccountPatch{TOTPSecret: &secret}); err != nil {
 		return nil, err
@@ -162,8 +185,11 @@ func (s *Server) totpEnable(w http.ResponseWriter, r *http.Request, u *store.Acc
 	if u.TOTPEnabled {
 		return nil, invalid("2FA ist bereits aktiv")
 	}
-	if err := s.Auth.Reauth(r.Context(), s.clientIP(r), u, req.Password, "", false); err != nil {
-		return nil, reauthError(err)
+	if u.Source == store.SourceOIDC {
+		return nil, invalid("Dieses Konto meldet sich per Single Sign-on an – die Zwei-Faktor-Anmeldung übernimmt der Identitätsanbieter.")
+	}
+	if err := s.reauth(r, u, req.Password, "", false); err != nil {
+		return nil, err
 	}
 	if u.TOTPSecret == "" {
 		return nil, invalid("Code ist ungültig")
@@ -198,8 +224,8 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request, u *store.Ac
 	if !u.TOTPEnabled {
 		return nil, invalid("2FA ist nicht aktiv")
 	}
-	if err := s.Auth.Reauth(r.Context(), s.clientIP(r), u, req.Password, req.Code, true); err != nil {
-		return nil, reauthError(err)
+	if err := s.reauth(r, u, req.Password, req.Code, true); err != nil {
+		return nil, err
 	}
 	f, empty := false, ""
 	if err := s.Store.UpdateAccount(r.Context(), u.ID, store.AccountPatch{TOTPEnabled: &f, TOTPSecret: &empty}); err != nil {
@@ -231,8 +257,8 @@ func (s *Server) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request,
 	if !u.TOTPEnabled {
 		return nil, invalid("Wiederherstellungscodes gibt es nur mit aktiver Zwei-Faktor-Anmeldung")
 	}
-	if err := s.Auth.Reauth(r.Context(), s.clientIP(r), u, req.Password, req.Code, true); err != nil {
-		return nil, reauthError(err)
+	if err := s.reauth(r, u, req.Password, req.Code, true); err != nil {
+		return nil, err
 	}
 	codes, hashes := auth.NewRecoveryCodes()
 	if err := s.Store.ReplaceRecoveryCodes(r.Context(), u.ID, hashes); err != nil {
@@ -258,8 +284,8 @@ func (s *Server) createAppPassword(w http.ResponseWriter, r *http.Request, u *st
 	if len(req.Name) > 100 {
 		return nil, invalid("Name ist zu lang")
 	}
-	if err := s.Auth.Reauth(r.Context(), s.clientIP(r), u, req.Password, req.Code, true); err != nil {
-		return nil, reauthError(err)
+	if err := s.reauth(r, u, req.Password, req.Code, true); err != nil {
+		return nil, err
 	}
 	n, err := s.Store.CountAppPasswords(r.Context(), u.ID)
 	if err != nil {
@@ -346,8 +372,13 @@ func (s *Server) putVacation(w http.ResponseWriter, r *http.Request, u *store.Ac
 
 // startSession creates a session and sets the cookie.
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, accountID int64) error {
+	return s.startSessionVia(w, r, accountID, store.SessionPassword)
+}
+
+// startSessionVia creates a session started by method (password or SSO).
+func (s *Server) startSessionVia(w http.ResponseWriter, r *http.Request, accountID int64, method string) error {
 	tok := auth.RandomToken(32)
-	if err := s.Store.CreateSession(r.Context(), auth.HashToken(tok), accountID, sessionTTL, s.clientIP(r), r.UserAgent()); err != nil {
+	if err := s.Store.CreateSessionVia(r.Context(), auth.HashToken(tok), accountID, sessionTTL, s.clientIP(r), r.UserAgent(), method); err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{

@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, KeyRound, Pencil, Plus, Search, ShieldCheck, Trash2, UserCheck, UserPlus, UserX, Users, Wand2 } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { Account, CreateAccountRequest, Role } from "@/api/types";
+import type { Account, AccountSource, CreateAccountRequest, Role } from "@/api/types";
+import { SourceBadge } from "./sso/SourceBadge";
 import { useDebounced } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
 import { isEmail } from "@/lib/utils";
@@ -265,6 +266,7 @@ function AccountRow({
       <Td>
         <div className="flex flex-wrap gap-1.5">
           {a.disabled ? <Badge tone="red" dot>Deaktiviert</Badge> : <Badge tone="green" dot>Aktiv</Badge>}
+          <SourceBadge source={a.source} />
           {a.totpEnabled && (
             <Badge tone="indigo" icon={ShieldCheck}>
               2FA
@@ -326,7 +328,10 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
   const emailError = touched && !isEmail(form.email) ? "Bitte eine gültige E-Mail-Adresse eingeben." : null;
   const domainOfEmail = form.email.split("@")[1]?.toLowerCase();
   const knownDomain = !domainOfEmail || !domains.data || domains.data.some((d) => d.name.toLowerCase() === domainOfEmail);
-  const pwError = touched && form.password.length < 10 ? "Mindestens 10 Zeichen." : null;
+  // LDAP and SSO accounts have no Postwerk password.
+  const external = (form.source ?? "local") !== "local";
+  const pwOk = external || form.password.length >= 10;
+  const pwError = touched && !pwOk ? "Mindestens 10 Zeichen." : null;
 
   return (
     <Modal
@@ -350,7 +355,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
             loading={create.isPending}
             onClick={() => {
               setTouched(true);
-              if (isEmail(form.email) && form.password.length >= 10) create.mutate();
+              if (isEmail(form.email) && pwOk) create.mutate();
             }}
           >
             Konto anlegen
@@ -363,7 +368,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
         onSubmit={(e) => {
           e.preventDefault();
           setTouched(true);
-          if (isEmail(form.email) && form.password.length >= 10) create.mutate();
+          if (isEmail(form.email) && pwOk) create.mutate();
         }}
       >
         <Field label="Name">
@@ -386,6 +391,21 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
             />
           )}
         </Field>
+        <Field label="Anmeldung" help={external ? "Kein Postwerk-Passwort: die Anmeldung prüft das Verzeichnis bzw. der Identitätsanbieter." : undefined}>
+          {(id) => (
+            <Select
+              id={id}
+              value={form.source ?? "local"}
+              onChange={(e) => setForm({ ...form, source: e.target.value as AccountSource, password: "" })}
+              options={[
+                { value: "local", label: "Postwerk-Passwort" },
+                { value: "ldap", label: "LDAP-Verzeichnis" },
+                { value: "oidc", label: "Nur Single Sign-on" },
+              ]}
+            />
+          )}
+        </Field>
+        {!external && (
         <Field label="Passwort" required error={pwError} help="Mindestens 10 Zeichen. Der Benutzer kann es später selbst ändern.">
           {(id) => (
             <div className="flex gap-2">
@@ -399,6 +419,7 @@ function CreateAccountDialog({ open, onClose, onCreated }: { open: boolean; onCl
             </div>
           )}
         </Field>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Rolle">
             {(id) => (

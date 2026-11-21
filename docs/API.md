@@ -740,3 +740,79 @@ curl -u anna@example.org:APP-PASSWORT -H 'Content-Type: application/json' https:
                    "properties": ["subject", "from", "receivedAt", "keywords", "preview"]}, "g"]
   ]}'
 ```
+
+## Verzeichnis (LDAP) und Single Sign-on (OIDC)
+
+Konten haben eine Anmeldequelle `source`: `"local"` (Passwort in Postwerk), `"ldap"` (Passwort wird per
+Bind gegen das Verzeichnis geprüft) oder `"oidc"` (kein Passwort, Weboberfläche nur per SSO). Das Feld
+steht in `Me` und `Account`; `POST /api/admin/accounts` und `PATCH /api/admin/accounts/{id}` nehmen
+`source` an (für `ldap`/`oidc` ohne Passwort; beim Wechsel auf `local` ist `password` Pflicht).
+App-Passwörter und 2FA bleiben immer in Postwerk. Konfiguration von Authentik und Keycloak:
+[SSO.md](SSO.md).
+
+Neue Fehlercodes: `sso_only` (403, Passwort-Login für die Weboberfläche abgeschaltet),
+`directory_unavailable` (503, LDAP nicht erreichbar), `external_password` (400, Passwort wird extern
+verwaltet), `sso_reauth_required` (403, SSO-Konto muss sich für die Bestätigung neu anmelden).
+
+### Einstellungen (`GET/PUT /api/admin/settings`, Abschnitte `ldap` und `oidc`)
+
+```ts
+interface LdapSettings {
+  enabled: boolean;
+  url: string;                 // ldap://… oder ldaps://…
+  startTls: boolean;           // nur mit ldap://
+  skipTlsVerify: boolean;
+  bindDn: string;              // Dienstkonto, leer = anonym
+  bindPassword: string;        // maskiert, an die URL gebunden
+  baseDn: string;
+  userFilter: string;          // Standard "(&(objectClass=person)(mail=%s))", %s = maskierte Adresse
+  mailAttribute: string;       // Standard "mail"
+  nameAttribute: string;       // Standard "cn"
+  quotaAttribute: string;      // optional, Byte oder mit Einheit (5G)
+  adminFilter: string;         // optional, z. B. "memberOf=cn=mail-admins,ou=groups,dc=example,dc=org"
+  autoProvision: boolean;      // Konto beim ersten Login anlegen (Domain muss existieren)
+  defaultQuotaBytes: number;
+  syncDisabled: boolean;       // nicht mehr gefundene Benutzer deaktivieren
+}
+
+interface OidcSettings {
+  enabled: boolean;
+  issuerUrl: string;
+  clientId: string;
+  clientSecret: string;        // maskiert, an die Issuer-URL gebunden
+  scopes: string[];            // Standard ["openid", "email", "profile"]
+  buttonLabel: string;
+  emailClaim: string;          // Standard "email"
+  allowUnverifiedEmail: boolean; // sonst muss email_verified=true sein
+  autoProvision: boolean;
+  defaultQuotaBytes: number;
+  adminClaim: string;          // optional, z. B. "groups"
+  adminValue: string;          // z. B. "mail-admins"
+  onlySso: boolean;            // Passwort-Login (Web) nur noch für lokale Admins
+  rpLogout: boolean;           // beim Abmelden auch beim Anbieter abmelden
+}
+```
+
+`onlySso` lässt sich nur speichern, wenn mindestens ein aktives lokales Administratorkonto existiert.
+
+### Endpunkte
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/auth/sso` (öffentlich) | – | `{ enabled, label, onlySso }` |
+| GET | `/api/auth/oidc/start` | – | Weiterleitung zum Identitätsanbieter (setzt Cookie `pw_oidc`) |
+| GET | `/api/auth/oidc/callback` | `?code&state` | setzt `pw_session`, Weiterleitung auf `/`; Fehler: `/login?sso_error=<code>` |
+| POST | `/api/auth/logout` | – | `{ ok, endSessionUrl? }` (nach SSO-Login mit `rpLogout`) |
+| GET | `/api/admin/sso/info` | – | `{ redirectUri, postLogoutRedirectUri, publicUrlConfigured, localAdmins }` |
+| POST | `/api/admin/oidc/test` | `{ issuerUrl? }` | `{ ok, latencyMs, discovery?, error? }` |
+| POST | `/api/admin/ldap/test` | `{ email?, config?: Partial<LdapSettings> }` | `{ ok, latencyMs, entry?, account?, error? }` |
+| POST | `/api/admin/ldap/sync` | `{ apply }` | `{ users[], orphans[], created, disabled, truncated }` |
+
+`sso_error`-Codes: `state` (abgelaufen, schon benutzt oder anderer Browser), `denied`, `email_unverified`,
+`email_missing`, `no_account`, `disabled`, `sso_disabled`, `unavailable`, `rate_limited`, `failed`.
+
+Ablauf: Authorization Code mit PKCE (S256). `state` und `nonce` liegen serverseitig (10 Minuten, einmal
+verwendbar) und sind über das Cookie `pw_oidc` an den Browser gebunden, der die Anmeldung begonnen hat.
+Das ID-Token wird auf Signatur, Issuer, Audience, Ablauf und Nonce geprüft. Eine SSO-Anmeldung
+überspringt Postwerks eigene 2FA (die MFA liegt beim Anbieter). Konten ohne Passwort (`source: "oidc"`)
+bestätigen sensible Änderungen wie neue App-Passwörter durch eine höchstens 15 Minuten alte SSO-Anmeldung.

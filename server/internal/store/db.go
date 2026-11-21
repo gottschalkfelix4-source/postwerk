@@ -327,6 +327,8 @@ var migrations = []string{
 		send_at INTEGER NOT NULL
 	);
 	CREATE INDEX jmap_submissions_account ON jmap_submissions(account_id);`,
+	`ALTER TABLE accounts ADD COLUMN source TEXT NOT NULL DEFAULT 'local';
+	ALTER TABLE sessions ADD COLUMN method TEXT NOT NULL DEFAULT 'password';`,
 }
 
 func migrate(db *sql.DB) error {

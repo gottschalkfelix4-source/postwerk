@@ -82,7 +82,8 @@ const enc = encodeURIComponent;
 
 export const authApi = {
   login: (body: LoginRequest) => http.post<Me>("/api/auth/login", body, { skipAuthRedirect: true }),
-  logout: () => http.post<Ok>("/api/auth/logout", undefined, { skipAuthRedirect: true }),
+  /** endSessionUrl: also sign out at the identity provider (after SSO login). */
+  logout: () => http.post<Ok & { endSessionUrl?: string }>("/api/auth/logout", undefined, { skipAuthRedirect: true }),
   me: (skipAuthRedirect = false) => http.get<Me>("/api/auth/me", { skipAuthRedirect }),
 };
 

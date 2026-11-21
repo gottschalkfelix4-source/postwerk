@@ -9,7 +9,11 @@ export interface Me {
   totpEnabled: boolean; quotaBytes: number; usedBytes: number;
   /** A new password must be set before the account can be used (generated initial password). */
   mustChangePassword: boolean;
+  /** Where the password lives: Postwerk ("local"), LDAP directory or SSO only ("oidc"). */
+  source: AccountSource;
 }
+
+export type AccountSource = "local" | "ldap" | "oidc";
 
 export interface Domain {
   name: string;
@@ -46,6 +50,7 @@ export interface Account {
   quotaBytes: number;          // 0 = unlimited
   usedBytes: number; disabled: boolean; totpEnabled: boolean;
   aliases: string[]; createdAt: string;
+  source: AccountSource;
 }
 
 export interface Alias { id: number; address: string; targets: string[]; createdAt: string; }
@@ -162,6 +167,45 @@ export interface Settings {
     spfInclude: string;           // e.g. "include:_spf.strato.com" – added to the SPF suggestion
   };
   backup: BackupSettings;
+  ldap: LdapSettings;
+  oidc: OidcSettings;
+}
+
+/** LDAP directory as account source (secrets masked). */
+export interface LdapSettings {
+  enabled: boolean;
+  url: string;                    // ldap://… or ldaps://…
+  startTls: boolean;
+  skipTlsVerify: boolean;
+  bindDn: string;
+  bindPassword: string;           // masked
+  baseDn: string;
+  userFilter: string;             // %s = escaped email address
+  mailAttribute: string;
+  nameAttribute: string;
+  quotaAttribute: string;
+  adminFilter: string;            // e.g. memberOf=cn=mail-admins,ou=groups,dc=example,dc=org
+  autoProvision: boolean;
+  defaultQuotaBytes: number;
+  syncDisabled: boolean;
+}
+
+/** OpenID Connect single sign-on for the web interface (secrets masked). */
+export interface OidcSettings {
+  enabled: boolean;
+  issuerUrl: string;
+  clientId: string;
+  clientSecret: string;           // masked
+  scopes: string[];
+  buttonLabel: string;
+  emailClaim: string;
+  allowUnverifiedEmail: boolean;
+  autoProvision: boolean;
+  defaultQuotaBytes: number;
+  adminClaim: string;
+  adminValue: string;
+  onlySso: boolean;
+  rpLogout: boolean;
 }
 
 export type BackupTargetType = "local" | "webdav" | "smb";
@@ -280,10 +324,10 @@ export interface AccountSession {
   current: boolean;
 }
 
-export interface CreateAccountRequest { email: string; name: string; password: string; role: Role; quotaBytes: number; }
+export interface CreateAccountRequest { email: string; name: string; password: string; role: Role; quotaBytes: number; source?: AccountSource; }
 
 export interface UpdateAccountRequest {
-  name?: string; password?: string; role?: Role; quotaBytes?: number; disabled?: boolean; resetTotp?: boolean;
+  name?: string; password?: string; role?: Role; quotaBytes?: number; disabled?: boolean; resetTotp?: boolean; source?: AccountSource;
 }
 
 export type AiProvider = "openai" | "anthropic";

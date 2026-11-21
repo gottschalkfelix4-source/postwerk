@@ -33,7 +33,9 @@ type Account struct {
 	// TOTPLastStep is the last accepted TOTP time step (replay protection).
 	TOTPLastStep       int64     `json:"-"`
 	MustChangePassword bool      `json:"mustChangePassword"`
-	Aliases            []string  `json:"aliases"`
+	// Source tells where the password lives: SourceLocal, SourceLDAP or SourceOIDC.
+	Source    string    `json:"source"`
+	Aliases   []string  `json:"aliases"`
 	CreatedAt          time.Time `json:"createdAt"`
 }
 
@@ -141,13 +143,13 @@ func (s *Store) DeleteDomain(ctx context.Context, name string) error {
 // ---- accounts ----
 
 const accountCols = `a.id, a.email, a.name, a.password_hash, a.role, a.quota_bytes, a.disabled, a.totp_secret, a.totp_enabled, a.created_at,
-	a.totp_last_step, a.must_change_password,
+	a.totp_last_step, a.must_change_password, a.source,
 	(SELECT COALESCE(SUM(m.size),0) FROM messages m WHERE m.account_id = a.id)`
 
 func scanAccount(sc interface{ Scan(...any) error }) (*Account, error) {
 	var a Account
 	var created int64
-	if err := sc.Scan(&a.ID, &a.Email, &a.Name, &a.PasswordHash, &a.Role, &a.QuotaBytes, &a.Disabled, &a.TOTPSecret, &a.TOTPEnabled, &created, &a.TOTPLastStep, &a.MustChangePassword, &a.UsedBytes); err != nil {
+	if err := sc.Scan(&a.ID, &a.Email, &a.Name, &a.PasswordHash, &a.Role, &a.QuotaBytes, &a.Disabled, &a.TOTPSecret, &a.TOTPEnabled, &created, &a.TOTPLastStep, &a.MustChangePassword, &a.Source, &a.UsedBytes); err != nil {
 		return nil, err
 	}
 	a.CreatedAt = ts(created)
@@ -233,8 +235,11 @@ func (s *Store) CountAccounts(ctx context.Context) (int, error) {
 // CreateAccount inserts an account and its default mailboxes.
 func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO accounts(email, name, password_hash, role, quota_bytes, must_change_password, created_at) VALUES (?,?,?,?,?,?,?)`,
-			Normalize(a.Email), a.Name, a.PasswordHash, a.Role, a.QuotaBytes, a.MustChangePassword, now())
+		if a.Source == "" {
+			a.Source = SourceLocal
+		}
+		res, err := tx.ExecContext(ctx, `INSERT INTO accounts(email, name, password_hash, role, quota_bytes, must_change_password, source, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+			Normalize(a.Email), a.Name, a.PasswordHash, a.Role, a.QuotaBytes, a.MustChangePassword, a.Source, now())
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				return ErrConflict
@@ -262,6 +267,7 @@ type AccountPatch struct {
 	TOTPEnabled  *bool
 	// MustChangePassword forces a password change at the next web login.
 	MustChangePassword *bool
+	Source             *string
 }
 
 func (s *Store) UpdateAccount(ctx context.Context, id int64, p AccountPatch) error {
@@ -291,6 +297,9 @@ func (s *Store) UpdateAccount(ctx context.Context, id int64, p AccountPatch) err
 	}
 	if p.MustChangePassword != nil {
 		add("must_change_password", *p.MustChangePassword)
+	}
+	if p.Source != nil {
+		add("source", *p.Source)
 	}
 	if len(sets) == 0 {
 		return nil
@@ -622,11 +631,17 @@ func SessionID(tokenHash string) string {
 func idleCutoff() int64 { return now() - int64(SessionIdleTimeout/time.Second) }
 
 func (s *Store) CreateSession(ctx context.Context, tokenHash string, accountID int64, ttl time.Duration, ip, userAgent string) error {
+	return s.CreateSessionVia(ctx, tokenHash, accountID, ttl, ip, userAgent, SessionPassword)
+}
+
+// CreateSessionVia creates a session and records how the user signed in
+// (SessionPassword or SessionOIDC).
+func (s *Store) CreateSessionVia(ctx context.Context, tokenHash string, accountID int64, ttl time.Duration, ip, userAgent, method string) error {
 	if len(userAgent) > 255 {
 		userAgent = strings.ToValidUTF8(userAgent[:255], "")
 	}
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO sessions(token_hash, account_id, created_at, expires_at, last_used_at, ip, user_agent) VALUES (?,?,?,?,?,?,?)`,
-		tokenHash, accountID, now(), time.Now().Add(ttl).Unix(), now(), ip, userAgent)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO sessions(token_hash, account_id, created_at, expires_at, last_used_at, ip, user_agent, method) VALUES (?,?,?,?,?,?,?,?)`,
+		tokenHash, accountID, now(), time.Now().Add(ttl).Unix(), now(), ip, userAgent, method)
 	return err
 }
 

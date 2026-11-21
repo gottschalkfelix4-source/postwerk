@@ -6,6 +6,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 - **Protokolle:** SMTP, Submission (587/465), IMAP mit IDLE (993/143), POP3, Weboberfläche + REST-API
 - **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM/DMARC, Spamfilter mit Bayes, DNSBL und Greylisting,
   ClamAV, 2FA, App-Passwörter, Brute-Force-Sperre
+- **Identität:** LDAP-Verzeichnis als Kontenquelle (OpenLDAP, Active Directory, lldap …) und Single
+  Sign-on per OpenID Connect für die Weboberfläche (Authentik, Keycloak …), siehe [docs/SSO.md](docs/SSO.md)
 - **Einrichtung & Umzug:** Setup-Assistent mit Live-DNS-Prüfung und automatischem Eintragen der
   DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien

@@ -33,6 +33,14 @@ type Server struct {
 	Hostname          func() string
 	Log               *slog.Logger
 	AllowInsecureAuth bool
+
+	// Resource limits; zero selects the default.
+	MaxConns       int           // concurrent connections in total (default 500)
+	MaxConnsPerIP  int           // concurrent connections per client address (default 20)
+	MaxSessionTime time.Duration // maximum lifetime of a session (default 1 hour)
+	MaxIdleCmds    int           // NOOP/RSET/STAT/CAPA-type commands without progress (default 100)
+
+	limiter connLimiter
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -40,6 +48,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return s.Serve(ctx, ln)
+}
+
+// Serve accepts connections on ln until ctx is cancelled.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if s.ImplicitTLS {
 		ln = tls.NewListener(ln, s.TLSConfig)
 	}
@@ -47,7 +60,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.ImplicitTLS {
 		proto = "pop3s"
 	}
-	s.Log.Info("listening", "proto", proto, "addr", s.Addr)
+	s.Log.Info("listening", "proto", proto, "addr", ln.Addr().String())
 	go func() { <-ctx.Done(); ln.Close() }()
 	for {
 		c, err := ln.Accept()
@@ -59,8 +72,25 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			continue
 		}
 		metrics.Connections.WithLabelValues(proto).Inc()
-		go s.serve(ctx, c)
+		key := ipKey(c.RemoteAddr())
+		if !s.limiter.acquire(key, orDefault(s.MaxConns, defaultMaxConns), orDefault(s.MaxConnsPerIP, defaultMaxConnsPerIP)) {
+			go s.rejectConn(c)
+			continue
+		}
+		go func() {
+			defer s.limiter.release(key)
+			s.serve(ctx, c)
+		}()
 	}
+}
+
+// rejectConn answers a client that exceeds the connection limits and closes
+// the connection.
+func (s *Server) rejectConn(c net.Conn) {
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(c, "-ERR [SYS/TEMP] too many connections, try again later\r\n")
+	s.Log.Debug("connection limit reached", "proto", "pop3", "addr", c.RemoteAddr().String())
 }
 
 type msgRef struct {
@@ -83,6 +113,10 @@ type session struct {
 	msgs []*msgRef
 	log  *slog.Logger
 	ctx  context.Context
+	// idle counts commands that do not make progress; deadline is the end
+	// of the session lifetime.
+	idle     int
+	deadline time.Time
 }
 
 func (s *Server) serve(ctx context.Context, c net.Conn) {
@@ -94,19 +128,44 @@ func (s *Server) serve(ctx context.Context, c net.Conn) {
 		ss.err("too many failed attempts")
 		return
 	}
+	maxSession := s.MaxSessionTime
+	if maxSession <= 0 {
+		maxSession = time.Hour
+	}
+	ss.deadline = time.Now().Add(maxSession)
 	ss.ok("Postwerk POP3 ready")
 	for {
-		_ = c.SetReadDeadline(time.Now().Add(10 * time.Minute))
-		line, err := ss.r.ReadString('\n')
-		if err != nil || len(line) > 1024 {
+		line, err := ss.readLine(maxCommandLine)
+		if err != nil {
+			switch {
+			case errors.Is(err, errLineTooLong):
+				ss.err("line too long")
+			case time.Now().After(ss.deadline):
+				ss.err("session time limit exceeded")
+			}
 			return
 		}
-		line = strings.TrimRight(line, "\r\n")
 		cmd, arg, _ := strings.Cut(line, " ")
 		if ss.handle(strings.ToUpper(cmd), arg) {
 			return
 		}
+		if ss.idle > orDefault(s.MaxIdleCmds, defaultMaxIdleCmds) {
+			ss.err("too many commands without progress")
+			return
+		}
 	}
+}
+
+// readLine reads a line with a hard length limit. The read deadline is the
+// autologout timer (RFC 1939: at least 10 minutes), capped by the session
+// lifetime.
+func (ss *session) readLine(max int) (string, error) {
+	dl := time.Now().Add(10 * time.Minute)
+	if dl.After(ss.deadline) {
+		dl = ss.deadline
+	}
+	_ = ss.conn.SetReadDeadline(dl)
+	return readLimitedLine(ss.r, max)
 }
 
 func (ss *session) send(s string) {
@@ -118,6 +177,12 @@ func (ss *session) err(s string) { ss.send("-ERR " + s) }
 
 func (ss *session) handle(cmd, arg string) bool {
 	authed := ss.acct != nil
+	switch cmd {
+	case "RETR", "TOP", "DELE":
+		ss.idle = 0
+	default:
+		ss.idle++
+	}
 	switch cmd {
 	case "CAPA":
 		caps := []string{"+OK Capability list follows", "TOP", "UIDL", "RESP-CODES", "PIPELINING", "AUTH-RESP-CODE"}
@@ -136,9 +201,11 @@ func (ss *session) handle(cmd, arg string) bool {
 		}
 		ss.ok("Begin TLS negotiation")
 		tc := tls.Server(ss.conn, ss.s.TLSConfig)
+		_ = tc.SetDeadline(time.Now().Add(30 * time.Second))
 		if err := tc.Handshake(); err != nil {
 			return true
 		}
+		_ = tc.SetDeadline(time.Time{})
 		ss.conn, ss.r, ss.w, ss.tls = tc, bufio.NewReader(tc), bufio.NewWriter(tc), true
 	case "USER":
 		if authed || !(ss.tls || ss.s.AllowInsecureAuth) {
@@ -165,7 +232,7 @@ func (ss *session) handle(cmd, arg string) bool {
 		}
 		if initial == "" {
 			ss.send("+ ")
-			l, err := ss.r.ReadString('\n')
+			l, err := ss.readLine(maxAuthLine)
 			if err != nil {
 				return true
 			}

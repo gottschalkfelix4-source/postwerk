@@ -68,6 +68,22 @@ type Server struct {
 	Log               *slog.Logger
 	AllowInsecureAuth bool
 	MaxRcpts          int
+
+	// Resource limits; zero selects the default.
+	MaxConns       int           // concurrent connections in total (default 500)
+	MaxConnsPerIP  int           // concurrent connections per client address (default 20)
+	MaxLineLength  int           // maximum message line length without CRLF (default 4096)
+	MaxSessionTime time.Duration // maximum lifetime of a session (default 30 minutes)
+	MaxJunkCmds    int           // NOOP/RSET/VRFY/HELO commands without a delivered message (default 100)
+
+	limiter connLimiter
+}
+
+func orDefault(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
 }
 
 func (s *Server) proto() string {
@@ -85,10 +101,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.Log.Info("listening", "proto", s.proto(), "addr", s.Addr)
+	return s.Serve(ctx, ln)
+}
+
+// Serve accepts connections on ln until ctx is cancelled.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if s.ImplicitTLS {
 		ln = tls.NewListener(ln, s.TLSConfig)
 	}
-	s.Log.Info("listening", "proto", s.proto(), "addr", s.Addr)
 	go func() { <-ctx.Done(); ln.Close() }()
 	for {
 		c, err := ln.Accept()
@@ -104,8 +125,25 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			return err
 		}
 		metrics.Connections.WithLabelValues(s.proto()).Inc()
-		go s.serve(ctx, c)
+		key := ipKey(remoteIP(c))
+		if !s.limiter.acquire(key, orDefault(s.MaxConns, defaultMaxConns), orDefault(s.MaxConnsPerIP, defaultMaxConnsPerIP)) {
+			go s.rejectConn(c)
+			continue
+		}
+		go func() {
+			defer s.limiter.release(key)
+			s.serve(ctx, c)
+		}()
 	}
+}
+
+// rejectConn tells a client that exceeds the connection limits to come back
+// later and closes the connection.
+func (s *Server) rejectConn(c net.Conn) {
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(c, "421 4.7.0 Too many connections, try again later\r\n")
+	s.Log.Debug("connection limit reached", "proto", s.proto(), "ip", remoteIP(c).String())
 }
 
 type session struct {
@@ -118,6 +156,12 @@ type session struct {
 	ctx    context.Context
 	helo   bool
 	errors int
+	// mailGiven is set after a successful MAIL command. It is tracked
+	// separately because the null sender is stored as an empty env.From.
+	mailGiven bool
+	junk      int
+	abort     bool // the connection must be closed (e.g. failed read in AUTH)
+	deadline  time.Time
 }
 
 func (s *Server) serve(ctx context.Context, c net.Conn) {
@@ -136,12 +180,21 @@ func (s *Server) serve(ctx context.Context, c net.Conn) {
 		return
 	}
 	ss.log.Debug("connection opened")
+	maxSession := s.MaxSessionTime
+	if maxSession <= 0 {
+		maxSession = defaultSessionMinutes * time.Minute
+	}
+	ss.deadline = time.Now().Add(maxSession)
 	ss.reply(220, "", s.Hostname()+" ESMTP Postwerk ready")
 	for {
-		_ = c.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		line, err := ss.readLine()
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			switch {
+			case errors.Is(err, errLineTooLong):
+				ss.reply(500, "5.5.2", "Line too long")
+			case time.Now().After(ss.deadline):
+				ss.reply(421, "4.4.2", "Session time limit exceeded")
+			case !errors.Is(err, io.EOF):
 				ss.log.Debug("read error", "err", err)
 			}
 			return
@@ -154,18 +207,22 @@ func (s *Server) serve(ctx context.Context, c net.Conn) {
 			ss.reply(421, "4.7.0", "Too many errors")
 			return
 		}
+		if ss.junk > orDefault(s.MaxJunkCmds, defaultMaxJunkCmds) {
+			ss.reply(421, "4.7.0", "Too many commands without progress")
+			return
+		}
 	}
 }
 
+// readLine reads a command line with a hard length limit. The read deadline
+// is the idle timeout, capped by the session lifetime.
 func (ss *session) readLine() (string, error) {
-	line, err := ss.r.ReadString('\n')
-	if err != nil {
-		return "", err
+	dl := time.Now().Add(5 * time.Minute)
+	if dl.After(ss.deadline) {
+		dl = ss.deadline
 	}
-	if len(line) > 4096 {
-		return "", errors.New("line too long")
-	}
-	return strings.TrimRight(line, "\r\n"), nil
+	_ = ss.conn.SetReadDeadline(dl)
+	return readLimitedLine(ss.r, maxCommandLine)
 }
 
 func (ss *session) reply(code int, enh, text string) {
@@ -202,6 +259,7 @@ func splitCmd(line string) (string, string) {
 func (ss *session) resetTxn() {
 	ss.env.From = ""
 	ss.env.Rcpts = nil
+	ss.mailGiven = false
 }
 
 func (ss *session) authAllowed() bool {
@@ -215,6 +273,7 @@ func (ss *session) handle(cmd, arg string) bool {
 			ss.replyR(NewReply(501, "5.5.4", "Syntax: "+cmd+" hostname"))
 			return false
 		}
+		ss.junk++
 		ss.env.Helo = arg
 		ss.helo = true
 		ss.resetTxn()
@@ -252,6 +311,7 @@ func (ss *session) handle(cmd, arg string) bool {
 		ss.resetTxn()
 	case "AUTH":
 		ss.handleAuth(arg)
+		return ss.abort
 	case "MAIL":
 		ss.handleMail(arg)
 	case "RCPT":
@@ -259,11 +319,14 @@ func (ss *session) handle(cmd, arg string) bool {
 	case "DATA":
 		return ss.handleData()
 	case "RSET":
+		ss.junk++
 		ss.resetTxn()
 		ss.reply(250, "2.0.0", "OK")
 	case "NOOP":
+		ss.junk++
 		ss.reply(250, "2.0.0", "OK")
 	case "VRFY":
+		ss.junk++
 		ss.reply(252, "2.5.0", "Cannot VRFY user, but will accept message")
 	case "QUIT":
 		ss.reply(221, "2.0.0", "Bye")
@@ -294,6 +357,7 @@ func (ss *session) handleAuth(arg string) {
 			ss.reply(334, "", "")
 			l, err := ss.readLine()
 			if err != nil {
+				ss.abort = true
 				return
 			}
 			resp = l
@@ -317,6 +381,7 @@ func (ss *session) handleAuth(arg string) {
 		ss.reply(334, "", "VXNlcm5hbWU6")
 		l, err := ss.readLine()
 		if err != nil {
+			ss.abort = true
 			return
 		}
 		u, err := base64.StdEncoding.DecodeString(l)
@@ -327,6 +392,7 @@ func (ss *session) handleAuth(arg string) {
 		ss.reply(334, "", "UGFzc3dvcmQ6")
 		l, err = ss.readLine()
 		if err != nil {
+			ss.abort = true
 			return
 		}
 		p, err := base64.StdEncoding.DecodeString(l)
@@ -393,7 +459,7 @@ func (ss *session) handleMail(arg string) {
 		ss.replyR(NewReply(503, "5.5.1", "Send EHLO first"))
 		return
 	}
-	if ss.env.From != "" {
+	if ss.mailGiven {
 		ss.replyR(NewReply(503, "5.5.1", "Nested MAIL command"))
 		return
 	}
@@ -402,7 +468,7 @@ func (ss *session) handleMail(arg string) {
 		return
 	}
 	from, params, ok := parsePath(arg, "FROM:")
-	if !ok {
+	if !ok || !validAddress(from) {
 		ss.replyR(NewReply(501, "5.5.4", "Syntax: MAIL FROM:<address>"))
 		return
 	}
@@ -416,15 +482,14 @@ func (ss *session) handleMail(arg string) {
 		ss.replyR(r)
 		return
 	}
-	if from == "" {
-		from = "<>"
-	}
+	// The null sender (MAIL FROM:<>) is kept as an empty string.
 	ss.env.From = from
+	ss.mailGiven = true
 	ss.reply(250, "2.1.0", "Sender OK")
 }
 
 func (ss *session) handleRcpt(arg string) {
-	if ss.env.From == "" {
+	if !ss.mailGiven {
 		ss.replyR(NewReply(503, "5.5.1", "Need MAIL command first"))
 		return
 	}
@@ -437,7 +502,7 @@ func (ss *session) handleRcpt(arg string) {
 		return
 	}
 	rcpt, _, ok := parsePath(arg, "TO:")
-	if !ok || !strings.Contains(rcpt, "@") {
+	if !ok || !strings.Contains(rcpt, "@") || !validAddress(rcpt) {
 		ss.replyR(NewReply(501, "5.1.3", "Syntax: RCPT TO:<address>"))
 		return
 	}
@@ -455,39 +520,22 @@ func (ss *session) handleData() bool {
 		return false
 	}
 	ss.reply(354, "", "Start mail input; end with <CRLF>.<CRLF>")
-	max := ss.s.MaxSize()
-	var buf []byte
-	tooBig := false
 	_ = ss.conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
-	for {
-		line, err := ss.r.ReadSlice('\n')
-		if err == bufio.ErrBufferFull {
-			// Very long line: accumulate in pieces.
-			if !tooBig {
-				buf = append(buf, line...)
-			}
-			continue
-		}
-		if err != nil {
-			return true
-		}
-		trimmed := strings.TrimRight(string(line), "\r\n")
-		if trimmed == "." {
-			break
-		}
-		if strings.HasPrefix(trimmed, ".") {
-			trimmed = trimmed[1:]
-		}
-		if !tooBig {
-			buf = append(buf, trimmed...)
-			buf = append(buf, '\r', '\n')
-			if int64(len(buf)) > max {
-				tooBig = true
-				buf = nil
-			}
-		}
+	buf, res, err := readData(ss.r, ss.s.MaxSize(), orDefault(ss.s.MaxLineLength, defaultMaxLineLength))
+	if err != nil {
+		return true
 	}
-	if tooBig {
+	switch res {
+	case dataBareNewline:
+		ss.resetTxn()
+		ss.log.Info("message rejected: bare LF/CR")
+		ss.replyR(NewReply(554, "5.5.2", "Bare LF/CR not allowed, use CRLF line endings"))
+		return false
+	case dataLineTooLong:
+		ss.resetTxn()
+		ss.replyR(NewReply(552, "5.3.4", "Message line too long"))
+		return false
+	case dataTooBig:
 		ss.resetTxn()
 		ss.replyR(NewReply(552, "5.3.4", "Message size exceeds limit"))
 		return false
@@ -502,6 +550,7 @@ func (ss *session) handleData() bool {
 	}
 	ss.reply(250, "2.0.0", "OK queued as "+ss.env.ID)
 	ss.env.ID = newID()
+	ss.junk = 0
 	return false
 }
 

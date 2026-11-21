@@ -6,10 +6,13 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
 - **Protokolle:** SMTP, Submission (587/465), IMAP mit IDLE (993/143), POP3, JMAP, CalDAV/CardDAV,
   ManageSieve (4190), Weboberfläche + REST-API
 - **Sicherheit:** TLS mit Let’s Encrypt, SPF/DKIM (RSA + Ed25519, Schlüsselwechsel)/DMARC-Durchsetzung,
-  ARC, SRS, MTA-STS und DANE ausgehend, Spamfilter mit Bayes, DNSBL und Greylisting, ClamAV, 2FA mit
+  ARC, SRS, MTA-STS und DANE ausgehend, eigene MTA-STS-Richtlinie (testing/enforce), Spamfilter mit Bayes,
+  DNSBL (IPv4 und IPv6) und Greylisting, ClamAV, Sendelimits pro Konto, 2FA mit
   Wiederherstellungscodes, App-Passwörter, Brute-Force-Sperre, verschlüsselte Geheimnisse
   (Master-Schlüssel), Verschlüsselung gespeicherter Mails mit dem eigenen OpenPGP-/S/MIME-Schlüssel,
   DSGVO-Datenexport
+- **Betrieb:** Dashboard-Warnungen auch per Mail und Webhook, automatisches Aufräumen (Papierkorb, Spam,
+  ausgemusterte DKIM-Schlüssel, alte Kalender-Löschmarkierungen)
 - **Filter & Groupware:** Sieve-Filterregeln mit Regel-Editor im Webmail, Plus-Adressen
   (`name+stichwort@`), Kalender, Aufgaben und Kontakte mit Abgleich aufs Handy
 - **Identität:** LDAP-Verzeichnis als Kontenquelle (OpenLDAP, Active Directory, lldap …) und Single
@@ -18,7 +21,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
   DNS-Records bei IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX und deSEC, Migrationsassistent für den Umzug per
   IMAP von Gmail, Outlook, mailcow & Co., Import von mbox/eml-Dateien
 - **KI:** Spam-/Phishing-Erkennung, Kategorien, Prioritäten, automatisches Einsortieren in Ordner,
-  Zusammenfassungen, Antwortentwürfe, semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung – **lokal mit Ollama**
+  Zusammenfassungen, Antwortentwürfe, semantische Suche, Termine/Aufgaben aus Mails, Paperless-ngx-Anbindung,
+  Schutz gegen versteckte Anweisungen in Mails (Prompt-Injection) – **lokal mit Ollama**
   oder über externe Dienste mit **OpenAI-kompatibler** (OpenAI, OpenRouter, Mistral, vLLM …) oder
   **Anthropic-kompatibler** API (Claude)
 
@@ -189,6 +193,7 @@ server/
   internal/backup/     Archive, Verschlüsselung, Ziele (lokal, WebDAV, SMB), Zeitplan, Wiederherstellung
   internal/ai/         KI-Client (OpenAI-/Anthropic-kompatibel), Analyse-Worker, Embeddings
   internal/dms/        Paperless-ngx
+  internal/notify/     Benachrichtigungen bei Betriebswarnungen (Mail, Webhook)
   internal/migrate/    IMAP-Migration, mbox/eml/zip-Import
   internal/dnsprov/    DNS-Anbieter (IONOS, STRATO, Hetzner, Cloudflare, netcup, INWX, deSEC)
   internal/dyndns/     DynDNS-Aktualisierung bei dynamischer IP

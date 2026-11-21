@@ -374,7 +374,7 @@ export function TrustedProxiesField({
   return (
     <Field
       label="Vertrauenswürdige Proxys"
-      help="IP-Adressen oder Netze (CIDR), deren X-Forwarded-Header Postwerk glaubt. Leer = alle privaten Netze und localhost."
+      help="IP-Adressen oder Netze (CIDR), deren X-Forwarded-Header Postwerk glaubt. Leer = nur localhost. Läuft der Proxy in einem anderen Container oder auf einem anderen Rechner, trage hier seine IP oder sein Docker-Netz ein (z. B. 172.18.0.0/16) – sonst sehen alle Anmeldungen wie vom Proxy aus, und eine Sperre nach Fehlversuchen träfe alle Nutzer."
     >
       {(id) => (
         <ChipInput

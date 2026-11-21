@@ -4,6 +4,7 @@ import type {
   AiStatus,
   AiTestResult,
   Alias,
+  AccountSession,
   AppPassword,
   BackupArchive,
   BackupRun,
@@ -69,6 +70,9 @@ import type {
   TlsTestRequest,
   TlsTestResult,
   TotpSetup,
+  TotpEnableResult,
+  RecoveryCodes,
+  RecoveryCodesStatus,
   UpdateAccountRequest,
   UpdateMessageRequest,
   UpdateTaskRequest,
@@ -83,15 +87,22 @@ export const authApi = {
 };
 
 export const accountApi = {
-  changePassword: (current: string, next: string) =>
-    http.post<Ok>("/api/account/password", { current, new: next }),
+  changePassword: (current: string, next: string, revokeAppPasswords = false) =>
+    http.post<Ok>("/api/account/password", { current, new: next, revokeAppPasswords }),
   totpSetup: () => http.post<TotpSetup>("/api/account/totp/setup"),
-  totpEnable: (code: string) => http.post<Ok>("/api/account/totp/enable", { code }),
-  totpDisable: (password: string) => http.post<Ok>("/api/account/totp/disable", { password }),
+  totpEnable: (code: string, password: string) =>
+    http.post<TotpEnableResult>("/api/account/totp/enable", { code, password }),
+  totpDisable: (password: string, code: string) => http.post<Ok>("/api/account/totp/disable", { password, code }),
+  recoveryCodes: () => http.get<RecoveryCodesStatus>("/api/account/recovery-codes"),
+  regenerateRecoveryCodes: (password: string, code: string) =>
+    http.post<RecoveryCodes>("/api/account/recovery-codes", { password, code }),
   appPasswords: () => http.get<AppPassword[]>("/api/account/app-passwords"),
-  createAppPassword: (name: string) =>
-    http.post<CreatedAppPassword>("/api/account/app-passwords", { name }),
+  createAppPassword: (name: string, password: string, code = "") =>
+    http.post<CreatedAppPassword>("/api/account/app-passwords", { name, password, code }),
   deleteAppPassword: (id: number) => http.delete<Ok>(`/api/account/app-passwords/${id}`),
+  sessions: () => http.get<AccountSession[]>("/api/account/sessions"),
+  deleteSession: (id: string) => http.delete<Ok>(`/api/account/sessions/${enc(id)}`),
+  logoutOtherSessions: () => http.post<Ok & { ended: number }>("/api/account/sessions/logout-others"),
   vacation: () => http.get<Vacation>("/api/account/vacation"),
   saveVacation: (v: Vacation) => http.put<Vacation>("/api/account/vacation", v),
 };

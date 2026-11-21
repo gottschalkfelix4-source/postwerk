@@ -512,3 +512,45 @@ func (s *Store) MarkMigrationsInterrupted(ctx context.Context) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE migrations SET status = 'interrupted', finished_at = ? WHERE status IN ('running','pending')`, now())
 	return err
 }
+
+// ---- persisted login bans ----
+
+// AuthBan is an active brute-force ban (key: IP address or IPv6 /64 network).
+type AuthBan struct {
+	Key      string
+	Reason   string
+	Until    time.Time
+	Failures int
+}
+
+func (s *Store) SaveAuthBan(ctx context.Context, b AuthBan) error {
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO auth_bans(key, reason, until, failures) VALUES (?,?,?,?)
+		ON CONFLICT(key) DO UPDATE SET reason = excluded.reason, until = excluded.until, failures = excluded.failures`,
+		b.Key, b.Reason, b.Until.Unix(), b.Failures)
+	return err
+}
+
+func (s *Store) DeleteAuthBan(ctx context.Context, key string) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM auth_bans WHERE key = ?`, key)
+	return err
+}
+
+// ActiveAuthBans returns all bans that have not expired yet.
+func (s *Store) ActiveAuthBans(ctx context.Context) ([]AuthBan, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT key, reason, until, failures FROM auth_bans WHERE until > ?`, now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuthBan
+	for rows.Next() {
+		var b AuthBan
+		var until int64
+		if err := rows.Scan(&b.Key, &b.Reason, &until, &b.Failures); err != nil {
+			return nil, err
+		}
+		b.Until = ts(until)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}

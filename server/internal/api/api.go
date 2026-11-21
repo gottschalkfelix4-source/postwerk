@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +37,16 @@ import (
 )
 
 const sessionCookie = "pw_session"
+
+// sessionTTL is the maximum session lifetime; sessions also end after
+// store.SessionIdleTimeout without use.
 const sessionTTL = 14 * 24 * time.Hour
+
+// Request body limits.
+const (
+	smallBodyLimit   = 64 << 10 // login, setup and other unauthenticated endpoints
+	defaultBodyLimit = 10 << 20 // ordinary JSON requests
+)
 
 type Server struct {
 	Cfg        *config.Config
@@ -101,8 +111,10 @@ func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ai.ErrDisabled):
 		ae = errf(503, "ai_disabled", "KI-Funktionen sind deaktiviert")
 	default:
-		s.Log.Error("request failed", "component", "api", "path", r.URL.Path, "err", err)
-		ae = errf(500, "internal", "Interner Fehler: "+err.Error())
+		// Never leak internal details; the reference ties the response to the log line.
+		id := auth.RandomToken(4)
+		s.Log.Error("request failed", "component", "api", "path", r.URL.Path, "request_id", id, "err", err)
+		ae = errf(500, "internal", "Interner Fehler (Referenz "+id+"). Details stehen im Server-Log.")
 	}
 	s.writeJSON(w, ae.Status, ae)
 }
@@ -121,11 +133,21 @@ func (s *Server) wrap(h handler) http.HandlerFunc {
 	}
 }
 
+// allowedDuringPasswordChange lists the endpoints usable while an account
+// must change its password first.
+var allowedDuringPasswordChange = map[string]bool{
+	"GET /api/auth/me":           true,
+	"POST /api/account/password": true,
+}
+
 func (s *Server) user(h userHandler) http.HandlerFunc {
 	return s.wrap(func(w http.ResponseWriter, r *http.Request) (any, error) {
 		u, err := s.currentUser(r)
 		if err != nil {
 			return nil, err
+		}
+		if u.MustChangePassword && !allowedDuringPasswordChange[r.Method+" "+r.URL.Path] {
+			return nil, errf(403, "password_change_required", "Bitte zuerst ein neues Passwort festlegen")
 		}
 		return h(w, r, u)
 	})
@@ -140,12 +162,21 @@ func (s *Server) admin(h userHandler) http.HandlerFunc {
 	})
 }
 
-func (s *Server) currentUser(r *http.Request) (*store.Account, error) {
+// sessionHash returns the token hash of the request's session cookie.
+func sessionHash(r *http.Request) string {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil || c.Value == "" {
+		return ""
+	}
+	return auth.HashToken(c.Value)
+}
+
+func (s *Server) currentUser(r *http.Request) (*store.Account, error) {
+	h := sessionHash(r)
+	if h == "" {
 		return nil, errUnauthorized
 	}
-	id, err := s.Store.SessionAccount(r.Context(), auth.HashToken(c.Value))
+	id, err := s.Store.SessionAccount(r.Context(), h)
 	if err != nil {
 		return nil, errUnauthorized
 	}
@@ -156,10 +187,71 @@ func (s *Server) currentUser(r *http.Request) (*store.Account, error) {
 	return u, nil
 }
 
+// bodyLimit returns the maximum JSON body size for a request.
+func (s *Server) bodyLimit(r *http.Request) int64 {
+	p := r.URL.Path
+	switch {
+	case strings.HasPrefix(p, "/api/auth/"), strings.HasPrefix(p, "/api/setup/"):
+		return smallBodyLimit
+	case p == "/api/mail/send" || p == "/api/mail/drafts":
+		// Attachments travel base64-encoded inside the JSON body.
+		if s.Settings != nil {
+			if n := s.Settings.Get().Server.MaxMessageSize*4/3 + 1<<20; n > defaultBodyLimit {
+				return n
+			}
+		}
+	}
+	return defaultBodyLimit
+}
+
+// streamingUpload reports endpoints that read large multipart bodies with
+// their own limits.
+func streamingUpload(r *http.Request) bool {
+	return r.URL.Path == "/api/mail/import" || r.URL.Path == "/api/admin/backups/upload"
+}
+
+// bodyReadTimeout bounds how long reading a request body may take, so slow
+// clients cannot hold connections forever.
+func bodyReadTimeout(r *http.Request) time.Duration {
+	p := r.URL.Path
+	switch {
+	case streamingUpload(r):
+		return 0
+	case p == "/api/mail/send" || p == "/api/mail/drafts":
+		return 15 * time.Minute
+	case strings.HasPrefix(p, "/api/auth/"), strings.HasPrefix(p, "/api/setup/"):
+		return 30 * time.Second
+	}
+	return 2 * time.Minute
+}
+
+// deadlineBody lifts the body read deadline once the body was read
+// completely, so the deadline cannot cancel a slow handler afterwards.
+type deadlineBody struct {
+	io.ReadCloser
+	rc   *http.ResponseController
+	done bool
+}
+
+func (b *deadlineBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && !b.done {
+		b.done = true
+		_ = b.rc.SetReadDeadline(time.Time{})
+	}
+	return n, err
+}
+
+// decode reads a JSON body. The size limit is applied by the middleware
+// (see bodyLimit); the inner limit only guards direct handler calls.
 func decode(r *http.Request, v any) error {
-	dec := json.NewDecoder(io.LimitReader(r.Body, 60<<20))
+	dec := json.NewDecoder(io.LimitReader(r.Body, 64<<20))
 	if err := dec.Decode(v); err != nil {
-		return invalid("Ungültiger JSON-Body: " + err.Error())
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return errf(413, "too_large", "Die Anfrage ist zu groß")
+		}
+		return invalid("Ungültiger JSON-Body")
 	}
 	return nil
 }
@@ -201,24 +293,9 @@ func (s *Server) behindProxy() (bool, []string) {
 	return w.BehindProxy || s.Cfg.TrustProxy, w.TrustedProxies
 }
 
-// isTrustedProxy decides whether X-Forwarded-* from ip may be believed.
-func isTrustedProxy(ip net.IP, list []string) bool {
-	if ip == nil {
-		return false
-	}
-	if len(list) == 0 {
-		return ip.IsLoopback() || ip.IsPrivate()
-	}
-	for _, e := range list {
-		if _, n, err := net.ParseCIDR(e); err == nil && n.Contains(ip) {
-			return true
-		}
-		if p := net.ParseIP(e); p != nil && p.Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
+// isTrustedProxy decides whether X-Forwarded-* from ip may be believed
+// (without an explicit list: loopback only).
+func isTrustedProxy(ip net.IP, list []string) bool { return httpport.TrustedProxy(ip, list) }
 
 // resolveClient walks X-Forwarded-For from right to left, skipping trusted
 // proxies, so a client cannot spoof its address by sending the header.
@@ -233,8 +310,9 @@ func (s *Server) resolveClient(r *http.Request) clientInfo {
 		return info
 	}
 	info.trusted = true
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		parts := strings.Split(v, ",")
+	// The header may appear several times; together the lines form one list.
+	if vals := r.Header.Values("X-Forwarded-For"); len(vals) > 0 {
+		parts := strings.Split(strings.Join(vals, ","), ",")
 		for i := len(parts) - 1; i >= 0; i-- {
 			ip := strings.TrimSpace(parts[i])
 			if net.ParseIP(ip) == nil {
@@ -248,15 +326,17 @@ func (s *Server) resolveClient(r *http.Request) clientInfo {
 	} else if v := r.Header.Get("X-Real-IP"); net.ParseIP(strings.TrimSpace(v)) != nil {
 		info.client = strings.TrimSpace(v)
 	}
-	if strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
+	if httpport.ForwardedHTTPS(r) {
 		info.https = true
 	}
 	return info
 }
 
-// secureCookie reports whether the session cookie must carry the Secure flag.
+// secureCookie reports whether the session cookie must carry the Secure flag:
+// always once the web interface is only reachable via HTTPS with a valid
+// certificate, otherwise when the request itself used HTTPS.
 func (s *Server) secureCookie(r *http.Request) bool {
-	return s.Cfg.SecureCookies || s.Settings.Get().Web.SecureCookies || s.resolveClient(r).https
+	return s.Cfg.SecureCookies || s.Settings.Get().Web.SecureCookies || s.resolveClient(r).https || s.HTTPPort.ForcesHTTPS()
 }
 
 // Handler builds the complete HTTP handler.
@@ -270,7 +350,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	metricsHandler := promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{})
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
-		if t := s.Cfg.MetricsToken; t != "" && r.Header.Get("Authorization") != "Bearer "+t {
+		// Without a token, metrics are only served on the internal health
+		// listener (POSTWERK_HEALTH_ADDR).
+		t := s.Cfg.MetricsToken
+		if t == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+t)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -293,6 +380,24 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 			"font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; frame-src 'self' about: blob: data:; "+
 			"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'")
+		if r.TLS != nil && s.HTTPPort.ValidCert() {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+			// Only bodies get a deadline: for body-less requests net/http
+			// already watches the connection, and a deadline there would
+			// cancel long-running handlers.
+			if d := bodyReadTimeout(r); d > 0 && r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+				rc := http.NewResponseController(w)
+				if rc.SetReadDeadline(time.Now().Add(d)) == nil {
+					r.Body = &deadlineBody{ReadCloser: r.Body, rc: rc}
+				}
+			}
+			if !streamingUpload(r) && r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, s.bodyLimit(r))
+			}
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			switch r.Method {
 			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -390,6 +495,11 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/account/app-passwords", s.user(s.listAppPasswords))
 	m.HandleFunc("POST /api/account/app-passwords", s.user(s.createAppPassword))
 	m.HandleFunc("DELETE /api/account/app-passwords/{id}", s.user(s.deleteAppPassword))
+	m.HandleFunc("GET /api/account/sessions", s.user(s.listSessions))
+	m.HandleFunc("DELETE /api/account/sessions/{id}", s.user(s.deleteSession))
+	m.HandleFunc("POST /api/account/sessions/logout-others", s.user(s.logoutOtherSessions))
+	m.HandleFunc("GET /api/account/recovery-codes", s.user(s.recoveryCodesStatus))
+	m.HandleFunc("POST /api/account/recovery-codes", s.user(s.regenerateRecoveryCodes))
 	m.HandleFunc("GET /api/account/vacation", s.user(s.getVacation))
 	m.HandleFunc("PUT /api/account/vacation", s.user(s.putVacation))
 

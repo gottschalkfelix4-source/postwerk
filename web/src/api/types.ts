@@ -7,6 +7,8 @@ export type Role = "admin" | "user";
 export interface Me {
   id: number; email: string; name: string; role: Role;
   totpEnabled: boolean; quotaBytes: number; usedBytes: number;
+  /** A new password must be set before the account can be used (generated initial password). */
+  mustChangePassword: boolean;
 }
 
 export interface Domain {
@@ -244,6 +246,24 @@ export interface LoginRequest { email: string; password: string; totp?: string; 
 export interface TotpSetup { secret: string; otpauthUrl: string; }
 
 export type CreatedAppPassword = AppPassword & { password: string };
+
+/** Response of enabling 2FA: one-time recovery codes, shown only once. */
+export interface TotpEnableResult { ok: boolean; recoveryCodes: string[]; }
+
+export interface RecoveryCodesStatus { remaining: number; }
+
+export interface RecoveryCodes { recoveryCodes: string[]; }
+
+/** A signed-in browser session of the own account. */
+export interface AccountSession {
+  id: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string;
+  ip: string;
+  userAgent: string;
+  current: boolean;
+}
 
 export interface CreateAccountRequest { email: string; name: string; password: string; role: Role; quotaBytes: number; }
 

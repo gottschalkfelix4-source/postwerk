@@ -264,6 +264,27 @@ var migrations = []string{
 		started_at INTEGER NOT NULL,
 		finished_at INTEGER
 	);`,
+	// Login security: session metadata and idle timeout, forced password
+	// change, TOTP replay protection, recovery codes and persisted bans.
+	`ALTER TABLE sessions ADD COLUMN last_used_at INTEGER;
+	ALTER TABLE sessions ADD COLUMN ip TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN user_agent TEXT NOT NULL DEFAULT '';
+	CREATE INDEX sessions_account ON sessions(account_id);
+	ALTER TABLE accounts ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE accounts ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;
+	CREATE TABLE recovery_codes (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		hash TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	);
+	CREATE INDEX recovery_codes_account ON recovery_codes(account_id);
+	CREATE TABLE auth_bans (
+		key TEXT PRIMARY KEY,
+		reason TEXT NOT NULL,
+		until INTEGER NOT NULL,
+		failures INTEGER NOT NULL
+	);`,
 }
 
 func migrate(db *sql.DB) error {

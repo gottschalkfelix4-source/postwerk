@@ -20,18 +20,21 @@ type Domain struct {
 }
 
 type Account struct {
-	ID           int64     `json:"id"`
-	Email        string    `json:"email"`
-	Name         string    `json:"name"`
-	PasswordHash string    `json:"-"`
-	Role         string    `json:"role"`
-	QuotaBytes   int64     `json:"quotaBytes"`
-	UsedBytes    int64     `json:"usedBytes"`
-	Disabled     bool      `json:"disabled"`
-	TOTPSecret   string    `json:"-"`
-	TOTPEnabled  bool      `json:"totpEnabled"`
-	Aliases      []string  `json:"aliases"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID           int64  `json:"id"`
+	Email        string `json:"email"`
+	Name         string `json:"name"`
+	PasswordHash string `json:"-"`
+	Role         string `json:"role"`
+	QuotaBytes   int64  `json:"quotaBytes"`
+	UsedBytes    int64  `json:"usedBytes"`
+	Disabled     bool   `json:"disabled"`
+	TOTPSecret   string `json:"-"`
+	TOTPEnabled  bool   `json:"totpEnabled"`
+	// TOTPLastStep is the last accepted TOTP time step (replay protection).
+	TOTPLastStep       int64     `json:"-"`
+	MustChangePassword bool      `json:"mustChangePassword"`
+	Aliases            []string  `json:"aliases"`
+	CreatedAt          time.Time `json:"createdAt"`
 }
 
 type Alias struct {
@@ -138,12 +141,13 @@ func (s *Store) DeleteDomain(ctx context.Context, name string) error {
 // ---- accounts ----
 
 const accountCols = `a.id, a.email, a.name, a.password_hash, a.role, a.quota_bytes, a.disabled, a.totp_secret, a.totp_enabled, a.created_at,
+	a.totp_last_step, a.must_change_password,
 	(SELECT COALESCE(SUM(m.size),0) FROM messages m WHERE m.account_id = a.id)`
 
 func scanAccount(sc interface{ Scan(...any) error }) (*Account, error) {
 	var a Account
 	var created int64
-	if err := sc.Scan(&a.ID, &a.Email, &a.Name, &a.PasswordHash, &a.Role, &a.QuotaBytes, &a.Disabled, &a.TOTPSecret, &a.TOTPEnabled, &created, &a.UsedBytes); err != nil {
+	if err := sc.Scan(&a.ID, &a.Email, &a.Name, &a.PasswordHash, &a.Role, &a.QuotaBytes, &a.Disabled, &a.TOTPSecret, &a.TOTPEnabled, &created, &a.TOTPLastStep, &a.MustChangePassword, &a.UsedBytes); err != nil {
 		return nil, err
 	}
 	a.CreatedAt = ts(created)
@@ -229,8 +233,8 @@ func (s *Store) CountAccounts(ctx context.Context) (int, error) {
 // CreateAccount inserts an account and its default mailboxes.
 func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO accounts(email, name, password_hash, role, quota_bytes, created_at) VALUES (?,?,?,?,?,?)`,
-			Normalize(a.Email), a.Name, a.PasswordHash, a.Role, a.QuotaBytes, now())
+		res, err := tx.ExecContext(ctx, `INSERT INTO accounts(email, name, password_hash, role, quota_bytes, must_change_password, created_at) VALUES (?,?,?,?,?,?,?)`,
+			Normalize(a.Email), a.Name, a.PasswordHash, a.Role, a.QuotaBytes, a.MustChangePassword, now())
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				return ErrConflict
@@ -256,6 +260,8 @@ type AccountPatch struct {
 	Disabled     *bool
 	TOTPSecret   *string
 	TOTPEnabled  *bool
+	// MustChangePassword forces a password change at the next web login.
+	MustChangePassword *bool
 }
 
 func (s *Store) UpdateAccount(ctx context.Context, id int64, p AccountPatch) error {
@@ -282,6 +288,9 @@ func (s *Store) UpdateAccount(ctx context.Context, id int64, p AccountPatch) err
 	}
 	if p.TOTPEnabled != nil {
 		add("totp_enabled", *p.TOTPEnabled)
+	}
+	if p.MustChangePassword != nil {
+		add("must_change_password", *p.MustChangePassword)
 	}
 	if len(sets) == 0 {
 		return nil
@@ -520,21 +529,178 @@ func (s *Store) DeleteAppPassword(ctx context.Context, accountID, id int64) erro
 	return nil
 }
 
-// ---- sessions ----
+// MaxAppPasswords limits the number of app passwords per account.
+const MaxAppPasswords = 20
 
-func (s *Store) CreateSession(ctx context.Context, tokenHash string, accountID int64, ttl time.Duration) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO sessions(token_hash, account_id, created_at, expires_at) VALUES (?,?,?,?)`,
-		tokenHash, accountID, now(), time.Now().Add(ttl).Unix())
+// CountAppPasswords returns the number of app passwords of an account.
+func (s *Store) CountAppPasswords(ctx context.Context, accountID int64) (int, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_passwords WHERE account_id = ?`, accountID).Scan(&n)
+	return n, err
+}
+
+// DeleteAppPasswords revokes all app passwords of an account.
+func (s *Store) DeleteAppPasswords(ctx context.Context, accountID int64) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM app_passwords WHERE account_id = ?`, accountID)
 	return err
 }
 
+// ---- TOTP replay protection & recovery codes ----
+
+// UseTOTPStep records step as the last used TOTP time step. It returns false
+// when the same or a later step was already used (replay).
+func (s *Store) UseTOTPStep(ctx context.Context, accountID, step int64) (bool, error) {
+	res, err := s.DB.ExecContext(ctx, `UPDATE accounts SET totp_last_step = ? WHERE id = ? AND totp_last_step < ?`, step, accountID, step)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// ReplaceRecoveryCodes stores new (hashed) recovery codes and drops the old
+// ones. An empty list just removes all codes.
+func (s *Store) ReplaceRecoveryCodes(ctx context.Context, accountID int64, hashes []string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM recovery_codes WHERE account_id = ?`, accountID); err != nil {
+			return err
+		}
+		for _, h := range hashes {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO recovery_codes(account_id, hash, created_at) VALUES (?,?,?)`, accountID, h, now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// UseRecoveryCode consumes the recovery code with the given hash. It returns
+// false if no such unused code exists.
+func (s *Store) UseRecoveryCode(ctx context.Context, accountID int64, hash string) (bool, error) {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM recovery_codes WHERE account_id = ? AND hash = ?`, accountID, hash)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// CountRecoveryCodes returns the number of unused recovery codes.
+func (s *Store) CountRecoveryCodes(ctx context.Context, accountID int64) (int, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM recovery_codes WHERE account_id = ?`, accountID).Scan(&n)
+	return n, err
+}
+
+// ---- sessions ----
+
+// SessionIdleTimeout ends sessions that were not used for this long.
+const SessionIdleTimeout = 7 * 24 * time.Hour
+
+// SessionIDLen is the length of the public session id (a prefix of the token
+// hash; neither the hash nor the prefix can be turned back into a cookie).
+const SessionIDLen = 16
+
+type Session struct {
+	ID         string     `json:"id"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	IP         string     `json:"ip"`
+	UserAgent  string     `json:"userAgent"`
+	Current    bool       `json:"current"`
+}
+
+// SessionID returns the public id of a session token hash.
+func SessionID(tokenHash string) string {
+	if len(tokenHash) < SessionIDLen {
+		return tokenHash
+	}
+	return tokenHash[:SessionIDLen]
+}
+
+func idleCutoff() int64 { return now() - int64(SessionIdleTimeout/time.Second) }
+
+func (s *Store) CreateSession(ctx context.Context, tokenHash string, accountID int64, ttl time.Duration, ip, userAgent string) error {
+	if len(userAgent) > 255 {
+		userAgent = strings.ToValidUTF8(userAgent[:255], "")
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO sessions(token_hash, account_id, created_at, expires_at, last_used_at, ip, user_agent) VALUES (?,?,?,?,?,?,?)`,
+		tokenHash, accountID, now(), time.Now().Add(ttl).Unix(), now(), ip, userAgent)
+	return err
+}
+
+// SessionAccount returns the account of a valid session (not expired and not
+// idle for longer than SessionIdleTimeout) and records its use.
 func (s *Store) SessionAccount(ctx context.Context, tokenHash string) (int64, error) {
-	var id int64
-	err := s.DB.QueryRowContext(ctx, `SELECT account_id FROM sessions WHERE token_hash = ? AND expires_at > ?`, tokenHash, now()).Scan(&id)
+	var id, last int64
+	t := now()
+	err := s.DB.QueryRowContext(ctx, `SELECT account_id, COALESCE(last_used_at, created_at) FROM sessions
+		WHERE token_hash = ? AND expires_at > ? AND COALESCE(last_used_at, created_at) > ?`, tokenHash, t, idleCutoff()).Scan(&id, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	// Avoid a write per request: record the use at most once a minute.
+	if t-last >= 60 {
+		_, _ = s.DB.ExecContext(ctx, `UPDATE sessions SET last_used_at = ? WHERE token_hash = ?`, t, tokenHash)
+	}
+	return id, nil
+}
+
+// ListSessions returns the active sessions of an account, most recently used first.
+func (s *Store) ListSessions(ctx context.Context, accountID int64) ([]Session, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT token_hash, created_at, last_used_at, expires_at, ip, user_agent FROM sessions
+		WHERE account_id = ? AND expires_at > ? AND COALESCE(last_used_at, created_at) > ?
+		ORDER BY COALESCE(last_used_at, created_at) DESC`, accountID, now(), idleCutoff())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Session{}
+	for rows.Next() {
+		var hash string
+		var created, expires int64
+		var last sql.NullInt64
+		var se Session
+		if err := rows.Scan(&hash, &created, &last, &expires, &se.IP, &se.UserAgent); err != nil {
+			return nil, err
+		}
+		se.ID = SessionID(hash)
+		se.CreatedAt = ts(created)
+		se.LastUsedAt = nullTime(last)
+		se.ExpiresAt = ts(expires)
+		out = append(out, se)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSessionByID ends one session of an account by its public id.
+func (s *Store) DeleteSessionByID(ctx context.Context, accountID int64, id string) error {
+	if len(id) != SessionIDLen {
+		return ErrNotFound
+	}
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = ? AND substr(token_hash, 1, ?) = ?`, accountID, SessionIDLen, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteOtherSessions ends all sessions of an account except keepTokenHash
+// and returns how many were ended.
+func (s *Store) DeleteOtherSessions(ctx context.Context, accountID int64, keepTokenHash string) (int64, error) {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = ? AND token_hash <> ?`, accountID, keepTokenHash)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
@@ -548,7 +714,9 @@ func (s *Store) DeleteAccountSessions(ctx context.Context, accountID int64) erro
 }
 
 func (s *Store) PurgeExpired(ctx context.Context) {
-	_, _ = s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, now())
+	_, _ = s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ? OR COALESCE(last_used_at, created_at) < ?`,
+		now(), now()-int64(SessionIdleTimeout/time.Second))
+	_, _ = s.DB.ExecContext(ctx, `DELETE FROM auth_bans WHERE until < ?`, now())
 	_, _ = s.DB.ExecContext(ctx, `DELETE FROM greylist WHERE last_seen < ?`, time.Now().Add(-40*24*time.Hour).Unix())
 	_, _ = s.DB.ExecContext(ctx, `DELETE FROM stats WHERE hour < ?`, time.Now().Add(-90*24*time.Hour).Unix()/3600)
 }

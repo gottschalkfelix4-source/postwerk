@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -29,7 +28,14 @@ var (
 	ErrTOTPRequired  = errors.New("totp required")
 	ErrBanned        = errors.New("too many failed attempts")
 	ErrAccountLocked = errors.New("account disabled")
+	// ErrTOTPReused: the code is valid but its time step was already used.
+	ErrTOTPReused = errors.New("totp code already used")
+	// ErrInvalidCode: the password was right but the 2FA code was not.
+	ErrInvalidCode = errors.New("invalid second factor")
 )
+
+// MaxPasswordBytes is the longest password bcrypt can verify completely.
+const MaxPasswordBytes = 72
 
 func HashPassword(pw string) (string, error) {
 	b, err := bcrypt.GenerateFromPassword([]byte(pw), 12)
@@ -51,17 +57,33 @@ func HashToken(tok string) string {
 	return hex.EncodeToString(s[:])
 }
 
+const friendlyAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+// randomString returns n characters from friendlyAlphabet without modulo bias.
+func randomString(n int) string {
+	const limit = 256 - 256%len(friendlyAlphabet)
+	out := make([]byte, 0, n)
+	buf := make([]byte, 2*n)
+	for len(out) < n {
+		_, _ = rand.Read(buf)
+		for _, c := range buf {
+			if int(c) < limit && len(out) < n {
+				out = append(out, friendlyAlphabet[int(c)%len(friendlyAlphabet)])
+			}
+		}
+	}
+	return string(out)
+}
+
 // NewAppPassword returns a human-friendly random password like abcd-efgh-ijkl-mnop.
 func NewAppPassword() string {
-	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	raw := randomString(16)
 	var sb strings.Builder
-	for i, c := range b {
+	for i := 0; i < len(raw); i++ {
 		if i > 0 && i%4 == 0 {
 			sb.WriteByte('-')
 		}
-		sb.WriteByte(alphabet[int(c)%len(alphabet)])
+		sb.WriteByte(raw[i])
 	}
 	return sb.String()
 }
@@ -102,110 +124,64 @@ func totpAt(secret string, counter uint64) string {
 	return fmt.Sprintf("%06d", code)
 }
 
-func ValidateTOTP(secret, code string) bool {
+// totpNow is replaceable in tests.
+var totpNow = time.Now
+
+// MatchTOTP checks code against the current time step and one step of clock
+// drift in each direction and returns the matching time step.
+func MatchTOTP(secret, code string) (int64, bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != 6 || secret == "" {
-		return false
+		return 0, false
 	}
-	c := uint64(time.Now().Unix() / 30)
+	c := totpNow().Unix() / 30
 	for _, d := range []int64{-1, 0, 1} {
-		if subtle.ConstantTimeCompare([]byte(totpAt(secret, uint64(int64(c)+d))), []byte(code)) == 1 {
-			return true
+		if subtle.ConstantTimeCompare([]byte(totpAt(secret, uint64(c+d))), []byte(code)) == 1 {
+			return c + d, true
 		}
 	}
-	return false
+	return 0, false
 }
 
-// ---- brute-force protection ----
-
-type Ban struct {
-	IP       string    `json:"ip"`
-	Reason   string    `json:"reason"`
-	Until    time.Time `json:"until"`
-	Failures int       `json:"failures"`
+// ValidateTOTP checks a code without replay protection (see
+// Authenticator.VerifyTOTP for logins).
+func ValidateTOTP(secret, code string) bool {
+	_, ok := MatchTOTP(secret, code)
+	return ok
 }
 
-type Limits struct {
-	MaxAttempts int
-	Window      time.Duration
-	BanFor      time.Duration
+// ---- recovery codes ----
+
+// RecoveryCodeCount is the number of recovery codes generated at once.
+const RecoveryCodeCount = 10
+
+// NewRecoveryCodes returns fresh one-time recovery codes (like
+// abcd-efgh-jkmn, about 59 bits each) and their hashes for storage.
+func NewRecoveryCodes() (codes, hashes []string) {
+	for i := 0; i < RecoveryCodeCount; i++ {
+		raw := randomString(12)
+		code := raw[0:4] + "-" + raw[4:8] + "-" + raw[8:12]
+		codes = append(codes, code)
+		hashes = append(hashes, HashRecoveryCode(code))
+	}
+	return codes, hashes
 }
 
-type Guard struct {
-	mu       sync.Mutex
-	failures map[string][]time.Time
-	bans     map[string]*Ban
-	limits   func() Limits
-	OnBan    func(ip, reason string)
+// HashRecoveryCode hashes a recovery code, ignoring case, spaces and dashes.
+func HashRecoveryCode(code string) string {
+	return HashToken("recovery:" + NormalizeAppPassword(code))
 }
 
-func NewGuard(limits func() Limits) *Guard {
-	return &Guard{failures: map[string][]time.Time{}, bans: map[string]*Ban{}, limits: limits}
-}
-
-func (g *Guard) Banned(ip string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	b, ok := g.bans[ip]
-	if !ok {
+func isTOTPCode(code string) bool {
+	if len(code) != 6 {
 		return false
 	}
-	if time.Now().After(b.Until) {
-		delete(g.bans, ip)
-		return false
+	for _, c := range code {
+		if c < '0' || c > '9' {
+			return false
+		}
 	}
 	return true
-}
-
-func (g *Guard) Fail(ip, reason string) {
-	l := g.limits()
-	g.mu.Lock()
-	cutoff := time.Now().Add(-l.Window)
-	list := g.failures[ip][:0]
-	for _, t := range g.failures[ip] {
-		if t.After(cutoff) {
-			list = append(list, t)
-		}
-	}
-	list = append(list, time.Now())
-	g.failures[ip] = list
-	banned := false
-	if len(list) >= l.MaxAttempts {
-		g.bans[ip] = &Ban{IP: ip, Reason: reason, Until: time.Now().Add(l.BanFor).UTC(), Failures: len(list)}
-		delete(g.failures, ip)
-		banned = true
-	}
-	g.mu.Unlock()
-	if banned && g.OnBan != nil {
-		g.OnBan(ip, reason)
-	}
-}
-
-func (g *Guard) Success(ip string) {
-	g.mu.Lock()
-	delete(g.failures, ip)
-	g.mu.Unlock()
-}
-
-func (g *Guard) List() []Ban {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	out := []Ban{}
-	for ip, b := range g.bans {
-		if time.Now().After(b.Until) {
-			delete(g.bans, ip)
-			continue
-		}
-		out = append(out, *b)
-	}
-	return out
-}
-
-func (g *Guard) Unban(ip string) {
-	g.mu.Lock()
-	delete(g.bans, ip)
-	delete(g.failures, ip)
-	g.mu.Unlock()
 }
 
 // ---- credential verification ----
@@ -215,73 +191,151 @@ type Authenticator struct {
 	Guard *Guard
 }
 
-// Interactive verifies password (+TOTP) for the web login.
+// VerifyTOTP checks a TOTP code for acct and marks its time step as used, so
+// a code can never be used twice. It returns ErrTOTPReused for a replayed code.
+func (a *Authenticator) VerifyTOTP(ctx context.Context, acct *store.Account, code string) (bool, error) {
+	step, ok := MatchTOTP(acct.TOTPSecret, code)
+	if !ok {
+		return false, nil
+	}
+	fresh, err := a.Store.UseTOTPStep(ctx, acct.ID, step)
+	if err != nil {
+		return false, err
+	}
+	if !fresh {
+		return false, ErrTOTPReused
+	}
+	return true, nil
+}
+
+// VerifySecondFactor accepts either a 6-digit TOTP code or an unused
+// recovery code (which is consumed).
+func (a *Authenticator) VerifySecondFactor(ctx context.Context, acct *store.Account, code string) (bool, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return false, nil
+	}
+	if isTOTPCode(code) {
+		return a.VerifyTOTP(ctx, acct, code)
+	}
+	return a.Store.UseRecoveryCode(ctx, acct.ID, HashRecoveryCode(code))
+}
+
+// Interactive verifies password (+TOTP or recovery code) for the web login.
 func (a *Authenticator) Interactive(ctx context.Context, ip, email, password, totp string) (*store.Account, error) {
-	if a.Guard.Banned(ip) {
+	email = store.Normalize(email)
+	if a.Guard.Banned(ip) || a.Guard.AccountLocked(ip, email) {
 		return nil, ErrBanned
 	}
 	acct, err := a.Store.GetAccountByEmail(ctx, email)
-	if errors.Is(err, store.ErrNotFound) {
-		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-	}
-	if err != nil || !CheckPassword(acct.PasswordHash, password) {
-		if err == nil || errors.Is(err, store.ErrNotFound) {
-			a.Guard.Fail(ip, "web login")
-			return nil, ErrInvalid
-		}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
+	}
+	if err != nil {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		a.Guard.FailAccount(ip, email, "web login")
+		return nil, ErrInvalid
+	}
+	if !CheckPassword(acct.PasswordHash, password) {
+		a.Guard.FailAccount(ip, email, "web login")
+		return nil, ErrInvalid
 	}
 	if acct.Disabled {
 		return nil, ErrAccountLocked
 	}
 	if acct.TOTPEnabled {
-		if totp == "" {
+		if strings.TrimSpace(totp) == "" {
 			return nil, ErrTOTPRequired
 		}
-		if !ValidateTOTP(acct.TOTPSecret, totp) {
-			a.Guard.Fail(ip, "web login (2FA)")
+		ok, err := a.VerifySecondFactor(ctx, acct, totp)
+		if err != nil && !errors.Is(err, ErrTOTPReused) {
+			return nil, err
+		}
+		if !ok {
+			a.Guard.FailAccount(ip, email, "web login (2FA)")
 			return nil, ErrInvalid
 		}
 	}
-	a.Guard.Success(ip)
+	a.Guard.Success(ip, acct.Email)
 	return acct, nil
+}
+
+// Reauth confirms the identity of a signed-in user before a sensitive change:
+// the current password and, if needCode is set and 2FA is active, a TOTP or
+// recovery code. Failures count towards the brute-force limits.
+func (a *Authenticator) Reauth(ctx context.Context, ip string, acct *store.Account, password, code string, needCode bool) error {
+	if a.Guard.Banned(ip) {
+		return ErrBanned
+	}
+	if !CheckPassword(acct.PasswordHash, password) {
+		a.Guard.FailAccount(ip, acct.Email, "password confirmation")
+		return ErrInvalid
+	}
+	if needCode && acct.TOTPEnabled {
+		if strings.TrimSpace(code) == "" {
+			return ErrTOTPRequired
+		}
+		ok, err := a.VerifySecondFactor(ctx, acct, code)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			a.Guard.FailAccount(ip, acct.Email, "2FA confirmation")
+			return ErrInvalidCode
+		}
+	}
+	a.Guard.Success(ip, acct.Email)
+	return nil
 }
 
 // Protocol verifies credentials for SMTP/POP3/IMAP. Accounts with 2FA must
 // use an app password; others may use their main password or app passwords.
+// Unknown users cost the same bcrypt work as known ones, and the disabled
+// state is only revealed after a correct password.
 func (a *Authenticator) Protocol(ctx context.Context, ip, email, password, proto string) (*store.Account, error) {
-	if a.Guard.Banned(ip) {
+	email = store.Normalize(email)
+	if a.Guard.Banned(ip) || a.Guard.AccountLocked(ip, email) {
 		return nil, ErrBanned
 	}
 	acct, err := a.Store.GetAccountByEmail(ctx, email)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			a.Guard.Fail(ip, proto+" auth")
-			return nil, ErrInvalid
-		}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
+	}
+	if err != nil {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		a.Guard.FailAccount(ip, email, proto+" auth")
+		return nil, ErrInvalid
+	}
+	ok := false
+	if acct.TOTPEnabled {
+		// The main password is not accepted, but costs the same time.
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+	} else {
+		ok = CheckPassword(acct.PasswordHash, password)
+	}
+	if !ok {
+		apps, err := a.Store.ListAppPasswords(ctx, acct.ID)
+		if err != nil {
+			return nil, err
+		}
+		normalized := NormalizeAppPassword(password)
+		for _, p := range apps {
+			if CheckPassword(p.Hash, normalized) {
+				a.Store.TouchAppPassword(ctx, p.ID)
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		a.Guard.FailAccount(ip, email, proto+" auth")
+		return nil, ErrInvalid
 	}
 	if acct.Disabled {
 		return nil, ErrAccountLocked
 	}
-	if !acct.TOTPEnabled && CheckPassword(acct.PasswordHash, password) {
-		a.Guard.Success(ip)
-		return acct, nil
-	}
-	apps, err := a.Store.ListAppPasswords(ctx, acct.ID)
-	if err != nil {
-		return nil, err
-	}
-	normalized := NormalizeAppPassword(password)
-	for _, p := range apps {
-		if CheckPassword(p.Hash, normalized) {
-			a.Store.TouchAppPassword(ctx, p.ID)
-			a.Guard.Success(ip)
-			return acct, nil
-		}
-	}
-	a.Guard.Fail(ip, proto+" auth")
-	return nil, ErrInvalid
+	a.Guard.Success(ip, acct.Email)
+	return acct, nil
 }
 
 // TOTPCode returns the current 6-digit code for a Base32 secret (used when

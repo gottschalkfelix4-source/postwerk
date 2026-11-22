@@ -181,6 +181,8 @@ export interface Settings {
   mailauth: {
     trustedArcSealers: string[];
     postmasterAddress: string;   // empty = first admin account
+    /** Fully evaluated report mails to postmaster@ etc. are stored but not delivered. */
+    skipReportDelivery?: boolean;
     /** Our own MTA-STS policy: mode and max_age in seconds. */
     mtaSts?: MtaStsSettings;
   };

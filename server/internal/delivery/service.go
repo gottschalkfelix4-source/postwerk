@@ -374,6 +374,14 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	}
 	junk := verdict.IsSpam || quarantine
 
+	// Reports are stored before delivery so that, if configured, report
+	// addresses can be skipped once everything has been evaluated. A retry
+	// after a temporary failure stores nothing twice (reports are unique).
+	consumed := false
+	if virus == "" {
+		consumed = s.ingestReports(ctx, log, env.Rcpts, parsed, data) && cfg.MailAuth.SkipReportDelivery
+	}
+
 	// Resolve all recipients first so the forwarding decision can take
 	// local deliveries into account.
 	var locals []string
@@ -382,7 +390,12 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	var forwardCount int
 	var srsTargets []string
 	seen := map[string]bool{}
+	skipped := 0
 	for _, rcpt := range env.Rcpts {
+		if consumed && s.isReportAddress(ctx, rcpt) {
+			skipped++
+			continue
+		}
 		if s.localSRS(ctx, rcpt) {
 			orig, err := s.reverseSRS(ctx, rcpt)
 			if err != nil {
@@ -414,6 +427,12 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 				forwardCount++
 			}
 		}
+	}
+	if skipped > 0 && len(locals) == 0 && len(srsTargets) == 0 && forwardCount == 0 {
+		s.Store.IncStat(ctx, "received", 1)
+		metrics.Messages.WithLabelValues("inbound", "report").Inc()
+		log.Info("report stored, delivery skipped", "rcpts", strings.Join(env.Rcpts, ","), "size", len(data))
+		return nil
 	}
 	onlyForward := len(locals) == 0 && len(srsTargets) == 0
 	if forwardCount > 0 && virus != "" {
@@ -502,9 +521,6 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 		} else {
 			log.Warn("no bounce to unverified sender", "failed", len(failed))
 		}
-	}
-	if virus == "" {
-		s.ingestReports(ctx, log, env.Rcpts, parsed, data)
 	}
 	s.Store.IncStat(ctx, "received", 1)
 	if junk {

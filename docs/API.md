@@ -1040,6 +1040,7 @@ interface MailAuthSettings {
   trustedArcSealers: string[];  // d= der ARC-Seals, Subdomains eingeschlossen
                                 // Standard: google.com, microsoft.com, outlook.com, icloud.com, yahoo.com
   postmasterAddress: string;    // Ziel für postmaster@/abuse@ (leer = erstes aktives Admin-Konto)
+  skipReportDelivery: boolean;  // vollständig ausgewertete Berichtsmails nicht zustellen (Standard: false)
 }
 ```
 
@@ -1059,8 +1060,11 @@ Mails an `postmaster@`, `dmarc@`, `dmarc-reports@`, `rua@`, `tlsrpt@` oder `tls-
 Domain (oder mit Betreff „Report Domain: …“ bzw. Header `TLS-Report-Domain`) werden nach Berichten
 durchsucht: DMARC-Aggregatberichte als XML, ZIP oder GZIP, TLS-Berichte als JSON oder GZIP. Entpackt
 werden höchstens 20 MB je Mail. Gespeichert werden nur Berichte über eigene Domains (und deren
-Subdomains), doppelt eingehende Berichte nur einmal; die Mail selbst wird normal zugestellt. Berichte
-werden nach 400 Tagen gelöscht.
+Subdomains), doppelt eingehende Berichte nur einmal. Die Mail selbst wird normal zugestellt, außer
+`mailauth.skipReportDelivery` ist gesetzt: Dann entfällt die Zustellung an die Berichtsadressen, sofern
+alle Berichte der Mail eigene Domains betreffen, gespeichert wurden und nichts unlesbar war. Andere
+Empfänger derselben Mail bekommen sie weiterhin; Mails, die sich nicht vollständig auswerten lassen,
+werden immer zugestellt. Berichte werden nach 400 Tagen gelöscht.
 
 ```ts
 interface DmarcDomainSummary { domain: string; reports: number; messages: number; passed: number; failed: number; reporters: string[] }

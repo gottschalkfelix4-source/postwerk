@@ -18,6 +18,7 @@ import {
   Select,
   SkeletonRows,
   StatTile,
+  Switch,
   TBody,
   THead,
   Table,
@@ -60,8 +61,9 @@ export default function ReportsPage() {
     <>
       <PageHeader
         title="Berichte"
-        description="DMARC- und TLS-Berichte, die andere Mailserver an postmaster@ deiner Domains schicken. Die Berichtsmails selbst werden ganz normal zugestellt."
+        description="DMARC- und TLS-Berichte, die andere Mailserver an postmaster@ deiner Domains schicken."
       />
+      <DeliveryCard />
       <Tabs
         className="mb-4"
         items={[
@@ -93,6 +95,42 @@ export default function ReportsPage() {
       </TableToolbar>
       {tab === "dmarc" ? <DmarcTab query={query} /> : <TlsTab query={query} />}
     </>
+  );
+}
+
+/** Whether evaluated report mails still land in the postmaster mailbox (settings.mailauth). */
+function DeliveryCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const settings = useQuery({ queryKey: ["admin", "settings"], queryFn: adminApi.settings, staleTime: 60_000 });
+  const skip = settings.data?.mailauth?.skipReportDelivery ?? false;
+  const save = useMutation({
+    mutationFn: (value: boolean) => adminApi.saveSettings({ mailauth: { skipReportDelivery: value } }),
+    onSuccess: (s) => {
+      qc.setQueryData(["admin", "settings"], s);
+      toast.success("Gespeichert");
+    },
+    onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
+  });
+
+  return (
+    <Card className="mb-4">
+      <div className="flex items-start justify-between gap-4 p-4 sm:px-5">
+        <label htmlFor="skip-report-delivery" className="min-w-0 cursor-pointer">
+          <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Berichtsmails nicht zustellen</div>
+          <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+            Vollständig ausgewertete Berichte erscheinen nur noch hier und landen nicht mehr im Postfach von postmaster@. Berichte, die sich nicht auswerten lassen, werden weiterhin zugestellt.
+          </p>
+        </label>
+        <Switch
+          id="skip-report-delivery"
+          checked={save.isPending ? !!save.variables : skip}
+          onChange={(v) => save.mutate(v)}
+          disabled={!settings.data || save.isPending}
+          aria-label="Berichtsmails nicht zustellen"
+        />
+      </div>
+    </Card>
   );
 }
 

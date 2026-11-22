@@ -136,16 +136,8 @@ func TestPostmasterAndAbuseDelivered(t *testing.T) {
 	}
 }
 
-func TestDMARCReportIngested(t *testing.T) {
-	e := setup(t)
-	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "pass", DKIM: "pass", DKIMDomains: []string{"google.com"}, DMARC: "pass"})
-	if err := e.st.CreateAccount(context.Background(), &store.Account{Email: "admin@example.test", PasswordHash: "x", Role: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	doc, err := os.ReadFile("../reports/testdata/dmarc_aggregate.xml")
-	if err != nil {
-		t.Fatal(err)
-	}
+// reportMail builds a DMARC aggregate report mail with doc as zipped attachment.
+func reportMail(doc []byte, to string) []byte {
 	var zb bytes.Buffer
 	zw := zip.NewWriter(&zb)
 	f, _ := zw.Create("google.com!example.test!1763596800!1763683199.xml")
@@ -158,13 +150,105 @@ func TestDMARCReportIngested(t *testing.T) {
 		enc = enc[76:]
 	}
 	body.WriteString(enc + "\r\n")
-	msg := "From: noreply-dmarc-support@google.com\r\nTo: postmaster@example.test\r\n" +
+	return []byte("From: noreply-dmarc-support@google.com\r\nTo: " + to + "\r\n" +
 		"Subject: Report domain: example.test Submitter: google.com Report-ID: 12345678901234567890\r\n" +
 		"Message-ID: <report-1@google.com>\r\nDate: Fri, 20 Nov 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n" +
 		"Content-Type: multipart/mixed; boundary=\"zz\"\r\n\r\n--zz\r\nContent-Type: text/plain\r\n\r\nReport\r\n" +
 		"--zz\r\nContent-Type: application/zip; name=\"r.zip\"\r\nContent-Disposition: attachment; filename=\"r.zip\"\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
-		body.String() + "--zz--\r\n"
-	if err := smtp.SendMail(e.smtp, nil, "noreply-dmarc-support@google.com", []string{"postmaster@example.test"}, []byte(msg)); err != nil {
+		body.String() + "--zz--\r\n")
+}
+
+func setupReports(t *testing.T) (*env, []byte) {
+	t.Helper()
+	e := setup(t)
+	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "pass", DKIM: "pass", DKIMDomains: []string{"google.com"}, DMARC: "pass"})
+	if err := e.st.CreateAccount(context.Background(), &store.Account{Email: "admin@example.test", PasswordHash: "x", Role: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := os.ReadFile("../reports/testdata/dmarc_aggregate.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, doc
+}
+
+func reportCount(t *testing.T, st *store.Store) int {
+	t.Helper()
+	sum, err := st.DMARCSummary(context.Background(), store.ReportFilter{Since: time.Unix(1763596800, 0).Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, d := range sum {
+		n += int(d.Reports)
+	}
+	return n
+}
+
+func TestReportDeliverySkipped(t *testing.T) {
+	e, doc := setupReports(t)
+	s := e.svc.Settings.Get()
+	s.MailAuth.SkipReportDelivery = true
+	if err := e.svc.Settings.Save(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	send := func(from string, rcpts []string, msg []byte) {
+		t.Helper()
+		if err := smtp.SendMail(e.smtp, nil, from, rcpts, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A fully evaluated report to postmaster@ is stored but not delivered.
+	send("noreply-dmarc-support@google.com", []string{"postmaster@example.test"}, reportMail(doc, "postmaster@example.test"))
+	if n := inboxCount(t, e.st, "admin@example.test"); n != 0 {
+		t.Fatalf("admin inbox = %d, want 0", n)
+	}
+	if n := reportCount(t, e.st); n != 1 {
+		t.Fatalf("reports = %d, want 1", n)
+	}
+
+	// A resent report is not stored twice and not delivered either.
+	send("noreply-dmarc-support@google.com", []string{"postmaster@example.test"}, reportMail(doc, "postmaster@example.test"))
+	if n := inboxCount(t, e.st, "admin@example.test"); n != 0 {
+		t.Fatalf("admin inbox after resend = %d, want 0", n)
+	}
+	if n := reportCount(t, e.st); n != 1 {
+		t.Fatalf("reports after resend = %d, want 1", n)
+	}
+
+	// Other recipients of the same message still get it.
+	send("noreply-dmarc-support@google.com", []string{"postmaster@example.test", "alice@example.test"}, reportMail(doc, "postmaster@example.test"))
+	if n := inboxCount(t, e.st, "alice@example.test"); n != 1 {
+		t.Fatalf("alice inbox = %d, want 1", n)
+	}
+	if n := inboxCount(t, e.st, "admin@example.test"); n != 0 {
+		t.Fatalf("admin inbox with second recipient = %d, want 0", n)
+	}
+
+	// A report that cannot be parsed is delivered so nothing gets lost.
+	send("noreply-dmarc-support@google.com", []string{"postmaster@example.test"}, reportMail([]byte("<feedback><kaputt"), "postmaster@example.test"))
+	if n := inboxCount(t, e.st, "admin@example.test"); n != 1 {
+		t.Fatalf("admin inbox after broken report = %d, want 1", n)
+	}
+
+	// A report about a foreign domain is delivered as well.
+	foreign := bytes.ReplaceAll(doc, []byte("example.test"), []byte("fremd.test"))
+	send("noreply-dmarc-support@google.com", []string{"postmaster@example.test"}, reportMail(foreign, "postmaster@example.test"))
+	if n := inboxCount(t, e.st, "admin@example.test"); n != 2 {
+		t.Fatalf("admin inbox after foreign report = %d, want 2", n)
+	}
+
+	// Ordinary mail to postmaster@ is unaffected.
+	send("someone@sender.test", []string{"postmaster@example.test"}, mail("someone@sender.test", "postmaster@example.test", "Frage"))
+	if n := inboxCount(t, e.st, "admin@example.test"); n != 3 {
+		t.Fatalf("admin inbox after ordinary mail = %d, want 3", n)
+	}
+}
+
+func TestDMARCReportIngested(t *testing.T) {
+	e, doc := setupReports(t)
+	if err := smtp.SendMail(e.smtp, nil, "noreply-dmarc-support@google.com", []string{"postmaster@example.test"}, reportMail(doc, "postmaster@example.test")); err != nil {
 		t.Fatal(err)
 	}
 	// The report mail is delivered normally ...

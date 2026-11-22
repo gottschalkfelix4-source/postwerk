@@ -17,7 +17,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | Authentifizierung | SPF-, DKIM- und DMARC-Prüfung eingehend (auch Ed25519-Signaturen), DKIM-Signatur ausgehend | ✅ |
 | | DKIM-Schlüsselwechsel je Domain (neu → prüfen → aktivieren, alter Schlüssel 7 Tage veröffentlicht), Doppelsignatur RSA + Ed25519 (RFC 8463) | ✅ |
 | | ARC (RFC 8617): Kette eingehend prüfen, vertrauenswürdige Weiterleiter schwächen DMARC-Ablehnungen ab, weitergeleitete Mails werden versiegelt | ✅ |
-| | DMARC-Aggregat- und TLS-RPT-Berichte (RFC 8460) empfangen, auswerten und unter „Berichte“ anzeigen | ✅ |
+| | DMARC-Aggregat- und TLS-RPT-Berichte (RFC 8460) empfangen, auswerten und unter „Berichte“ anzeigen, Berichtsmails auf Wunsch nicht zustellen | ✅ |
 | | postmaster@ und abuse@ für jede Domain automatisch (an das erste Admin-Konto oder eine eingestellte Adresse) | ✅ |
 | Verzeichnis | Mehrere Domains, Konten, Aliase (auch extern), Catch-all, Quotas | ✅ |
 | | Sub-Adressierung (`name+stichwort@domain`) | ✅ |

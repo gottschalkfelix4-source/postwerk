@@ -41,6 +41,11 @@ type MailAuthSettings struct {
 	// PostmasterAddress receives mail for postmaster@ and abuse@ of every
 	// domain that has no such account or alias (empty: first admin account).
 	PostmasterAddress string `json:"postmasterAddress"`
+	// SkipReportDelivery drops DMARC and TLS report mails addressed to a
+	// report address (postmaster@, dmarc@, ...) once every report in them
+	// has been stored; they are then only shown under "Berichte". Mails that
+	// could not be evaluated completely are still delivered.
+	SkipReportDelivery bool `json:"skipReportDelivery"`
 	// MTASTS configures the MTA-STS policy published for our own domains.
 	MTASTS MTASTSSettings `json:"mtaSts"`
 }

@@ -97,32 +97,44 @@ func (s *Service) ownsReportDomain(ctx context.Context, d string) bool {
 	return false
 }
 
+// isReportAddress reports whether rcpt is one of the report addresses of a
+// local domain.
+func (s *Service) isReportAddress(ctx context.Context, rcpt string) bool {
+	local, dom, ok := strings.Cut(store.Normalize(rcpt), "@")
+	return ok && reportLocalParts[local] && s.isLocalDomain(ctx, dom)
+}
+
 // ingestReports parses DMARC aggregate and TLS reports from a message sent
 // to one of the report addresses (or clearly marked as a report) and stores
-// those about our domains. The message itself is delivered normally.
-func (s *Service) ingestReports(ctx context.Context, log *slog.Logger, rcpts []string, parsed *message.Parsed, data []byte) {
+// those about our domains. It returns true when the message was fully
+// consumed: at least one report was found, every report was about one of
+// our domains and has been stored (or was already known), and nothing failed
+// to parse. Only then may the delivery to the report addresses be skipped.
+func (s *Service) ingestReports(ctx context.Context, log *slog.Logger, rcpts []string, parsed *message.Parsed, data []byte) bool {
 	addressed := false
 	for _, r := range rcpts {
-		local, dom, ok := strings.Cut(store.Normalize(r), "@")
-		if ok && reportLocalParts[local] && s.isLocalDomain(ctx, dom) {
+		if s.isReportAddress(ctx, r) {
 			addressed = true
 			break
 		}
 	}
 	if !addressed {
 		if parsed == nil || !reports.LooksLikeReport(parsed.Subject, parsed.Header.Get("TLS-Report-Domain")) {
-			return
+			return false
 		}
 	}
 	res := reports.Extract(data)
+	complete := len(res.DMARC)+len(res.TLS) > 0 && len(res.Errors) == 0
 	for _, r := range res.DMARC {
 		if !s.ownsReportDomain(ctx, r.Domain) {
 			log.Info("dmarc report for foreign domain ignored", "domain", r.Domain, "org", r.OrgName)
+			complete = false
 			continue
 		}
 		stored, err := s.Store.SaveDMARCReport(ctx, r)
 		if err != nil {
 			log.Error("storing dmarc report failed", "domain", r.Domain, "err", err)
+			complete = false
 			continue
 		}
 		log.Info("dmarc report received", "domain", r.Domain, "org", r.OrgName, "report_id", r.ReportID, "messages", r.Messages, "failed", r.Failed, "new", stored)
@@ -130,11 +142,13 @@ func (s *Service) ingestReports(ctx context.Context, log *slog.Logger, rcpts []s
 	for _, r := range res.TLS {
 		if !s.ownsReportDomain(ctx, r.Domain) {
 			log.Info("tls report for foreign domain ignored", "domain", r.Domain, "org", r.OrgName)
+			complete = false
 			continue
 		}
 		stored, err := s.Store.SaveTLSReport(ctx, r)
 		if err != nil {
 			log.Error("storing tls report failed", "domain", r.Domain, "err", err)
+			complete = false
 			continue
 		}
 		log.Info("tls report received", "domain", r.Domain, "org", r.OrgName, "report_id", r.ReportID, "failures", r.FailureCount, "new", stored)
@@ -144,4 +158,5 @@ func (s *Service) ingestReports(ctx context.Context, log *slog.Logger, rcpts []s
 			log.Warn("report could not be parsed", "err", e)
 		}
 	}
+	return complete
 }

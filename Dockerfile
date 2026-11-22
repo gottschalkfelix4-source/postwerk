@@ -21,7 +21,7 @@ ARG VERSION=0.1.0
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/postwerk ./cmd/postwerk
 
 # ---- runtime ----
-FROM alpine:3.23
+FROM alpine:3.24
 LABEL org.opencontainers.image.title="Postwerk" \
       org.opencontainers.image.description="Selbst gehosteter Mailserver mit Webmail, Verwaltung und lokalen KI-Funktionen" \
       org.opencontainers.image.source="https://github.com/gottschalkfelix4-source/postwerk"

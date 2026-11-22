@@ -22,6 +22,8 @@ import (
 	"postwerk/internal/message"
 	"postwerk/internal/metrics"
 	"postwerk/internal/store"
+
+	"postwerk/internal/httpx"
 )
 
 // Warning is an operational problem as shown on the dashboard.
@@ -507,7 +509,7 @@ func (n *Service) sendWebhook(ctx context.Context, cfg store.Settings, event str
 	}
 	client := n.Client
 	if client == nil {
-		client = &http.Client{Timeout: webhookTimeout}
+		client = &http.Client{Timeout: webhookTimeout, CheckRedirect: httpx.SameHostRedirect}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

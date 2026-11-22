@@ -235,6 +235,11 @@ func Validate(cal *ical.Calendar) (Meta, error) {
 	}
 	master := Master(cal)
 	m.Summary, _ = master.Props.Text(ical.PropSummary)
+	if start, _, ok := startEnd(master); ok {
+		if _, err := recurrence(master, start); err != nil {
+			return m, fmt.Errorf("%w: RRULE: %v", ErrInvalid, err)
+		}
+	}
 	m.Start, m.End = timeRange(cal, master)
 	return m, nil
 }
@@ -303,6 +308,45 @@ func startEnd(c *ical.Component) (When, When, bool) {
 
 const maxInstances = 5000
 
+// maxSteps bounds how many occurrences are walked to reach a time window, so
+// a dense rule far in the past cannot keep a request busy.
+const maxSteps = 200000
+
+// safeRule rejects rules the recurrence library cannot expand in bounded
+// time. Its sub-daily loops spin forever when no BYHOUR/BYMINUTE/BYSECOND
+// value is reachable with the given INTERVAL, so second- and minute-based
+// rules are refused and hourly rules must be able to hit one of their hours.
+func safeRule(opt *rrule.ROption) error {
+	switch opt.Freq {
+	case rrule.SECONDLY, rrule.MINUTELY:
+		return fmt.Errorf("%w: FREQ=SECONDLY/MINUTELY is not supported", ErrInvalid)
+	case rrule.HOURLY:
+		if len(opt.Byhour) == 0 {
+			return nil
+		}
+		iv := opt.Interval
+		if iv < 1 {
+			iv = 1
+		}
+		g := gcd(iv, 24)
+		h0 := opt.Dtstart.Hour()
+		for _, h := range opt.Byhour {
+			if ((h-h0)%g+g)%g == 0 {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: BYHOUR is unreachable with this INTERVAL", ErrInvalid)
+	}
+	return nil
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
 // recurrence builds the rule set of a component, or nil if it does not recur.
 func recurrence(c *ical.Component, start When) (*rrule.Set, error) {
 	rp := c.Props.Get(ical.PropRecurrenceRule)
@@ -316,6 +360,9 @@ func recurrence(c *ical.Component, start When) (*rrule.Set, error) {
 			return nil, err
 		}
 		opt.Dtstart = start.T
+		if err := safeRule(opt); err != nil {
+			return nil, err
+		}
 		r, err := rrule.NewRRule(*opt)
 		if err != nil {
 			return nil, err
@@ -441,8 +488,14 @@ func Expand(cal *ical.Calendar, from, to time.Time) []Instance {
 	}
 	dur := end.T.Sub(start.T)
 	var out []Instance
-	for _, t := range set.Between(from.Add(-dur-time.Second), to, true) {
-		if replaced[t.Unix()] {
+	lo := from.Add(-dur - time.Second)
+	it := set.Iterator()
+	for steps := 0; steps < maxSteps; steps++ {
+		t, more := it()
+		if !more || !t.Before(to) {
+			break
+		}
+		if t.Before(lo) || replaced[t.Unix()] {
 			continue
 		}
 		s := start
@@ -572,8 +625,12 @@ func validRRule(s string) (string, error) {
 	if s == "" {
 		return "", nil
 	}
-	if _, err := rrule.StrToROption(s); err != nil {
+	opt, err := rrule.StrToROption(s)
+	if err != nil {
 		return "", fmt.Errorf("Ungültige Wiederholungsregel: %v", err)
+	}
+	if opt.Freq == rrule.SECONDLY || opt.Freq == rrule.MINUTELY {
+		return "", fmt.Errorf("Wiederholung im Sekunden- oder Minutentakt wird nicht unterstützt")
 	}
 	return strings.ToUpper(s), nil
 }

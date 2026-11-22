@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -188,9 +189,17 @@ func (s *Server) ssoAccount(ctx context.Context, cfg store.OIDCSettings, id *sso
 		s.Log.Info("account provisioned via sso", "component", "auth", "user", acct.Email, "role", acct.Role)
 	case err != nil:
 		return nil, "", err
+	case acct.Source == store.SourceLocal && acct.Role == "admin":
+		// Local administrators are the break-glass accounts and sign in with
+		// their password (and 2FA); an identity provider that lets someone
+		// claim their address must not open them.
+		return nil, "local_admin", nil
 	}
 	if acct.Disabled {
 		return nil, "disabled", nil
+	}
+	if code, err := s.bindSSOSubject(ctx, cfg, acct, id); code != "" || err != nil {
+		return nil, code, err
 	}
 	var p store.AccountPatch
 	if acct.Source == store.SourceOIDC && id.AdminChecked {
@@ -215,6 +224,32 @@ func (s *Server) ssoAccount(ctx context.Context, cfg store.OIDCSettings, id *sso
 		}
 	}
 	return acct, "", nil
+}
+
+// bindSSOSubject ties an account to the provider's subject (sub) on its
+// first SSO login. Later logins must come from the same subject, so a
+// provider user who changes their address to someone else's cannot take
+// over that account. A changed issuer (new provider) rebinds.
+func (s *Server) bindSSOSubject(ctx context.Context, cfg store.OIDCSettings, acct *store.Account, id *sso.Identity) (string, error) {
+	if id.Subject == "" {
+		return "failed", nil
+	}
+	key := fmt.Sprintf("oidc-sub:%d", acct.ID)
+	issuer := strings.TrimRight(strings.TrimSpace(cfg.IssuerURL), "/")
+	want := issuer + " " + id.Subject
+	have, err := s.Store.KV(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if have == want {
+		return "", nil
+	}
+	if have != "" {
+		if oldIssuer, _, _ := strings.Cut(have, " "); oldIssuer == issuer {
+			return "sso_mismatch", nil
+		}
+	}
+	return "", s.Store.SetKV(ctx, key, want)
 }
 
 // reauth confirms the identity of the signed-in user before a sensitive

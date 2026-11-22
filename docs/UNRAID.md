@@ -52,6 +52,12 @@ Wenn du eingehende Mails auf Viren prüfen willst, starte zuerst ClamAV:
 2. Ohne Änderungen **Anwenden** klicken.
 3. Der erste Start lädt die Virensignaturen (etwa 1–3 Minuten). ClamAV braucht rund 1,5 GB RAM.
 
+> **Sicherheit:** Die Vorlage veröffentlicht clamd auf Port 3310 im ganzen Heimnetz. clamd hat keine
+> Anmeldung – jedes Gerät im LAN kann den Scanner nutzen oder auslasten. Besser: ein eigenes Docker-Netz
+> anlegen (Unraid-Terminal: `docker network create postwerk`), bei **beiden** Containern unter
+> **Netzwerktyp** `postwerk` wählen, im ClamAV-Container die Port-Zuordnung 3310 entfernen und in Postwerk
+> als Adresse `postwerk-clamav:3310` eintragen. Dann ist clamd nur noch für Postwerk erreichbar.
+
 ---
 
 ## 3. Postwerk-Container anlegen
@@ -252,7 +258,7 @@ kopieren und im Template unter **Erweiterte Ansicht** zwei Variablen ergänzen:
 `POSTWERK_TLS_CERT=/data/certs/fullchain.pem` und `POSTWERK_TLS_KEY=/data/certs/privkey.pem`.
 
 **Virenscan** (wenn du Schritt 2 gemacht hast)
-- Aktivieren, Adresse `<Unraid-IP>:3310`, Aktion „Ablehnen“ oder „Quarantäne“.
+- Aktivieren, Adresse `<Unraid-IP>:3310` (mit eigenem Docker-Netz `postwerk-clamav:3310`, siehe Schritt 2), Aktion „Ablehnen“ oder „Quarantäne“.
 
 **Smarthost** (bei dynamischer IP oder wenn Port 25 ausgehend gesperrt ist)
 - Im Setup-Assistenten (Schritt Internetanschluss) oder unter **Einstellungen → Smarthost**, siehe 4b.
@@ -269,7 +275,7 @@ kopieren und im Template unter **Erweiterte Ansicht** zwei Variablen ergänzen:
 
 **Paperless-ngx** (optional)
 - Unter **Einstellungen → DMS** URL (z. B. `http://<Unraid-IP>:8000`) und API-Token eintragen.
-  Mit „Automatisch weiterleiten“ landen PDF-Anhänge von Mails der Kategorie „Rechnung“ direkt in Paperless.
+  Mit „Automatisch weiterleiten“ landen PDF-Anhänge von Mails der Kategorie „Rechnung“ direkt in Paperless – nur für die unter „Konten“ eingetragenen Postfächer und nur, wenn DKIM oder DMARC den Absender bestätigen.
 
 ---
 

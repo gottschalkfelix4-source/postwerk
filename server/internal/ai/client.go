@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"postwerk/internal/store"
+
+	"postwerk/internal/httpx"
 )
 
 var ErrDisabled = errors.New("ai disabled")
@@ -59,7 +61,7 @@ type Client struct {
 }
 
 func NewClient(s *store.SettingsCache) *Client {
-	return &Client{Settings: s, HTTP: &http.Client{}}
+	return &Client{Settings: s, HTTP: &http.Client{CheckRedirect: httpx.SameHostRedirect}}
 }
 
 func (c *Client) cfg() (store.AISettings, error) {

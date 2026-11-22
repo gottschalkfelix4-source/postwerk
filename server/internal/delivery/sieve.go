@@ -234,7 +234,7 @@ func (s *Service) applySieve(ctx context.Context, acct *store.Account, raw []byt
 		log.Info("sieve redirected message", "to", r)
 	}
 
-	if envFrom != "" && envFrom != "<>" {
+	if envFrom != "" && envFrom != "<>" && senderVerified(meta, envFrom) {
 		switch {
 		case vacation != nil:
 			s.sieveVacation(ctx, acct, vacation, envFrom, parsed)

@@ -172,8 +172,41 @@ func SanitizeFilename(name string) string {
 	return out
 }
 
+// MaxMultiparts bounds the multipart containers a message may declare. The
+// MIME reader stacks one buffered reader per nesting level, so the cost of
+// a deeply nested message grows with depth times size; real mail stays far
+// below this.
+const MaxMultiparts = 50
+
+// TooComplex reports whether raw declares more multipart boundaries than
+// MaxMultiparts. It is a linear scan that runs before any MIME parsing.
+func TooComplex(raw []byte) bool {
+	const needle = "boundary"
+	n := 0
+	for i := 0; i+len(needle) <= len(raw); i++ {
+		c := raw[i] | 0x20
+		if c != 'b' || !bytes.EqualFold(raw[i:i+len(needle)], []byte(needle)) {
+			continue
+		}
+		j := i + len(needle)
+		for j < len(raw) && (raw[j] == ' ' || raw[j] == '\t' || raw[j] == '*') {
+			j++
+		}
+		if j < len(raw) && raw[j] == '=' {
+			if n++; n > MaxMultiparts {
+				return true
+			}
+		}
+		i = j
+	}
+	return false
+}
+
 // Parse parses raw message bytes. With withData, attachment content is kept.
+// Of messages that are TooComplex only the header is parsed: the reader
+// descends through every level before it returns the first part.
 func Parse(raw []byte, withData bool) (*Parsed, error) {
+	headerOnly := TooComplex(raw)
 	mr, err := mail.CreateReader(bytes.NewReader(raw))
 	if err != nil && mr == nil {
 		return nil, err
@@ -201,7 +234,7 @@ func Parse(raw []byte, withData bool) (*Parsed, error) {
 	p.Date, _ = mr.Header.Date()
 
 	var id int64
-	for {
+	for !headerOnly {
 		part, err := mr.NextPart()
 		if err == io.EOF {
 			break

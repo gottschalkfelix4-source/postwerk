@@ -98,6 +98,14 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		log.Warn("backup restored", "component", "backup", "archive", name)
 	}
 
+	// Upload temp files of imports interrupted by a restart.
+	if leftovers, _ := filepath.Glob(filepath.Join(cfg.DataDir, "import-*.tmp")); len(leftovers) > 0 {
+		for _, p := range leftovers {
+			_ = os.Remove(p)
+		}
+		log.Info("removed leftover import files", "count", len(leftovers))
+	}
+
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -447,6 +455,24 @@ func paperlessHook(st *store.Store, settings *store.SettingsCache, log *slog.Log
 	return func(ctx context.Context, m *store.Message, a *ai.Analysis) {
 		cfg := settings.Get().DMS.Paperless
 		if !cfg.Enabled || !cfg.AutoForward || !m.HasAttachments || a.Category == "" || a.Suspicious {
+			return
+		}
+		// Infected mail and mail from unauthenticated senders (anyone can
+		// send a plausible "invoice") never reach the shared archive.
+		if (m.Virus != nil && *m.Virus != "") || (m.Auth.DMARC != "pass" && m.Auth.DKIM != "pass") {
+			return
+		}
+		acct, err := st.GetAccount(ctx, m.AccountID)
+		if err != nil {
+			return
+		}
+		allowed := false
+		for _, e := range cfg.Accounts {
+			if store.Normalize(e) == acct.Email {
+				allowed = true
+			}
+		}
+		if !allowed {
 			return
 		}
 		match := false

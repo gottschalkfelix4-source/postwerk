@@ -90,6 +90,10 @@ type encryptionKeyRequest struct {
 	Kind        string `json:"kind"`
 	PublicKey   string `json:"publicKey"`
 	HideSubject bool   `json:"hideSubject"`
+	// Password/Code confirm a new key: with a stolen session, someone could
+	// otherwise store their own key and lock the owner out of their mail.
+	Password string `json:"password"`
+	Code     string `json:"code"`
 }
 
 func parseKeyRequest(req encryptionKeyRequest) (*atrest.KeyInfo, error) {
@@ -139,6 +143,8 @@ func (s *Server) putMailEncryption(w http.ResponseWriter, r *http.Request, u *st
 			return nil, invalid("Bitte einen öffentlichen Schlüssel angeben")
 		}
 		req.Kind, req.PublicKey = cur.Kind, cur.PublicKey
+	} else if err := s.reauth(r, u, req.Password, req.Code, true); err != nil {
+		return nil, err
 	}
 	info, err := parseKeyRequest(req)
 	if err != nil {
@@ -164,6 +170,17 @@ func (s *Server) deleteMailEncryption(w http.ResponseWriter, r *http.Request, u 
 func (s *Server) encryptExisting(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
 	if s.AtRest == nil {
 		return nil, errf(503, "unavailable", "Hintergrundaufträge sind nicht verfügbar")
+	}
+	var req struct {
+		Password string `json:"password"`
+		Code     string `json:"code"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	// Irreversible: every stored message is re-encrypted with the key.
+	if err := s.reauth(r, u, req.Password, req.Code, true); err != nil {
+		return nil, err
 	}
 	if _, err := s.Store.GetMailEncryption(r.Context(), u.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

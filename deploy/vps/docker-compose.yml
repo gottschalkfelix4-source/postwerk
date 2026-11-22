@@ -25,6 +25,8 @@ services:
     image: ghcr.io/gottschalkfelix4-source/postwerk:latest
     container_name: postwerk
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       # ÄNDERN: vollständiger Hostname des Mailservers (A-Record und Reverse-DNS zeigen darauf)
       POSTWERK_HOSTNAME: mail.example.com

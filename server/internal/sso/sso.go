@@ -245,7 +245,15 @@ func (m *Manager) Finish(ctx context.Context, cfg store.OIDCSettings, state, cod
 	if email == "" || !strings.Contains(email, "@") {
 		return nil, ErrEmailMissing
 	}
-	if !cfg.AllowUnverifiedEmail && !truthy(claims["email_verified"]) {
+	// email_verified only vouches for the "email" claim. With another
+	// claim (e.g. preferred_username) it counts only if both carry the
+	// same address.
+	verified := truthy(claims["email_verified"])
+	if emailClaim != "email" {
+		other, _ := claims["email"].(string)
+		verified = verified && store.Normalize(other) == email
+	}
+	if !cfg.AllowUnverifiedEmail && !verified {
 		return nil, ErrEmailUnverified
 	}
 	id := &Identity{Subject: idt.Subject, Email: email}

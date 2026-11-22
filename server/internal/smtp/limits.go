@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -71,6 +72,39 @@ func validAddress(addr string) bool {
 	for i := 0; i < len(addr); i++ {
 		c := addr[i]
 		if c < 0x21 || c == 0x7f || c == '<' || c == '>' {
+			return false
+		}
+	}
+	if at := strings.LastIndexByte(addr, '@'); at >= 0 {
+		return ValidDomain(addr[at+1:])
+	}
+	return true
+}
+
+// ValidDomain accepts a host name (letters, digits, '-', '.', '_' and
+// UTF-8 for IDNs) or an address literal such as [192.0.2.1] or
+// [IPv6:2001:db8::1]. Envelope domains and HELO names end up in trace and
+// Authentication-Results headers, so nothing else may get through.
+func ValidDomain(d string) bool {
+	if d == "" || len(d) > 255 {
+		return false
+	}
+	if d[0] == '[' {
+		if len(d) < 3 || d[len(d)-1] != ']' {
+			return false
+		}
+		for i := 1; i < len(d)-1; i++ {
+			c := d[i]
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' || c == '.' || c == ':' ||
+				strings.ContainsRune("IPvV6", rune(c))) {
+				return false
+			}
+		}
+		return true
+	}
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' || c >= 0x80) {
 			return false
 		}
 	}

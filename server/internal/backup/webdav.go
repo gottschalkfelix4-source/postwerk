@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"postwerk/internal/httpx"
 )
 
 // webdavTarget talks plain WebDAV (Nextcloud, ownCloud, Synology, QNAP,
@@ -39,7 +41,7 @@ func newWebDAV(raw, user, pass string, skipVerify bool) (*webdavTarget, error) {
 	// No overall timeout: uploads of large archives take a while. Stalled
 	// connections are caught by the response header timeout.
 	tr.ResponseHeaderTimeout = 2 * time.Minute
-	return &webdavTarget{base: u, user: user, pass: pass, client: &http.Client{Transport: tr}}, nil
+	return &webdavTarget{base: u, user: user, pass: pass, client: &http.Client{Transport: tr, CheckRedirect: httpx.SameHostRedirect}}, nil
 }
 
 func (w *webdavTarget) Describe() string {

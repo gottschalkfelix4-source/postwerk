@@ -31,6 +31,8 @@ const (
 	maxLine        = 8 << 10                         // command line without literals
 	maxLiteral     = store.MaxSieveScriptSize + 1024 // largest accepted literal
 	maxDiscard     = 1 << 20                         // oversized literals up to this size are skipped
+	maxLiterals    = 3                               // literals per command (RENAMESCRIPT/PUTSCRIPT need two)
+	maxPreAuthLit  = 4 << 10                         // before login only AUTHENTICATE sends small literals
 	maxAuthFails   = 3
 	maxBadCommands = 50
 	idleTimeout    = 10 * time.Minute
@@ -253,6 +255,13 @@ func (ss *session) readCommand() (string, []string, error) {
 	var cmd string
 	var args []string
 	lineLen := 0
+	literals := 0
+	// All literals of one command together stay within one script plus a
+	// name, so a single command line cannot buffer unbounded memory.
+	budget := maxLiteral + maxLine
+	if ss.acct == nil {
+		budget = maxPreAuthLit
+	}
 	for {
 		c, err := ss.r.ReadByte()
 		if err != nil {
@@ -283,10 +292,14 @@ func (ss *session) readCommand() (string, []string, error) {
 			}
 			args = append(args, s)
 		case c == '{':
-			s, err := ss.readLiteral()
+			if literals++; literals > maxLiterals {
+				return "", nil, &protoError{msg: "Too many literals", fatal: true}
+			}
+			s, err := ss.readLiteral(budget)
 			if err != nil {
 				return "", nil, err
 			}
+			budget -= len(s)
 			if cmd == "" {
 				return "", nil, ss.skipLine(&protoError{msg: "Command name expected"})
 			}
@@ -374,7 +387,7 @@ func (ss *session) readQuoted() (string, int, error) {
 
 // readLiteral reads "{n}" or "{n+}" CRLF followed by n octets. The opening
 // brace has been consumed.
-func (ss *session) readLiteral() (string, error) {
+func (ss *session) readLiteral(limit int) (string, error) {
 	var num strings.Builder
 	for {
 		c, err := ss.r.ReadByte()
@@ -404,8 +417,8 @@ func (ss *session) readLiteral() (string, error) {
 	if c != '\n' {
 		return "", ss.skipLine(&protoError{msg: "Invalid literal"})
 	}
-	if n > maxLiteral {
-		if n > maxDiscard {
+	if n > maxLiteral || n > limit {
+		if n > maxDiscard || ss.acct == nil {
 			return "", &protoError{msg: "Literal too large", fatal: true}
 		}
 		if _, err := io.CopyN(io.Discard, ss.r, int64(n)); err != nil {
@@ -698,7 +711,7 @@ func (ss *session) readContinuation() (string, []string, error) {
 		}
 		return "", []string{s}, ss.skipLine(nil)
 	case '{':
-		s, err := ss.readLiteral()
+		s, err := ss.readLiteral(maxPreAuthLit)
 		if err != nil {
 			return "", nil, err
 		}

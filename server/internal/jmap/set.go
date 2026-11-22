@@ -358,12 +358,16 @@ func (c *call) emailParse(raw json.RawMessage) (any, error) {
 	}
 	parsed := map[string]any{}
 	notParsable, notFound := []string{}, []string{}
-	for _, bid := range a.BlobIDs {
+	var total int64
+	for _, bid := range dedupe(a.BlobIDs) {
 		rid, _ := c.resolveCreated(bid)
 		data, _, err := c.blobData(rid)
 		if err != nil {
 			notFound = append(notFound, bid)
 			continue
+		}
+		if total += int64(len(data)); total > maxBodyFetchBytes {
+			return nil, methodErr("requestTooLarge", "blobs exceed %d bytes; request fewer blobIds", maxBodyFetchBytes)
 		}
 		if len(strings.TrimSpace(string(data[:min(len(data), 4096)]))) == 0 {
 			notParsable = append(notParsable, bid)

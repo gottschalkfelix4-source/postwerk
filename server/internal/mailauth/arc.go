@@ -835,7 +835,8 @@ func aarVouchesFor(payload, fromDomain string) bool {
 		}
 		switch e.method {
 		case "dmarc":
-			if hf := e.props["header.from"]; hf == "" || strings.EqualFold(hf, fromDomain) {
+			// A dmarc=pass without header.from vouches for nothing.
+			if hf := e.props["header.from"]; hf != "" && strings.EqualFold(hf, fromDomain) {
 				return true
 			}
 		case "dkim":

@@ -44,7 +44,12 @@ func TestMailEncryptionEndpoints(t *testing.T) {
 	if rec := e.do(t, "PUT", "/api/account/encryption", map[string]any{"kind": "pgp", "publicKey": "kaputt"}, c); rec.Code != 400 {
 		t.Fatalf("invalid key accepted: %d", rec.Code)
 	}
-	rec = e.do(t, "PUT", "/api/account/encryption", map[string]any{"kind": "pgp", "publicKey": pub, "hideSubject": true}, c)
+	// A new key needs the password: a stolen session must not be able to
+	// lock the owner out of their mail with a foreign key.
+	if rec := e.do(t, "PUT", "/api/account/encryption", map[string]any{"kind": "pgp", "publicKey": pub}, c); rec.Code != 400 {
+		t.Fatalf("put without password: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.do(t, "PUT", "/api/account/encryption", map[string]any{"kind": "pgp", "publicKey": pub, "hideSubject": true, "password": testPassword}, c)
 	if rec.Code != 200 {
 		t.Fatalf("put: %d %s", rec.Code, rec.Body)
 	}
@@ -59,7 +64,10 @@ func TestMailEncryptionEndpoints(t *testing.T) {
 	if cfg, _ := e.s.Store.GetMailEncryption(context.Background(), e.acct.ID); cfg.HideSubject || cfg.PublicKey == "" {
 		t.Fatal("options not updated")
 	}
-	if rec := e.do(t, "POST", "/api/account/encryption/encrypt-existing", nil, c); rec.Code != 200 {
+	if rec := e.do(t, "POST", "/api/account/encryption/encrypt-existing", map[string]any{}, c); rec.Code != 400 {
+		t.Fatalf("encrypt existing without password: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.do(t, "POST", "/api/account/encryption/encrypt-existing", map[string]any{"password": testPassword}, c); rec.Code != 200 {
 		t.Fatalf("encrypt existing: %d %s", rec.Code, rec.Body)
 	}
 	if rec := e.do(t, "DELETE", "/api/account/encryption", nil, c); rec.Code != 200 {

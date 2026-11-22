@@ -82,7 +82,7 @@ interface Settings {
                 replyDraft: boolean; semanticSearch: boolean; extractEvents: boolean };
     categories: string[];          // z. B. ["Rechnung","Newsletter","Support","Privat"]
   };
-  dms: { paperless: { enabled: boolean; url: string; token: string /* maskiert */; autoForward: boolean; categories: string[] } };
+  dms: { paperless: { enabled: boolean; url: string; token: string /* maskiert */; autoForward: boolean; categories: string[]; accounts: string[] } };
   security: { bruteForce: { maxAttempts: number; windowSeconds: number; banSeconds: number } };
 }
 
@@ -643,8 +643,9 @@ interface BackupSettings {
 | POST | `/api/admin/backups` | – | Sicherung starten (409, wenn schon eine läuft) |
 | POST | `/api/admin/backups/test` | `BackupSettings["target"]` | `{ ok, target, archives, latencyMs, error? }` |
 | POST | `/api/admin/backups/upload` | multipart, Feld `file` | `{ name }` |
-| GET | `/api/admin/backups/{name}/download` | – | Archiv als Datei |
-| POST | `/api/admin/backups/{name}/restore` | `{ password }` (leer = eingestelltes Passwort) | startet die Wiederherstellung, danach Neustart |
+| POST | `/api/admin/backups/{name}/download-token` | `{ password, code }` (Anmeldepasswort, ggf. 2FA-Code) | `{ token }`: einmalig, 2 Minuten gültig |
+| GET | `/api/admin/backups/{name}/download?token=…` | – | Archiv als Datei (403 ohne gültiges Token) |
+| POST | `/api/admin/backups/{name}/restore` | `{ password, accountPassword, code }` (`password` = Archiv-Passwort, leer = eingestelltes; `accountPassword`/`code` = Anmeldepasswort und ggf. 2FA-Code) | startet die Wiederherstellung, danach Neustart |
 | DELETE | `/api/admin/backups/{name}` | – | `Ok` |
 
 ## KI: in Ordner einsortieren
@@ -1123,9 +1124,9 @@ interface KeyInfo { kind: "pgp" | "smime"; fingerprint: string; description: str
 |---|---|---|---|
 | GET | `/api/account/encryption` | – | `{ config: MailEncryptionConfig \| null; job: ConversionJob \| null; messages: number }` |
 | POST | `/api/account/encryption/inspect` | `{ kind, publicKey }` | `{ key: KeyInfo; matchesAccount: boolean }` (400 bei ungültigem oder privatem Schlüssel) |
-| PUT | `/api/account/encryption` | `{ kind, publicKey, hideSubject }` (ohne `publicKey`: nur Optionen ändern) | wie GET |
+| PUT | `/api/account/encryption` | `{ kind, publicKey, hideSubject, password, code }` (ohne `publicKey`: nur Optionen ändern; mit neuem Schlüssel sind Passwort und ggf. 2FA-Code nötig) | wie GET |
 | DELETE | `/api/account/encryption` | – | wie GET (neue Mails wieder im Klartext, verschlüsselte bleiben verschlüsselt) |
-| POST | `/api/account/encryption/encrypt-existing` | – | wie GET; verschlüsselt vorhandene Nachrichten im Hintergrund (neue UID, Vorschau/KI-Daten werden entfernt) |
+| POST | `/api/account/encryption/encrypt-existing` | `{ password, code }` | wie GET; verschlüsselt vorhandene Nachrichten im Hintergrund (neue UID, Vorschau/KI-Daten werden entfernt) |
 
 ## Datenexport (DSGVO)
 

@@ -13,7 +13,7 @@ import (
 func sieveSetup(t *testing.T) *env {
 	t.Helper()
 	e := setup(t)
-	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "none", DKIM: "none", DMARC: "none"})
+	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "pass", DKIM: "none", DMARC: "none"})
 	return e
 }
 

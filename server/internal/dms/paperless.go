@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"postwerk/internal/store"
+
+	"postwerk/internal/httpx"
 )
 
 var ErrDisabled = errors.New("paperless disabled")
@@ -46,7 +48,7 @@ func Forward(ctx context.Context, cfg store.PaperlessSettings, filename, content
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Token "+cfg.Token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{CheckRedirect: httpx.SameHostRedirect}).Do(req)
 	if err != nil {
 		return err
 	}

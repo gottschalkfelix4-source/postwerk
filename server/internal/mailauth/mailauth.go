@@ -204,7 +204,7 @@ func (r Result) ResultsString() string {
 		dmarcRes += " (policy overridden: " + r.DMARCOverride + ")"
 	}
 	s := fmt.Sprintf("spf=%s smtp.mailfrom=%s; dkim=%s; dmarc=%s header.from=%s",
-		r.SPF, r.SPFDomain, r.DKIM, dmarcRes, r.FromDomain)
+		r.SPF, headerToken(r.SPFDomain), r.DKIM, dmarcRes, headerToken(r.FromDomain))
 	if r.ARC != "" {
 		s += "; arc=" + r.ARC
 		if r.ARC == "fail" && r.ARCChain.Reason != "" {
@@ -212,6 +212,23 @@ func (r Result) ResultsString() string {
 		}
 	}
 	return s
+}
+
+// headerToken returns a domain for use as an Authentication-Results
+// property value. Anything outside host-name characters (an injected
+// "; dmarc=pass", spaces, line breaks) is replaced, so attacker-chosen
+// envelope or header domains cannot add results of their own.
+func headerToken(d string) string {
+	if d == "" {
+		return "none"
+	}
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' || c >= 0x80) {
+			return "invalid"
+		}
+	}
+	return d
 }
 
 // sanitizeComment keeps a string safe for use inside a header comment.

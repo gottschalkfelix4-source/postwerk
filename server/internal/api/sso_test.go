@@ -342,6 +342,12 @@ func TestAdminLDAPEndpoints(t *testing.T) {
 	_ = e.s.Store.CreateAccount(ctx, ghost)
 	c := e.login(t, "")
 
+	// Plain ldap:// to a remote host would send every login password in clear.
+	plain := map[string]any{"enabled": true, "url": "ldap://ldap.example.org", "bindDn": "cn=svc,dc=example,dc=test", "bindPassword": "svc", "baseDn": "dc=example,dc=test"}
+	if rec := e.do(t, "PUT", "/api/admin/settings", map[string]any{"ldap": plain}, c); rec.Code != 400 || !strings.Contains(rec.Body.String(), "Klartext") {
+		t.Fatalf("plain remote ldap: %d %s", rec.Code, rec.Body.String())
+	}
+
 	ldap := map[string]any{"enabled": true, "url": srv.URL(), "bindDn": "cn=svc,dc=example,dc=test", "bindPassword": "svc", "baseDn": "dc=example,dc=test"}
 	rec := e.do(t, "PUT", "/api/admin/settings", map[string]any{"ldap": ldap}, c)
 	if rec.Code != 200 || strings.Contains(rec.Body.String(), `"bindPassword":"svc"`) {
@@ -399,4 +405,45 @@ func TestAdminLDAPEndpoints(t *testing.T) {
 	if rec := e.do(t, "POST", "/api/auth/login", map[string]string{"email": "max@example.test", "password": "max-pw"}, nil); rec.Code != 200 {
 		t.Fatalf("ldap login: %d %s", rec.Code, rec.Body.String())
 	}
+}
+
+// A local administrator is the break-glass account: SSO must not open it,
+// even when the provider reports its address.
+func TestSSORefusesLocalAdmin(t *testing.T) {
+	e, _ := newSSOEnv(t)
+	makeAdmin(t, e)
+	cb, binding := e.ssoStart(t)
+	rec := e.do(t, "GET", cb, nil, binding)
+	if code := ssoErrorOf(rec); code != "local_admin" || sessionCookieSet(rec) {
+		t.Fatalf("local admin via sso: %q, cookie %v", code, sessionCookieSet(rec))
+	}
+}
+
+// After the first login the account belongs to that provider user; another
+// provider user who later gets the same address is refused.
+func TestSSOSubjectPinned(t *testing.T) {
+	e, p := newSSOEnv(t)
+	e.ssoLogin(t)
+	p.Claims["sub"] = "someone-else"
+	cb, binding := e.ssoStart(t)
+	rec := e.do(t, "GET", cb, nil, binding)
+	if code := ssoErrorOf(rec); code != "sso_mismatch" || sessionCookieSet(rec) {
+		t.Fatalf("other subject: %q, cookie %v", code, sessionCookieSet(rec))
+	}
+	p.Claims["sub"] = "user-1"
+	e.ssoLogin(t)
+}
+
+// email_verified describes the email claim only.
+func TestSSOVerifiedOnlyForEmailClaim(t *testing.T) {
+	e, p := newSSOEnv(t)
+	e.updateOIDC(t, func(o *store.OIDCSettings) { o.EmailClaim = "preferred_username" })
+	p.Claims["preferred_username"] = e.acct.Email
+	p.Claims["email"] = "other@elsewhere.test"
+	cb, binding := e.ssoStart(t)
+	if code := ssoErrorOf(e.do(t, "GET", cb, nil, binding)); code != "email_unverified" {
+		t.Fatalf("custom claim with unrelated verified email: %q", code)
+	}
+	p.Claims["email"] = e.acct.Email
+	e.ssoLogin(t)
 }

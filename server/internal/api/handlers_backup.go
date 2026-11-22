@@ -9,12 +9,70 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"postwerk/internal/auth"
 	"postwerk/internal/backup"
 	"postwerk/internal/store"
 )
+
+// A backup holds every mailbox, all secrets and the master key. Downloading
+// one therefore needs the admin's password (and 2FA code) once more: the
+// confirmation yields a short-lived, single-use token for the download link.
+type downloadToken struct {
+	name    string
+	account int64
+	expires time.Time
+}
+
+var (
+	backupTokensMu sync.Mutex
+	backupTokens   = map[string]downloadToken{}
+)
+
+const backupTokenTTL = 2 * time.Minute
+
+func (s *Server) backupDownloadToken(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	var req struct {
+		Password string `json:"password"`
+		Code     string `json:"code"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := s.reauth(r, u, req.Password, req.Code, true); err != nil {
+		return nil, err
+	}
+	name := r.PathValue("name")
+	if !backup.ValidName(name) {
+		return nil, errNotFound
+	}
+	tok := auth.RandomToken(24)
+	now := time.Now()
+	backupTokensMu.Lock()
+	for k, t := range backupTokens {
+		if now.After(t.expires) {
+			delete(backupTokens, k)
+		}
+	}
+	backupTokens[tok] = downloadToken{name: name, account: u.ID, expires: now.Add(backupTokenTTL)}
+	backupTokensMu.Unlock()
+	s.Log.Info("backup download authorized", "component", "backup", "archive", name, "by", u.Email)
+	return map[string]string{"token": tok}, nil
+}
+
+func takeBackupToken(tok, name string, account int64) bool {
+	backupTokensMu.Lock()
+	defer backupTokensMu.Unlock()
+	t, ok := backupTokens[tok]
+	if !ok {
+		return false
+	}
+	delete(backupTokens, tok)
+	return t.name == name && t.account == account && time.Now().Before(t.expires)
+}
 
 func backupErr(err error) error {
 	switch {
@@ -59,6 +117,9 @@ func (s *Server) backupStart(w http.ResponseWriter, r *http.Request, u *store.Ac
 
 func (s *Server) backupDownload(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
 	name := r.PathValue("name")
+	if !takeBackupToken(r.URL.Query().Get("token"), name, u.ID) {
+		return nil, errf(403, "reauth_required", "Der Download-Link ist abgelaufen – bitte erneut bestätigen.")
+	}
 	rc, size, err := s.Backups.Open(r.Context(), name)
 	if err != nil {
 		return nil, backupErr(err)
@@ -66,6 +127,7 @@ func (s *Server) backupDownload(w http.ResponseWriter, r *http.Request, u *store
 	defer rc.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	w.Header().Set("Cache-Control", "no-store")
 	if size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
@@ -84,9 +146,15 @@ func (s *Server) backupDelete(w http.ResponseWriter, r *http.Request, u *store.A
 
 func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
 	var req struct {
-		Password string `json:"password"`
+		Password        string `json:"password"` // archive password
+		AccountPassword string `json:"accountPassword"`
+		Code            string `json:"code"`
 	}
 	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	// A restore replaces the whole server: confirm the admin's identity.
+	if err := s.reauth(r, u, req.AccountPassword, req.Code, true); err != nil {
 		return nil, err
 	}
 	name := r.PathValue("name")
@@ -198,6 +266,11 @@ func validateBackup(b, old *store.BackupSettings) error {
 	}
 	if b.Keep < 0 || b.Keep > 1000 {
 		return invalid("Aufbewahrung: 0 bis 1000 Sicherungen")
+	}
+	// Archives contain every mailbox, all secrets and the master key; on
+	// someone else's storage they must be encrypted.
+	if b.Target.Type != "local" && !b.Encrypt {
+		return invalid("Sicherungen auf WebDAV- oder SMB-Speicher müssen verschlüsselt werden – bitte die Verschlüsselung einschalten und ein Backup-Passwort vergeben")
 	}
 	if b.Encrypt && b.Password == "" {
 		return invalid("Bitte ein Backup-Passwort angeben")

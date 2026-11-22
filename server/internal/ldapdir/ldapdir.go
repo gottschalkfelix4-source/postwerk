@@ -83,6 +83,12 @@ func Validate(cfg store.LDAPSettings) error {
 	if cfg.StartTLS && u.Scheme == "ldaps" {
 		return errors.New("StartTLS ist nur mit ldap:// sinnvoll – ldaps:// ist bereits verschlüsselt")
 	}
+	// Every web, IMAP and SMTP login sends the user's password to the
+	// directory; unencrypted only where the traffic stays on this host or
+	// in the Docker network.
+	if u.Scheme == "ldap" && !cfg.StartTLS && !localHost(u.Hostname()) {
+		return errors.New("Unverschlüsseltes ldap:// würde Passwörter im Klartext übertragen – bitte ldaps:// oder StartTLS verwenden (ohne Verschlüsselung nur für localhost oder einen Docker-Dienstnamen)")
+	}
 	if strings.TrimSpace(cfg.BaseDN) == "" {
 		return errors.New("Bitte eine Basis-DN angeben")
 	}
@@ -101,6 +107,15 @@ func Validate(cfg store.LDAPSettings) error {
 		}
 	}
 	return nil
+}
+
+// localHost reports whether host is a loopback address, localhost or a
+// single-label name such as a Docker service ("lldap").
+func localHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return host == "localhost" || !strings.Contains(host, ".")
 }
 
 // userFilter puts the escaped address into the configured filter.

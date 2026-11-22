@@ -61,7 +61,7 @@ type Source struct {
 func skipTop(name string) bool {
 	switch name {
 	case dbName, dbName + "-wal", dbName + "-shm", dbName + "-journal",
-		"backups", "restore-staging", pendingFile, "setup-token.txt", "exports":
+		"backups", "restore-staging", pendingFile, "setup-token.txt", "admin-password.txt", "exports":
 		return true
 	}
 	return strings.HasPrefix(name, "pre-restore-") || strings.HasPrefix(name, ".backup-") ||

@@ -20,7 +20,7 @@ Anleitung: https://github.com/gottschalkfelix4-source/postwerk/blob/main/docs/UN
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/postwerk.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/main/unraid/postwerk.png</Icon>
-  <ExtraParams>--restart unless-stopped</ExtraParams>
+  <ExtraParams>--restart unless-stopped --security-opt no-new-privileges:true</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DonateText/>

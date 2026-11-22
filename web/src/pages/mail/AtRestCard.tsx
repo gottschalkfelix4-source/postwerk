@@ -4,6 +4,7 @@ import { FileKey, KeyRound, Lock, LockOpen, RefreshCw, ShieldCheck, TriangleAler
 import { atRestApi, atRestKeys, type ConversionJob, type EncryptionKind, type KeyInfo, type MailEncryptionConfig } from "@/api/atrest";
 import { errorMessage } from "@/api/client";
 import { formatDate, formatNumber } from "@/lib/format";
+import { ReauthModal, type ReauthValues } from "@/components/ReauthModal";
 import { qk } from "@/lib/queries";
 import {
   Badge,
@@ -116,6 +117,7 @@ function KeyForm({ current, onDone, onCancel }: { current: MailEncryptionConfig 
   const [checked, setChecked] = useState<{ key: KeyInfo; matchesAccount: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ack, setAck] = useState(!!current);
+  const [confirming, setConfirming] = useState(false);
 
   const inspect = useMutation({
     mutationFn: () => atRestApi.inspectKey(kind, key),
@@ -129,13 +131,14 @@ function KeyForm({ current, onDone, onCancel }: { current: MailEncryptionConfig 
     },
   });
   const save = useMutation({
-    mutationFn: () => atRestApi.saveMailEncryption({ kind, publicKey: key, hideSubject }),
+    mutationFn: (v: ReauthValues) => atRestApi.saveMailEncryption({ kind, publicKey: key, hideSubject, ...v }),
     onSuccess: (state) => {
+      setConfirming(false);
       qc.setQueryData(atRestKeys.mailEncryption, state);
       toast.success("Verschlüsselung aktiviert", "Neue Nachrichten werden ab jetzt verschlüsselt gespeichert.");
       onDone();
     },
-    onError: (err) => setError(errorMessage(err)),
+    onError: (err) => toast.error(err, "Speichern fehlgeschlagen"),
   });
 
   return (
@@ -217,7 +220,7 @@ function KeyForm({ current, onDone, onCancel }: { current: MailEncryptionConfig 
         </>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" icon={Lock} disabled={!checked || !ack} loading={save.isPending} onClick={() => save.mutate()}>
+        <Button variant="primary" icon={Lock} disabled={!checked || !ack} loading={save.isPending} onClick={() => setConfirming(true)}>
           {current ? "Schlüssel ersetzen" : "Verschlüsselung aktivieren"}
         </Button>
         {onCancel && (
@@ -227,6 +230,14 @@ function KeyForm({ current, onDone, onCancel }: { current: MailEncryptionConfig 
         )}
       </div>
       {!checked && key.trim() && <p className="text-xs text-zinc-500 dark:text-zinc-400">Bitte den Schlüssel zuerst prüfen.</p>}
+      <ReauthModal
+        open={confirming}
+        title={current ? "Schlüssel ersetzen" : "Verschlüsselung aktivieren"}
+        confirmLabel={current ? "Ersetzen" : "Aktivieren"}
+        loading={save.isPending}
+        onClose={() => setConfirming(false)}
+        onConfirm={(v) => save.mutate(v)}
+      />
     </div>
   );
 }
@@ -237,6 +248,7 @@ export function AtRestCard() {
   const toast = useToast();
   const confirm = useConfirm();
   const [replacing, setReplacing] = useState(false);
+  const [confirmEncryptAll, setConfirmEncryptAll] = useState(false);
   const q = useQuery({
     queryKey: atRestKeys.mailEncryption,
     queryFn: atRestApi.mailEncryption,
@@ -262,8 +274,11 @@ export function AtRestCard() {
     onError: (err) => toast.error(err, "Deaktivieren fehlgeschlagen"),
   });
   const encryptAll = useMutation({
-    mutationFn: atRestApi.encryptExisting,
-    onSuccess: (state) => qc.setQueryData(atRestKeys.mailEncryption, state),
+    mutationFn: (v: ReauthValues) => atRestApi.encryptExisting(v.password, v.code),
+    onSuccess: (state) => {
+      setConfirmEncryptAll(false);
+      qc.setQueryData(atRestKeys.mailEncryption, state);
+    },
     onError: (err) => toast.error(err, "Start fehlgeschlagen"),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.messages });
@@ -277,7 +292,7 @@ export function AtRestCard() {
       confirmLabel: "Verschlüsseln",
       danger: true,
     });
-    if (ok) encryptAll.mutate();
+    if (ok) setConfirmEncryptAll(true);
   };
   const onDisable = async () => {
     const ok = await confirm({
@@ -334,6 +349,15 @@ export function AtRestCard() {
           </>
         )}
       </CardBody>
+      <ReauthModal
+        open={confirmEncryptAll}
+        title="Bestehende Nachrichten verschlüsseln"
+        confirmLabel="Verschlüsseln"
+        danger
+        loading={encryptAll.isPending}
+        onClose={() => setConfirmEncryptAll(false)}
+        onConfirm={(v) => encryptAll.mutate(v)}
+      />
     </Card>
   );
 }

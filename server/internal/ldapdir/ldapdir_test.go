@@ -150,6 +150,7 @@ func TestValidate(t *testing.T) {
 		func(c *store.LDAPSettings) { c.UserFilter = "(&(mail=%s)" },
 		func(c *store.LDAPSettings) { c.BaseDN = "" },
 		func(c *store.LDAPSettings) { c.AdminFilter = "(memberOf=x" },
+		func(c *store.LDAPSettings) { c.URL = "ldap://ldap.example.org"; c.StartTLS = false },
 	}
 	for i, f := range bad {
 		c := cfg
@@ -157,6 +158,22 @@ func TestValidate(t *testing.T) {
 		if Validate(c) == nil {
 			t.Errorf("case %d accepted", i)
 		}
+	}
+}
+
+func TestValidatePlainLDAPOnlyLocal(t *testing.T) {
+	_, cfg := testServer(t)
+	for _, u := range []string{"ldap://127.0.0.1:3890", "ldap://localhost", "ldap://lldap:3890"} {
+		c := cfg
+		c.URL, c.StartTLS = u, false
+		if err := Validate(c); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	c := cfg
+	c.URL, c.StartTLS = "ldap://ldap.example.org", true
+	if err := Validate(c); err != nil {
+		t.Errorf("ldap:// with StartTLS: %v", err)
 	}
 }
 

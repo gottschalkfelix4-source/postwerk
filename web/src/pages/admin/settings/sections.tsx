@@ -1010,7 +1010,7 @@ export function DmsSection({ settings, save, saving }: SectionProps) {
       <FormSection title="Automatik" description="Anhänge von Nachrichten bestimmter KI-Kategorien automatisch weiterleiten.">
         <SwitchRow
           label="Automatisch weiterleiten"
-          description="PDF-Anhänge passender Nachrichten werden direkt nach dem Empfang übergeben."
+          description="PDF-Anhänge passender Nachrichten werden direkt nach dem Empfang übergeben – nur für die unten genannten Konten und nur, wenn DKIM oder DMARC den Absender bestätigen."
           checked={draft.autoForward}
           disabled={!draft.enabled}
           onChange={(v) => set({ autoForward: v })}
@@ -1023,6 +1023,20 @@ export function DmsSection({ settings, save, saving }: SectionProps) {
               onChange={(v) => set({ categories: v })}
               placeholder="z. B. Rechnung"
               suggestions={settings.ai.categories}
+              disabled={!draft.enabled || !draft.autoForward}
+            />
+          )}
+        </Field>
+        <Field
+          label="Konten"
+          help="Paperless ist ein gemeinsames Archiv: Nur Mails dieser Postfächer werden automatisch übergeben. Ohne Eintrag wird nichts automatisch weitergeleitet."
+        >
+          {(id) => (
+            <ChipInput
+              id={id}
+              value={draft.accounts ?? []}
+              onChange={(v) => set({ accounts: v })}
+              placeholder="z. B. buchhaltung@beispiel.de"
               disabled={!draft.enabled || !draft.autoForward}
             />
           )}

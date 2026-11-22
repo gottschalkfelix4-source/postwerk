@@ -214,12 +214,19 @@ func (s *Server) dmsForward(w http.ResponseWriter, r *http.Request, u *store.Acc
 	if err != nil {
 		return nil, err
 	}
+	// Infected mail never goes on to the shared document archive, not even
+	// on an admin's request.
+	if m.Virus != nil && *m.Virus != "" {
+		return nil, errf(403, "virus", "Weiterleiten gesperrt: Die Nachricht enthält einen Virus")
+	}
 	cfg := s.Settings.Get().DMS.Paperless
 	if err := dms.Forward(r.Context(), cfg, a.Filename, a.ContentType, a.Data, m.Subject); err != nil {
 		if errors.Is(err, dms.ErrDisabled) {
 			return nil, errf(503, "dms_disabled", "Paperless ist nicht eingerichtet")
 		}
-		return nil, errf(502, "dms_error", err.Error())
+		// Paperless errors can carry its internal address; details go to the log.
+		s.Log.Warn("paperless forward failed", "component", "dms", "user", u.Email, "err", err)
+		return nil, errf(502, "dms_error", "Paperless hat die Datei nicht angenommen. Details stehen im Server-Log.")
 	}
 	s.Log.Info("attachment forwarded to paperless", "component", "dms", "user", u.Email, "file", a.Filename)
 	return ok(), nil

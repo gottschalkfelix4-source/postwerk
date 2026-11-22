@@ -247,11 +247,19 @@ func TestQuotaFullRecipientBounces(t *testing.T) {
 	e := setup(t)
 	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "none", DKIM: "none", DMARC: "none"})
 	setQuota(t, e.st, "bob@example.test", 100)
+	// An unverified sender gets no bounce (it would be backscatter).
+	if err := smtp.SendMail(e.smtp, nil, "x@sender.test", []string{"alice@example.test", "bob@example.test"}, mail("x@sender.test", "alice@example.test", "Gefaelscht")); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := e.st.ListQueue(context.Background()); len(items) != 0 {
+		t.Fatalf("bounce to unverified sender: %+v", items)
+	}
+	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "pass", DKIM: "none", DMARC: "none"})
 	// Bob still has room at RCPT time, but this message does not fit.
 	if err := smtp.SendMail(e.smtp, nil, "x@sender.test", []string{"alice@example.test", "bob@example.test"}, mail("x@sender.test", "alice@example.test", "Mehrere")); err != nil {
 		t.Fatal(err)
 	}
-	if n := inboxCount(t, e.st, "alice@example.test"); n != 1 {
+	if n := inboxCount(t, e.st, "alice@example.test"); n != 2 {
 		t.Fatalf("alice inbox = %d", n)
 	}
 	items, _ := e.st.ListQueue(context.Background())
@@ -364,6 +372,11 @@ func TestSRSForwardAndBounce(t *testing.T) {
 	err := smtp.SendMail(e.smtp, nil, "", []string{forged}, dsn)
 	expectCode(t, err, "550")
 
+	// A valid SRS address with a real envelope sender would turn us into a
+	// relay towards the original sender.
+	err = smtp.SendMail(e.smtp, nil, "spam@other.test", []string{srsAddr}, dsn)
+	expectCode(t, err, "550")
+
 	// A queue bounce for the forwarded message reaches the original sender.
 	e.svc.Bounce(context.Background(), srsAddr, []string{"ziel@other.test"}, "Benutzer unbekannt", dsn)
 	items, _ = e.st.ListQueue(context.Background())
@@ -374,7 +387,7 @@ func TestSRSForwardAndBounce(t *testing.T) {
 
 func TestVacationOnlyWhenAddressed(t *testing.T) {
 	e := setup(t)
-	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "none", DKIM: "none", DMARC: "none"})
+	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "pass", DKIM: "none", DMARC: "none"})
 	alice, _ := e.st.GetAccountByEmail(context.Background(), "alice@example.test")
 	if err := e.st.SetVacation(context.Background(), alice.ID, &store.Vacation{Enabled: true, Subject: "Urlaub", Body: "Bin weg"}); err != nil {
 		t.Fatal(err)
@@ -423,5 +436,38 @@ func TestVacationOnlyWhenAddressed(t *testing.T) {
 	raw, _ := e.st.Blobs.Get(q[0].BlobHash)
 	if strings.Contains(string(raw), "\r\nX-Injected") {
 		t.Fatalf("header injected via Message-ID:\n%s", raw)
+	}
+}
+
+// Auto-replies go only to senders that SPF or DKIM authenticate; a forged
+// envelope sender gets no backscatter.
+func TestVacationNotToUnverifiedSender(t *testing.T) {
+	e := setup(t)
+	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "softfail", DKIM: "none", DMARC: "none"})
+	alice, _ := e.st.GetAccountByEmail(context.Background(), "alice@example.test")
+	if err := e.st.SetVacation(context.Background(), alice.ID, &store.Vacation{Enabled: true, Subject: "Urlaub", Body: "Bin weg"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := smtp.SendMail(e.smtp, nil, "opfer@sender.test", []string{"alice@example.test"}, mail("opfer@sender.test", "alice@example.test", "Gefaelscht")); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := e.st.ListQueue(context.Background())
+	for _, it := range items {
+		if it.To[0] == "opfer@sender.test" {
+			t.Fatalf("vacation reply to unverified sender: %+v", it)
+		}
+	}
+	// A DKIM signature of the sender's domain verifies it as well.
+	e.svc.AuthCheck = fakeAuth(mailauth.Result{SPF: "softfail", DKIM: "pass", DKIMDomains: []string{"sender.test"}, DMARC: "pass"})
+	if err := smtp.SendMail(e.smtp, nil, "freund@sender.test", []string{"alice@example.test"}, mail("freund@sender.test", "alice@example.test", "Signiert")); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = e.st.ListQueue(context.Background())
+	found := false
+	for _, it := range items {
+		found = found || it.To[0] == "freund@sender.test"
+	}
+	if !found {
+		t.Fatal("no vacation reply to DKIM-verified sender")
 	}
 }

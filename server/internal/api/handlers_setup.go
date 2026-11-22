@@ -44,7 +44,13 @@ func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) (any, error
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"mode": mode, "hostname": s.Settings.Get().Server.Hostname, "version": s.Version}, nil
+	out := map[string]any{"mode": mode, "hostname": s.Settings.Get().Server.Hostname}
+	// This endpoint needs no login; once set up, the exact version would
+	// only help attackers pick exploits. Admins see it in the dashboard.
+	if mode != "done" {
+		out["version"] = s.Version
+	}
+	return out, nil
 }
 
 func (s *Server) setupInitialize(w http.ResponseWriter, r *http.Request) (any, error) {

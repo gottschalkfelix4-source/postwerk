@@ -317,3 +317,23 @@ func TestQuoting(t *testing.T) {
 		t.Fatal(quote("a\r\nb"))
 	}
 }
+
+// Literals are read before the command is checked, so without a budget one
+// unauthenticated line could buffer hundreds of megabytes.
+func TestLiteralBudget(t *testing.T) {
+	e := start(t, true)
+	c := dial(t, e.addr)
+	c.response() // greeting
+	chunk := strings.Repeat("x", 5000)
+	c.write("NOOP {5000+}\r\n" + chunk + "\r\n")
+	if r := c.response(); !strings.HasPrefix(last(r), "BYE") {
+		t.Fatalf("large literal before login: %q", r)
+	}
+
+	c = login(t, e)
+	lit := strings.Repeat("y", 100)
+	c.write("NOOP" + strings.Repeat(" {100+}\r\n"+lit, maxLiterals+1) + "\r\n")
+	if r := c.response(); !strings.HasPrefix(last(r), "BYE") {
+		t.Fatalf("too many literals: %q", r)
+	}
+}

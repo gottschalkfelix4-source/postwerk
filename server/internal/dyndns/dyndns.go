@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"postwerk/internal/store"
+
+	"postwerk/internal/httpx"
 )
 
 type Preset struct {
@@ -76,7 +78,7 @@ type Updater struct {
 }
 
 func New(s *store.SettingsCache, log *slog.Logger) *Updater {
-	return &Updater{Settings: s, Log: log.With("component", "dyndns"), HTTP: &http.Client{Timeout: 20 * time.Second}, wake: make(chan struct{}, 1)}
+	return &Updater{Settings: s, Log: log.With("component", "dyndns"), HTTP: &http.Client{Timeout: 20 * time.Second, CheckRedirect: httpx.SameHostRedirect}, wake: make(chan struct{}, 1)}
 }
 
 // Notify triggers a check soon (e.g. after settings changed).

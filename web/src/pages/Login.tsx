@@ -19,6 +19,8 @@ const ssoErrors: Record<string, string> = {
   email_missing: "Der Identitätsanbieter hat keine E-Mail-Adresse übermittelt.",
   no_account: "Für diese E-Mail-Adresse gibt es kein Postwerk-Konto.",
   disabled: "Dieses Konto ist deaktiviert.",
+  local_admin: "Lokale Administratorkonten melden sich mit Passwort an, nicht per Single Sign-on.",
+  sso_mismatch: "Dieses Konto ist mit einem anderen Benutzer beim Identitätsanbieter verknüpft.",
   sso_disabled: "Single Sign-on ist nicht eingerichtet.",
   unavailable: "Der Identitätsanbieter ist gerade nicht erreichbar.",
   rate_limited: "Zu viele Fehlversuche. Bitte später erneut versuchen.",

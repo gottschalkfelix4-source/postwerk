@@ -315,6 +315,15 @@ func (c *call) emailGet(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if a.wantsValues() {
+		var total int64
+		for _, e := range rows {
+			total += e.Size
+		}
+		if total > maxBodyFetchBytes {
+			return nil, methodErr("requestTooLarge", "body values of these emails exceed %d bytes; request fewer ids", maxBodyFetchBytes)
+		}
+	}
 	list := []any{}
 	notFound := []string{}
 	for _, sid := range ids {

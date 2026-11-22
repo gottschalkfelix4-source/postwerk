@@ -402,8 +402,8 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "SAMEORIGIN")
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
-			"font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; frame-src 'self' about: blob: data:; "+
+		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+			"font-src 'self' data:; img-src 'self' data: blob: https: http:; frame-src 'self' about: blob: data:; "+
 			"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'")
 		if r.TLS != nil && s.HTTPPort.ValidCert() {
 			h.Set("Strict-Transport-Security", "max-age=31536000")
@@ -576,6 +576,7 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/admin/backups", s.admin(s.backupStart))
 	m.HandleFunc("POST /api/admin/backups/upload", s.admin(s.backupUpload))
 	m.HandleFunc("POST /api/admin/backups/test", s.admin(s.backupTest))
+	m.HandleFunc("POST /api/admin/backups/{name}/download-token", s.admin(s.backupDownloadToken))
 	m.HandleFunc("GET /api/admin/backups/{name}/download", s.admin(s.backupDownload))
 	m.HandleFunc("POST /api/admin/backups/{name}/restore", s.admin(s.backupRestore))
 	m.HandleFunc("DELETE /api/admin/backups/{name}", s.admin(s.backupDelete))

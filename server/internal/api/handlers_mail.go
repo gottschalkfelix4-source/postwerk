@@ -209,6 +209,7 @@ func (s *Server) rawMessage(w http.ResponseWriter, r *http.Request, u *store.Acc
 		return nil, err
 	}
 	w.Header().Set("Content-Type", "message/rfc822")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="nachricht-%d.eml"`, id))
 	w.Write(raw)
 	return nil, nil
@@ -262,6 +263,7 @@ func (s *Server) attachment(w http.ResponseWriter, r *http.Request, u *store.Acc
 	// Always download; never render untrusted content inline on our origin.
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", disp)
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(a.Data)))
 	w.Write(a.Data)
 	return nil, nil

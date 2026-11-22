@@ -33,6 +33,8 @@ func pimErr(err error) error {
 		return errf(409, "conflict", "Der Eintrag wurde inzwischen geändert – bitte neu laden")
 	case errors.Is(err, store.ErrUIDConflict):
 		return errf(409, "conflict", "Ein Eintrag mit dieser UID existiert bereits")
+	case errors.Is(err, store.ErrQuota):
+		return errf(507, "quota", "Das Speicherkontingent ist erschöpft oder das Limit für Einträge erreicht")
 	}
 	return err
 }
@@ -108,7 +110,7 @@ func (s *Server) createCollection(kind string) userHandler {
 			return nil, err
 		}
 		if err := s.Store.CreateCollection(r.Context(), c); err != nil {
-			return nil, err
+			return nil, pimErr(err)
 		}
 		return s.collectionOut(r.Context(), u, c), nil
 	}

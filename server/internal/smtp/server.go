@@ -14,6 +14,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"postwerk/internal/metrics"
@@ -75,8 +76,30 @@ type Server struct {
 	MaxLineLength  int           // maximum message line length without CRLF (default 4096)
 	MaxSessionTime time.Duration // maximum lifetime of a session (default 30 minutes)
 	MaxJunkCmds    int           // NOOP/RSET/VRFY/HELO commands without a delivered message (default 100)
+	MaxDataPhases  int           // messages read and processed at the same time (default 16)
 
-	limiter connLimiter
+	limiter   connLimiter
+	dataOnce  sync.Once
+	dataSlots chan struct{}
+}
+
+const defaultMaxDataPhases = 16
+
+// acquireData reserves one of the slots for reading and processing a
+// message. Every message is held in memory (up to MaxSize, plus copies
+// while it is checked), so the number of concurrent DATA phases is what
+// bounds memory use; a client that finds all slots busy is asked to retry.
+func (s *Server) acquireData(ctx context.Context) (func(), bool) {
+	s.dataOnce.Do(func() { s.dataSlots = make(chan struct{}, orDefault(s.MaxDataPhases, defaultMaxDataPhases)) })
+	t := time.NewTimer(30 * time.Second)
+	defer t.Stop()
+	select {
+	case s.dataSlots <- struct{}{}:
+		return func() { <-s.dataSlots }, true
+	case <-t.C:
+	case <-ctx.Done():
+	}
+	return nil, false
 }
 
 func orDefault(v, def int) int {
@@ -269,7 +292,7 @@ func (ss *session) authAllowed() bool {
 func (ss *session) handle(cmd, arg string) bool {
 	switch cmd {
 	case "HELO", "EHLO":
-		if arg == "" {
+		if !ValidDomain(arg) {
 			ss.replyR(NewReply(501, "5.5.4", "Syntax: "+cmd+" hostname"))
 			return false
 		}
@@ -519,6 +542,12 @@ func (ss *session) handleData() bool {
 		ss.replyR(NewReply(503, "5.5.1", "Need RCPT command first"))
 		return false
 	}
+	release, ok := ss.s.acquireData(ss.ctx)
+	if !ok {
+		ss.replyR(NewReply(451, "4.3.2", "Server busy, try again later"))
+		return false
+	}
+	defer release()
 	ss.reply(354, "", "Start mail input; end with <CRLF>.<CRLF>")
 	_ = ss.conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
 	buf, res, err := readData(ss.r, ss.s.MaxSize(), orDefault(ss.s.MaxLineLength, defaultMaxLineLength))

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"postwerk/internal/message"
+	"postwerk/internal/store"
 )
 
 // blobData returns the content and media type of a blob the account may
@@ -60,6 +61,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.problem(w, http.StatusBadRequest, "", "could not read upload")
+		return
+	}
+	if s.Store.PendingUploadBytes(r.Context(), acct.ID)+int64(len(data)) > store.MaxPendingUploadBytes ||
+		s.Store.CheckQuota(r.Context(), acct.ID, int64(len(data))) != nil {
+		s.problem(w, http.StatusRequestEntityTooLarge, "urn:ietf:params:jmap:error:limit", "storage quota or upload limit reached", "limit", "maxSizeUpload")
 		return
 	}
 	typ := "application/octet-stream"

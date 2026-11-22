@@ -246,6 +246,10 @@ type PaperlessSettings struct {
 	Token       string   `json:"token" secret:"true"`
 	AutoForward bool     `json:"autoForward"`
 	Categories  []string `json:"categories"`
+	// Accounts lists the addresses whose mail may be forwarded automatically.
+	// The archive is shared, so nobody's documents land there unless the
+	// admin names the account; empty means no automatic forwarding.
+	Accounts []string `json:"accounts"`
 }
 
 type SecuritySettings struct {
@@ -292,6 +296,7 @@ func DefaultSettings(hostname string) Settings {
 		CategoryFolders: map[string]string{"Rechnung": "Rechnungen", "Newsletter": "Newsletter", "Versand": "Versand"}}
 	s.DMS.Paperless.URL = "http://paperless:8000"
 	s.DMS.Paperless.Categories = []string{"Rechnung"}
+	s.DMS.Paperless.Accounts = []string{}
 	s.DynDNS = DynDNSSettings{Preset: "strato", UpdateURL: "https://dyndns.strato.com/nic/update", Hostnames: []string{},
 		IPCheckURL: "https://api.ipify.org", IntervalMinutes: 5}
 	s.Relay = RelaySettings{Preset: "strato", Host: "smtp.strato.de", Port: 465, Security: "tls", SPFInclude: "include:_spf.strato.com"}
@@ -370,6 +375,9 @@ func (s *Store) LoadSettings(ctx context.Context, hostname string) (*SettingsCac
 	}
 	if cur.Notifications.Recipients == nil {
 		cur.Notifications.Recipients = []string{}
+	}
+	if cur.DMS.Paperless.Accounts == nil {
+		cur.DMS.Paperless.Accounts = []string{}
 	}
 	if cur.Notifications.Categories == nil {
 		cur.Notifications.Categories = []string{}

@@ -20,6 +20,17 @@ unter **Einstellungen → Verzeichnis (LDAP)** bzw. **Einstellungen → Single S
   nur zu, wenn mindestens ein aktives lokales Administratorkonto existiert.
 - Bestehende lokale Konten können sich zusätzlich per SSO anmelden und behalten ihr Passwort und ihre
   Rolle. Die Admin-Rolle aus dem Admin-Claim gilt nur für Konten, die per SSO angelegt wurden.
+- **Lokale Administratorkonten** sind davon ausgenommen: Sie melden sich immer mit Passwort (und
+  Zwei-Faktor-Code) an. Wer beim Anbieter die Adresse eines Admins eintragen kann, kommt so nicht an
+  dessen Konto.
+- Bei der ersten SSO-Anmeldung merkt sich Postwerk die Benutzerkennung des Anbieters (`sub`). Danach
+  nimmt das Konto nur noch Anmeldungen dieses Anbieter-Benutzers an, auch wenn ein anderer Benutzer
+  später dieselbe E-Mail-Adresse bekommt. Nach einem Wechsel des Anbieters (andere Issuer-URL) wird
+  die Verknüpfung bei der nächsten Anmeldung neu gesetzt.
+- **Zwei-Faktor-Anmeldung:** Bei einer SSO-Anmeldung fragt Postwerk keinen eigenen 2FA-Code ab – die
+  Absicherung liegt dann beim Identitätsanbieter. Schalte dort MFA für alle Benutzer ein, sonst ist ein
+  Konto mit Postwerk-2FA per SSO nur so gut geschützt wie sein Anbieter-Passwort. Für sensible Aktionen
+  (App-Passwörter, Schlüssel, Backups) verlangt Postwerk eine SSO-Anmeldung, die höchstens 15 Minuten alt ist.
 
 ## OIDC: Redirect-URI und Scopes
 

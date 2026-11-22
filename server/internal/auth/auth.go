@@ -276,7 +276,7 @@ func (a *Authenticator) Interactive(ctx context.Context, ip, email, password, to
 // the current password and, if needCode is set and 2FA is active, a TOTP or
 // recovery code. Failures count towards the brute-force limits.
 func (a *Authenticator) Reauth(ctx context.Context, ip string, acct *store.Account, password, code string, needCode bool) error {
-	if a.Guard.Banned(ip) {
+	if a.Guard.Banned(ip) || a.Guard.AccountLocked(ip, acct.Email) {
 		return ErrBanned
 	}
 	_, ok, err := a.primary(ctx, acct.Email, password, acct)

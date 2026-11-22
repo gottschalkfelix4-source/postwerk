@@ -343,6 +343,17 @@ func (s *Store) PruneChanges(ctx context.Context, maxAge time.Duration, maxTombs
 // ---- JMAP uploads ----
 
 // AddUpload remembers that an account uploaded a blob.
+// MaxPendingUploadBytes bounds the JMAP uploads an account may hold before
+// they are used or expire.
+const MaxPendingUploadBytes = 2 << 30
+
+// PendingUploadBytes sums the account's not yet expired JMAP uploads.
+func (s *Store) PendingUploadBytes(ctx context.Context, accountID int64) int64 {
+	var n int64
+	_ = s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(size),0) FROM jmap_uploads WHERE account_id = ?`, accountID).Scan(&n)
+	return n
+}
+
 func (s *Store) AddUpload(ctx context.Context, accountID int64, hash, typ string, size int64) error {
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO jmap_uploads(account_id, blob_hash, type, size, created_at) VALUES (?,?,?,?,?)
 		ON CONFLICT(account_id, blob_hash) DO UPDATE SET created_at = excluded.created_at, type = excluded.type`, accountID, hash, typ, size, now())

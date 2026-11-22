@@ -611,9 +611,15 @@ func (s *Store) CheckQuota(ctx context.Context, accountID, size int64) error {
 	return nil
 }
 
+// UsedBytes is what counts against the quota: messages plus calendar and
+// contact data, so DAV cannot be used to fill the disk past the quota.
 func (s *Store) UsedBytes(ctx context.Context, accountID int64) int64 {
 	var n int64
-	_ = s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(size),0) FROM messages WHERE account_id = ?`, accountID).Scan(&n)
+	_ = s.DB.QueryRowContext(ctx, `SELECT
+		(SELECT COALESCE(SUM(size),0) FROM messages WHERE account_id = ?1) +
+		(SELECT COALESCE(SUM(length(data)),0) FROM calendar_objects WHERE collection_id IN (SELECT id FROM dav_collections WHERE account_id = ?1)) +
+		(SELECT COALESCE(SUM(length(data)),0) FROM address_objects WHERE collection_id IN (SELECT id FROM dav_collections WHERE account_id = ?1))`,
+		accountID).Scan(&n)
 	return n
 }
 

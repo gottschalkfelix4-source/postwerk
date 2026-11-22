@@ -152,7 +152,7 @@ export interface Settings {
       keepImportant: boolean;                    // high priority stays in the inbox
     };
   };
-  dms: { paperless: { enabled: boolean; url: string; token: string /* masked */; autoForward: boolean; categories: string[] } };
+  dms: { paperless: { enabled: boolean; url: string; token: string /* masked */; autoForward: boolean; categories: string[]; accounts: string[] } };
   security: { bruteForce: { maxAttempts: number; windowSeconds: number; banSeconds: number } };
   dyndns: {
     enabled: boolean;

@@ -455,7 +455,29 @@ func getIDs(ids *[]string) ([]string, error) {
 	if len(*ids) > maxObjectsInGet {
 		return nil, methodErr("requestTooLarge", "at most %d ids per call", maxObjectsInGet)
 	}
-	return *ids, nil
+	return dedupe(*ids), nil
+}
+
+// dedupe drops repeated ids (RFC 8620 §5.1: each id is answered once), so a
+// request cannot multiply the work for one large object.
+func dedupe(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// maxBodyFetchBytes caps how much message data one /get or /parse call may
+// decode into body values; larger requests must be split by the client.
+const maxBodyFetchBytes = 64 << 20
+
+func (o bodyOpts) wantsValues() bool {
+	return o.FetchTextBodyValues || o.FetchHTMLBodyValues || o.FetchAllBodyValues
 }
 
 // propFilter decides which properties of an object are returned.

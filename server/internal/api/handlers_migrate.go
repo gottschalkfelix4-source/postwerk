@@ -184,6 +184,11 @@ func (s *Server) importFile(w http.ResponseWriter, r *http.Request, u *store.Acc
 				mailboxID = id
 			}
 		case "file":
+			// One file per request: a second part would leave the first
+			// temp file behind (only tmpPath is removed afterwards).
+			if tmpPath != "" {
+				return nil, invalid("Bitte nur eine Datei pro Import hochladen")
+			}
 			filename = filepath.Base(part.FileName())
 			f, err := os.CreateTemp(filepath.Join(s.Cfg.DataDir), "import-*.tmp")
 			if err != nil {

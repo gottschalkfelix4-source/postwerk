@@ -19,6 +19,8 @@ import { adminApi } from "@/api/endpoints";
 import { errorMessage } from "@/api/client";
 import type { BackupArchive, BackupJob, BackupRun } from "@/api/types";
 import { formatBytes, formatDateTime, formatDuration, formatRelative } from "@/lib/format";
+import { useMe } from "@/lib/auth";
+import { ReauthModal, type ReauthValues } from "@/components/ReauthModal";
 import {
   Badge,
   Button,
@@ -139,21 +141,29 @@ function useReloadAfterRestart(active: boolean) {
 function RestoreDialog({ archive, onClose }: { archive: BackupArchive | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const me = useMe();
   const [password, setPassword] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [code, setCode] = useState("");
   const [confirmText, setConfirmText] = useState("");
   useEffect(() => {
     setPassword("");
+    setAccountPassword("");
+    setCode("");
     setConfirmText("");
   }, [archive]);
+  const sso = me.source === "oidc";
   const restore = useMutation({
-    mutationFn: () => adminApi.restoreBackup(archive!.name, password),
+    mutationFn: () => adminApi.restoreBackup(archive!.name, password, accountPassword, code.trim()),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.status });
       toast.info("Wiederherstellung gestartet", "Der Server startet danach automatisch neu.");
       onClose();
     },
   });
-  const ready = confirmText.trim().toUpperCase() === "WIEDERHERSTELLEN";
+  const ready =
+    confirmText.trim().toUpperCase() === "WIEDERHERSTELLEN" &&
+    (sso || (accountPassword.length > 0 && (!me.totpEnabled || code.trim().length > 0)));
   return (
     <Modal
       open={archive !== null}
@@ -183,6 +193,16 @@ function RestoreDialog({ archive, onClose }: { archive: BackupArchive | null; on
             {(id) => <PasswordInput id={id} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />}
           </Field>
         )}
+        {!sso && (
+          <Field label="Dein Passwort" help="Zur Sicherheit bestätigst du die Wiederherstellung mit deinem Anmeldepasswort.">
+            {(id) => <PasswordInput id={id} value={accountPassword} onChange={(e) => setAccountPassword(e.target.value)} autoComplete="current-password" />}
+          </Field>
+        )}
+        {!sso && me.totpEnabled && (
+          <Field label="Code" help="6-stelliger Code aus der Authenticator-App oder ein Wiederherstellungscode.">
+            {(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" placeholder="123456" />}
+          </Field>
+        )}
         <Field label={<>Zur Bestätigung <strong>WIEDERHERSTELLEN</strong> eingeben</>}>
           {(id) => <Input id={id} value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoComplete="off" />}
         </Field>
@@ -198,6 +218,21 @@ function ArchivesTab({ onOpenSettings }: { onOpenSettings: () => void }) {
   const confirm = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   const [restoreTarget, setRestoreTarget] = useState<BackupArchive | null>(null);
+  const [downloadTarget, setDownloadTarget] = useState<BackupArchive | null>(null);
+  const download = useMutation({
+    mutationFn: (v: ReauthValues) => adminApi.backupDownloadToken(downloadTarget!.name, v.password, v.code),
+    onSuccess: ({ token }) => {
+      const name = downloadTarget!.name;
+      setDownloadTarget(null);
+      const a = document.createElement("a");
+      a.href = adminApi.backupDownloadUrl(name, token);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    },
+    onError: (err) => toast.error(err, "Download nicht möglich"),
+  });
   const [upload, setUpload] = useState<number | null>(null);
 
   const status = useQuery({
@@ -395,15 +430,7 @@ function ArchivesTab({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <Td className="whitespace-nowrap text-right tabular-nums">{formatBytes(a.size)}</Td>
                   <Td className="whitespace-nowrap text-right">
                     <div className="inline-flex items-center gap-1">
-                      <a
-                        href={adminApi.backupDownloadUrl(a.name)}
-                        download={a.name}
-                        title="Herunterladen"
-                        aria-label="Herunterladen"
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                      >
-                        <Download className="h-4 w-4" />
-                      </a>
+                      <Button size="icon-sm" variant="ghost" icon={Download} title="Herunterladen" aria-label="Herunterladen" onClick={() => setDownloadTarget(a)} />
                       <Button size="icon-sm" variant="ghost" icon={RotateCcw} title="Wiederherstellen" aria-label="Wiederherstellen" disabled={!!job} onClick={() => setRestoreTarget(a)} />
                       <Button size="icon-sm" variant="danger-ghost" icon={Trash2} title="Löschen" aria-label="Löschen" disabled={!!job} onClick={() => void onDelete(a)} />
                     </div>
@@ -461,6 +488,15 @@ function ArchivesTab({ onOpenSettings }: { onOpenSettings: () => void }) {
       </Card>
 
       <RestoreDialog archive={restoreTarget} onClose={() => setRestoreTarget(null)} />
+      <ReauthModal
+        open={downloadTarget !== null}
+        title="Sicherung herunterladen"
+        description="Die Sicherung enthält alle Postfächer und Schlüssel des Servers."
+        confirmLabel="Herunterladen"
+        loading={download.isPending}
+        onClose={() => setDownloadTarget(null)}
+        onConfirm={(v) => download.mutate(v)}
+      />
     </div>
   );
 }

@@ -20,6 +20,8 @@ services:
     build: .
     container_name: postwerk
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     hostname: ${POSTWERK_HOSTNAME:-mail.example.com}
     env_file:
       - path: .env

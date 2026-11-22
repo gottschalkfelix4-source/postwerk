@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/net/publicsuffix"
+
+	"postwerk/internal/httpx"
 )
 
 // Record is a single resource record in canonical form:
@@ -114,7 +116,7 @@ func New(id string, creds map[string]string) (Provider, Info, error) {
 		}
 		clean[f.Key] = v
 	}
-	p, err := info.New(clean, &http.Client{Timeout: 30 * time.Second})
+	p, err := info.New(clean, &http.Client{Timeout: 30 * time.Second, CheckRedirect: httpx.SameHostRedirect})
 	return p, info, err
 }
 

@@ -62,11 +62,15 @@ func TestOpenUpgradesToRedirectWithValidCert(t *testing.T) {
 	if c.ForcesHTTPS() {
 		t.Fatal("ForcesHTTPS must be false without a valid certificate")
 	}
-	// Certificate files (e.g. from a reverse proxy) never trigger the redirect.
+	// Valid certificate files redirect as well, so the web interface is not
+	// used over plain HTTP; behind a reverse proxy the proxy decides.
 	current = caSigned(t, host, time.Now().AddDate(0, 2, 0), false)
 	cfg.TLS.Mode = "files"
 	settings.Save(ctx, cfg)
-	check(Full, true, "certificate files")
+	check(Redirect, true, "certificate files")
+	cfg.Web.BehindProxy = true
+	settings.Save(ctx, cfg)
+	check(Full, true, "certificate files behind a reverse proxy")
 }
 
 func TestForwardedProtoNeedsTrustedProxy(t *testing.T) {

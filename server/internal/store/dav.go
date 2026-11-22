@@ -77,6 +77,13 @@ type DavObject struct {
 	UpdatedAt       time.Time
 }
 
+// Per-account limits that hold even without a byte quota, so one account
+// cannot grow the database without bound through CalDAV/CardDAV.
+const (
+	MaxCollectionsPerAccount = 200
+	MaxObjectsPerCollection  = 100000
+)
+
 func objTable(kind string) string {
 	if kind == KindAddressBook {
 		return "address_objects"
@@ -197,6 +204,11 @@ func (s *Store) CreateCollection(ctx context.Context, c *Collection) error {
 	}
 	if c.Kind == KindCalendar && c.Color == "" {
 		c.Color = DefaultCalendarColor
+	}
+	var count int
+	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM dav_collections WHERE account_id = ?`, c.AccountID).Scan(&count)
+	if count >= MaxCollectionsPerAccount {
+		return ErrQuota
 	}
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -373,6 +385,20 @@ func (s *Store) PutObject(ctx context.Context, c *Collection, name string, data 
 		return nil, false, err
 	}
 	etag := ETagOf(data)
+	var oldLen int64
+	_ = s.DB.QueryRowContext(ctx, `SELECT length(data) FROM `+objTable(c.Kind)+` WHERE collection_id = ? AND name = ?`, c.ID, name).Scan(&oldLen)
+	if grow := int64(len(data)) - oldLen; grow > 0 {
+		if err := s.CheckQuota(ctx, c.AccountID, grow); err != nil {
+			return nil, false, err
+		}
+	}
+	if oldLen == 0 {
+		var count int
+		_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+objTable(c.Kind)+` WHERE collection_id = ?`, c.ID).Scan(&count)
+		if count >= MaxObjectsPerCollection {
+			return nil, false, ErrQuota
+		}
+	}
 	var obj *DavObject
 	created := false
 	err = s.tx(ctx, func(tx *sql.Tx) error {

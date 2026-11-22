@@ -161,6 +161,12 @@ func (s *Service) CheckRecipient(ctx context.Context, env *smtp.Envelope, rcpt s
 			s.Log.Info("invalid srs recipient", "rcpt", rcpt, "err", err)
 			return smtp.NewReply(550, "5.1.1", "Invalid or expired SRS address")
 		}
+		// SRS addresses only take bounces. Anything with a real sender would
+		// let anyone who saw the Return-Path mail the original sender
+		// through us.
+		if env.From != "" && env.From != "<>" {
+			return smtp.NewReply(550, "5.7.1", "SRS address accepts bounces only")
+		}
 	} else {
 		local, external, err := s.Store.ResolveRecipient(ctx, rcpt)
 		if err != nil {
@@ -305,6 +311,9 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	log := s.Log.With("session", env.ID, "ip", env.RemoteIP.String(), "from", env.From)
 	if n := message.CountHeader(data, "Received"); n > MaxHops {
 		return s.reject(ctx, log, smtp.NewReply(554, "5.4.6", "Too many hops"), "mail loop suspected", "received", n)
+	}
+	if message.TooComplex(data) {
+		return s.reject(ctx, log, smtp.NewReply(554, "5.6.0", "MIME structure too deeply nested"), "mime structure too complex")
 	}
 	parsed, err := message.Parse(data, false)
 	if err != nil {
@@ -485,8 +494,14 @@ func (s *Service) Inbound(ctx context.Context, env *smtp.Envelope, data []byte) 
 	}
 	// Partial success: the sender must learn about the recipients that
 	// could not be served instead of losing the message silently.
+	// Only authenticated senders get the bounce; for a forged sender it
+	// would be backscatter to an uninvolved third party.
 	if len(failed) > 0 {
-		s.bounceFailed(ctx, env.From, failed, full)
+		if senderVerified(deliveryMeta{Auth: authRes}, env.From) {
+			s.bounceFailed(ctx, env.From, failed, full)
+		} else {
+			log.Warn("no bounce to unverified sender", "failed", len(failed))
+		}
 	}
 	if virus == "" {
 		s.ingestReports(ctx, log, env.Rcpts, parsed, data)
@@ -573,6 +588,32 @@ type deliveryMeta struct {
 	Mailbox   string // role override, e.g. "sent"
 	Seen      bool
 	Rcpt      string // original envelope recipient (sub-address, Sieve envelope "to")
+	Local     bool   // submitted by an authenticated local account
+}
+
+// senderVerified reports whether the envelope sender of an inbound message
+// is authenticated: SPF passed for it, a valid DKIM signature belongs to its
+// domain, or a local account sent it. Auto-replies go only to such senders,
+// so forged senders get no backscatter.
+func senderVerified(meta deliveryMeta, envFrom string) bool {
+	if meta.Local {
+		return true
+	}
+	dom := store.DomainOf(envFrom)
+	if dom == "" {
+		return false
+	}
+	if meta.Auth.SPF == "pass" && strings.EqualFold(meta.Auth.SPFDomain, dom) {
+		return true
+	}
+	if meta.Auth.DKIM == "pass" {
+		for _, d := range meta.Auth.DKIMDomains {
+			if strings.EqualFold(d, dom) || strings.HasSuffix(strings.ToLower(dom), "."+strings.ToLower(d)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // deliverLocal stores raw for the account with the given address.
@@ -603,7 +644,7 @@ func (s *Service) deliverLocal(ctx context.Context, email string, raw []byte, pa
 		}
 		return err
 	}
-	if role == "inbox" && envFrom != "" && envFrom != "<>" {
+	if role == "inbox" && envFrom != "" && envFrom != "<>" && senderVerified(meta, envFrom) {
 		s.maybeVacation(ctx, acct, envFrom, parsed)
 	}
 	return nil
@@ -709,6 +750,9 @@ func (s *Service) Submit(ctx context.Context, acct *store.Account, from string, 
 	if message.HeaderValue(data, "Message-ID") == "" {
 		data = append([]byte("Message-ID: <"+message.NewMessageID(store.DomainOf(from))+">\r\n"), data...)
 	}
+	if message.TooComplex(data) {
+		return nil, smtp.NewReply(554, "5.6.0", "MIME structure too deeply nested")
+	}
 	// Header From (and Sender) must belong to the account as well.
 	if err := s.checkSubmittedHeaders(ctx, acct, data); err != nil {
 		return nil, err
@@ -759,7 +803,7 @@ func (s *Service) Submit(ctx context.Context, acct *store.Account, from string, 
 
 	var failed []failedRcpt
 	for _, l := range locals {
-		if err := s.deliverLocal(ctx, l.addr, signed, nil, deliveryMeta{Rcpt: l.rcpt}, from); err != nil {
+		if err := s.deliverLocal(ctx, l.addr, signed, nil, deliveryMeta{Rcpt: l.rcpt, Local: true}, from); err != nil {
 			var rep *smtp.Reply
 			errors.As(err, &rep)
 			s.Log.Warn("local delivery failed", "rcpt", l.addr, "err", err)
@@ -975,9 +1019,16 @@ type ImportOptions struct {
 	SkipAI bool
 }
 
+// ErrTooComplex rejects messages with more multipart levels than
+// message.MaxMultiparts.
+var ErrTooComplex = errors.New("MIME-Struktur zu tief verschachtelt")
+
 // ImportMessage stores a message from a migration or file import without
 // running spam filtering. It respects the account quota.
 func (s *Service) ImportMessage(ctx context.Context, acct *store.Account, mailboxID int64, raw []byte, opt ImportOptions) (*store.Message, error) {
+	if message.TooComplex(raw) {
+		return nil, ErrTooComplex
+	}
 	raw, sealedParse, sealed, err := s.sealForStorage(ctx, acct.ID, mailboxID, raw, nil)
 	if err != nil {
 		return nil, err

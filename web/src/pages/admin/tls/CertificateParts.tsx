@@ -241,7 +241,7 @@ const HTTP_PORT_OPTIONS: { value: HttpPortMode; title: string; text: string; rec
   {
     value: "open",
     title: "Offen bis zum Zertifikat",
-    text: "Während der Einrichtung ist die Weboberfläche auch über HTTP erreichbar. Sobald die Einrichtung abgeschlossen ist und Postwerk ein gültiges Let’s-Encrypt-Zertifikat hat, leitet Port 80 automatisch auf HTTPS um (hinter einem Reverse-Proxy oder mit eigenen Zertifikatsdateien bleibt HTTP offen).",
+    text: "Während der Einrichtung ist die Weboberfläche auch über HTTP erreichbar. Sobald die Einrichtung abgeschlossen ist und Postwerk ein gültiges Zertifikat hat (Let’s Encrypt oder eigene Zertifikatsdateien), leitet Port 80 automatisch auf HTTPS um. Hinter einem Reverse-Proxy bleibt HTTP offen, dort kümmert sich der Proxy darum.",
   },
 ];
 

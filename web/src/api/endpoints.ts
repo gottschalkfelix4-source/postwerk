@@ -199,12 +199,15 @@ export const adminApi = {
   backupArchives: () => http.get<{ archives: BackupArchive[]; error?: string }>("/api/admin/backups"),
   startBackup: () => http.post<BackupStatus>("/api/admin/backups"),
   deleteBackup: (name: string) => http.delete<Ok>(`/api/admin/backups/${encodeURIComponent(name)}`),
-  restoreBackup: (name: string, password: string) =>
-    http.post<BackupStatus>(`/api/admin/backups/${encodeURIComponent(name)}/restore`, { password }),
+  restoreBackup: (name: string, password: string, accountPassword: string, code: string) =>
+    http.post<BackupStatus>(`/api/admin/backups/${encodeURIComponent(name)}/restore`, { password, accountPassword, code }),
+  backupDownloadToken: (name: string, password: string, code: string) =>
+    http.post<{ token: string }>(`/api/admin/backups/${encodeURIComponent(name)}/download-token`, { password, code }),
   testBackupTarget: (target: BackupTarget) => http.post<BackupTestResult>("/api/admin/backups/test", target),
   uploadBackup: (file: File, opts: Omit<UploadOptions, "mailboxId"> = {}) =>
     uploadMultipart<{ name: string }>("/api/admin/backups/upload", file, {}, opts),
-  backupDownloadUrl: (name: string) => `/api/admin/backups/${encodeURIComponent(name)}/download`,
+  backupDownloadUrl: (name: string, token: string) =>
+    `/api/admin/backups/${encodeURIComponent(name)}/download?token=${encodeURIComponent(token)}`,
   migrations: () => http.get<MigrationJob[]>("/api/admin/migrations"),
   migration: (id: number) => http.get<MigrationJob>(`/api/admin/migrations/${id}`),
   testMigration: (body: MigrationTestRequest) => http.post<MigrationTestResult>("/api/admin/migrations/test", body),

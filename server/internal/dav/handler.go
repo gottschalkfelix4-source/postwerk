@@ -246,6 +246,8 @@ func (q *request) fail(err error) {
 		http.Error(q.w, "Nicht gefunden", http.StatusNotFound)
 	case errors.Is(err, store.ErrPrecondition):
 		http.Error(q.w, "Vorbedingung nicht erfüllt", http.StatusPreconditionFailed)
+	case errors.Is(err, store.ErrQuota):
+		http.Error(q.w, "Speicherkontingent erschöpft", http.StatusInsufficientStorage)
 	case errors.Is(err, errBadXML):
 		http.Error(q.w, "Ungültiger XML-Body", http.StatusBadRequest)
 	default:

@@ -79,6 +79,10 @@ func parseBody(r *http.Request) (*node, error) {
 	}
 	dec := xml.NewDecoder(io.LimitReader(r.Body, maxXMLBody))
 	var stack []*node
+	// Text is collected per open element in a builder: appending to a string
+	// per character-data token would copy quadratically on bodies split into
+	// many small tokens (e.g. text interleaved with comments).
+	var texts []*strings.Builder
 	var root *node
 	for {
 		tok, err := dec.Token()
@@ -104,14 +108,17 @@ func parseBody(r *http.Request) (*node, error) {
 				p.Children = append(p.Children, n)
 			}
 			stack = append(stack, n)
+			texts = append(texts, &strings.Builder{})
 		case xml.EndElement:
 			if len(stack) == 0 {
 				return nil, errBadXML
 			}
+			stack[len(stack)-1].Text = texts[len(texts)-1].String()
 			stack = stack[:len(stack)-1]
+			texts = texts[:len(texts)-1]
 		case xml.CharData:
-			if len(stack) > 0 {
-				stack[len(stack)-1].Text += string(t)
+			if len(texts) > 0 {
+				texts[len(texts)-1].Write(t)
 			}
 		}
 	}

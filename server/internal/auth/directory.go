@@ -220,6 +220,12 @@ func looksLikeAppPassword(p string) bool {
 
 // appPassword checks password against the account's app passwords.
 func (a *Authenticator) appPassword(ctx context.Context, acct *store.Account, password string) (bool, error) {
+	// Each stored app password costs one bcrypt run; passwords that cannot
+	// be a generated app password skip them, so a guess against an account
+	// with many app passwords costs no more than one against the password.
+	if !looksLikeAppPassword(password) {
+		return false, nil
+	}
 	apps, err := a.Store.ListAppPasswords(ctx, acct.ID)
 	if err != nil {
 		return false, err

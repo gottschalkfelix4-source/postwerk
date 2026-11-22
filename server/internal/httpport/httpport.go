@@ -160,10 +160,11 @@ func (c *Controller) desired(ctx context.Context) (State, string) {
 	case "auto-close":
 	default:
 		// "open": plain HTTP only as long as there is no alternative. Once the
-		// setup is completed and Postwerk itself serves a valid Let's Encrypt
-		// certificate, browsers are sent to HTTPS. With certificate files
-		// (often taken over from a reverse proxy) or behind a proxy, the
-		// proxy is responsible – redirecting there could cause loops.
+		// setup is completed and Postwerk itself serves a valid certificate
+		// (Let's Encrypt or certificate files), browsers are sent to HTTPS, so
+		// passwords and session cookies never travel unencrypted. Behind a
+		// reverse proxy the proxy is responsible – redirecting there could
+		// cause loops. Self-signed certificates fail the probe and keep HTTP.
 		mode := s.TLS.Mode
 		if c.TLS != nil && c.TLS.EnvCert != "" {
 			mode = "files"
@@ -173,7 +174,7 @@ func (c *Controller) desired(ctx context.Context) (State, string) {
 			return Full, "Port 80 ist offen – der Setup-Assistent ist noch nicht abgeschlossen"
 		case c.behindProxy():
 			return Full, "Port 80 ist offen (hinter einem Reverse-Proxy kümmert sich der Proxy um HTTPS)"
-		case mode != "acme":
+		case mode != "acme" && mode != "files":
 			return Full, "Port 80 ist offen (Weboberfläche auch über HTTP)"
 		case c.HTTPSAddr == "":
 			return Full, "Port 80 ist offen (kein HTTPS-Port aktiv)"

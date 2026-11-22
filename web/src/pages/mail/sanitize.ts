@@ -33,7 +33,8 @@ export function sanitizeEmail(html: string, allowRemote: boolean): SanitizedEmai
   let blocked = 0;
 
   const hook = (node: Element) => {
-    if (node.tagName === "A") {
+    // <area> links are as clickable as <a>; both must open outside the reader.
+    if (node.tagName === "A" || node.tagName === "AREA") {
       node.setAttribute("target", "_blank");
       node.setAttribute("rel", "noopener noreferrer nofollow");
     }

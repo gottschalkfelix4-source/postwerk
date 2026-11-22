@@ -32,7 +32,9 @@ type Server struct {
 	MaxSize     func() int64
 	// AllowInsecureAuth permits LOGIN on unencrypted connections (tests only).
 	AllowInsecureAuth bool
-	Log               *slog.Logger
+	// MaxConns and MaxConnsPerIP limit concurrent connections (0 = default).
+	MaxConns, MaxConnsPerIP int
+	Log                     *slog.Logger
 }
 
 var caps = imap.CapSet{
@@ -61,6 +63,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	ln = newLimitListener(ln, s.MaxConns, s.MaxConnsPerIP)
 	proto := "imap"
 	opts := &imapserver.Options{
 		NewSession:   func(c *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) { return s.newSession(ctx, c) },

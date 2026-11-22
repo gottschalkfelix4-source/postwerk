@@ -59,6 +59,20 @@ type Server struct {
 type cachedAuth struct {
 	accountID int64
 	expires   time.Time
+	creds     string // credentials state at login; a change drops the entry
+}
+
+// credState changes whenever the password is changed or an app password is
+// created or revoked, so cached logins end with the credentials they used.
+func (s *Server) credState(ctx context.Context, acct *store.Account) string {
+	var b strings.Builder
+	b.WriteString(acct.PasswordHash)
+	if list, err := s.Store.ListAppPasswords(ctx, acct.ID); err == nil {
+		for _, p := range list {
+			b.WriteString("|" + strconv.FormatInt(p.ID, 10))
+		}
+	}
+	return b.String()
 }
 
 // authCacheTTL bounds how long verified Basic credentials are remembered,
@@ -224,7 +238,7 @@ func (s *Server) checkBasic(ctx context.Context, ip, user, pass string) (*store.
 	c, ok := s.cache[key]
 	s.cacheMu.Unlock()
 	if ok && time.Now().Before(c.expires) {
-		if acct, err := s.Store.GetAccount(ctx, c.accountID); err == nil && !acct.Disabled {
+		if acct, err := s.Store.GetAccount(ctx, c.accountID); err == nil && !acct.Disabled && s.credState(ctx, acct) == c.creds {
 			return acct, nil
 		}
 	}
@@ -248,7 +262,10 @@ func (s *Server) checkBasic(ctx context.Context, ip, user, pass string) (*store.
 			s.cache = map[string]cachedAuth{}
 		}
 	}
-	s.cache[key] = cachedAuth{acct.ID, time.Now().Add(authCacheTTL)}
+	s.cacheMu.Unlock()
+	creds := s.credState(ctx, acct)
+	s.cacheMu.Lock()
+	s.cache[key] = cachedAuth{acct.ID, time.Now().Add(authCacheTTL), creds}
 	s.cacheMu.Unlock()
 	return acct, nil
 }

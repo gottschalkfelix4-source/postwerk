@@ -72,10 +72,11 @@ export const atRestApi = {
   mailEncryption: () => http.get<MailEncryptionState>("/api/account/encryption"),
   inspectKey: (kind: EncryptionKind, publicKey: string) =>
     http.post<{ key: KeyInfo; matchesAccount: boolean }>("/api/account/encryption/inspect", { kind, publicKey }),
-  saveMailEncryption: (body: { kind?: EncryptionKind; publicKey?: string; hideSubject: boolean }) =>
+  saveMailEncryption: (body: { kind?: EncryptionKind; publicKey?: string; hideSubject: boolean; password?: string; code?: string }) =>
     http.put<MailEncryptionState>("/api/account/encryption", body),
   disableMailEncryption: () => http.delete<MailEncryptionState>("/api/account/encryption"),
-  encryptExisting: () => http.post<MailEncryptionState>("/api/account/encryption/encrypt-existing"),
+  encryptExisting: (password: string, code: string) =>
+    http.post<MailEncryptionState>("/api/account/encryption/encrypt-existing", { password, code }),
 
   exports: () => http.get<DataExport[]>("/api/account/exports"),
   startExport: () => http.post<DataExport>("/api/account/exports"),

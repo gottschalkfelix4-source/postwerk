@@ -54,6 +54,26 @@ func (s *Store) initSecrets(ctx context.Context) error {
 	return nil
 }
 
+// VerifyMasterKey checks k against the canary stored in db (for example a
+// database unpacked from a backup). present is false for databases that
+// never stored a canary; then any key is accepted. With a nil k only
+// present is reported.
+func VerifyMasterKey(ctx context.Context, db *sql.DB, k *vault.Key) (present, ok bool, err error) {
+	var check string
+	err = db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, vaultCheckKey).Scan(&check)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, true, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if k == nil {
+		return true, false, nil
+	}
+	v, err := k.Decrypt(check)
+	return true, err == nil && v == vaultCanary, nil
+}
+
 func describeKeySource(k *vault.Key) string {
 	switch k.Source {
 	case vault.SourceEnv:

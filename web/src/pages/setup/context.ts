@@ -33,6 +33,8 @@ export interface SetupCtx {
   goTo: (index: number) => void;
   /** Leave the wizard for now ("Später einrichten"). */
   skip: () => void;
+  /** Restore a backup instead of a new setup (fresh server only). */
+  startRestore: () => void;
 }
 
 export const SetupContext = createContext<SetupCtx | null>(null);

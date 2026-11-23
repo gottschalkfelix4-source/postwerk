@@ -13,6 +13,7 @@ import { SetupContext, type InitForm, type SetupCtx } from "./context";
 import { DnsStep, ServerAdminStep, ServerStep, SystemStep, WelcomeStep } from "./steps";
 import { DataStep, DoneStep, ProtectionStep, ProxyStep, TlsStep } from "./settingsSteps";
 import { ConnectionStep } from "./connectionStep";
+import { RestoreFlow } from "./restoreStep";
 
 type StepId = "welcome" | "server" | "dns" | "system" | "connection" | "proxy" | "tls" | "protection" | "data" | "done";
 
@@ -32,6 +33,7 @@ export default function SetupPage() {
   const [current, setCurrent] = useState(0);
   const [reached, setReached] = useState(0);
   const [direction, setDirection] = useState<"forward" | "back">("forward");
+  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
     if (status.data && startMode === null) setStartMode(status.data.mode === "initial" ? "initial" : "configure");
@@ -151,7 +153,23 @@ export default function SetupPage() {
       deferSetup();
       navigate("/admin", { replace: true });
     },
+    startRestore: () => {
+      setRestoring(true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
   };
+
+  if (initialFlow && !initialized && restoring) {
+    return (
+      <SetupContext.Provider value={ctx}>
+        <Frame wide version={status.data?.version}>
+          <div className="mx-auto max-w-3xl">
+            <RestoreFlow onCancel={() => setRestoring(false)} />
+          </div>
+        </Frame>
+      </SetupContext.Provider>
+    );
+  }
 
   const id = steps[current].id;
   const back = current > 0 ? () => go(current - 1) : undefined;

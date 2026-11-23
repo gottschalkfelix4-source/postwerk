@@ -369,6 +369,45 @@ docker exec Postwerk postwerk backup
 Alternativ den ganzen appdata-Ordner mit dem Plugin „Appdata Backup“ sichern (Container wird dabei
 kurz gestoppt).
 
+**Umzug auf einen neuen Server oder Neuaufbau nach einem Defekt:**
+
+1. Auf dem alten Server eine aktuelle Sicherung anlegen (**Verwaltung → Backup → Jetzt sichern**) und
+   herunterladen oder auf dem SMB-/WebDAV-Ziel liegen lassen. Bei verschlüsselten Sicherungen das
+   Backup-Passwort bereithalten.
+2. Hast du den Master-Schlüssel per `POSTWERK_MASTER_KEY` gesetzt, diesen Wert ebenfalls notieren – er
+   steckt dann nicht im Archiv. Mit dem Standard (`master.key` im appdata-Ordner) ist nichts zu tun, der
+   Schlüssel reist im Archiv mit. Die Backup-Seite zeigt, welcher Fall vorliegt.
+3. Auf dem neuen Server Postwerk wie oben beschrieben installieren (gleiche Ports und Pfade, das Feld
+   „Admin-E-Mail“ leer lassen – sonst ist der Server schon eingerichtet und die Wiederherstellung läuft
+   über **Verwaltung → Backup → Archiv hochladen**) und die Weboberfläche öffnen. Den Setup-Token holen:
+
+   ```bash
+   docker exec Postwerk postwerk setup-token
+   ```
+
+4. Im Assistenten **Aus Backup wiederherstellen** wählen, den Token eintragen und die Sicherung angeben:
+   entweder **Datei hochladen** oder **Vom Sicherungsziel laden** (SMB-Freigabe, WebDAV oder ein Ordner
+   im Container – z. B. das Archiv nach `/mnt/user/appdata/postwerk/backups/` kopieren und das Ziel
+   „Lokal“ mit leerem Pfad nehmen). Bei verschlüsselten Archiven das Backup-Passwort angeben.
+5. Postwerk prüft das Archiv vollständig (Format, Passwort, Datenbank, Master-Schlüssel), fragt bei
+   Bedarf nach dem Master-Schlüssel des alten Servers und startet dann einmal neu. Danach meldest du
+   dich mit deinem bisherigen Admin-Konto an – Konten, Mails, Ordner, Domains mit DKIM-Schlüsseln,
+   Aliase, Filterregeln, Kalender, Kontakte, Berichte und alle Einstellungen sind wie vorher.
+6. Hat der neue Server eine andere öffentliche IP, A-Eintrag, Reverse-DNS (PTR) und die
+   Portweiterleitungen im Router anpassen und unter **Verwaltung → DNS** prüfen.
+
+Ohne Weboberfläche geht es auch per Kommandozeile – das Archiv vorher nach
+`/mnt/user/appdata/postwerk/backups/` kopieren:
+
+```bash
+docker exec Postwerk postwerk restore /data/backups/postwerk-20261121-033000.tar.gz.enc 'backup-passwort'
+docker restart Postwerk
+```
+
+Den Master-Schlüssel eines alten Servers mit `POSTWERK_MASTER_KEY` gibst du dabei als drittes Argument
+an. Schlägt etwas fehl, bleibt der vorhandene Stand erhalten; der vorherige Datenstand liegt nach einer
+Wiederherstellung einmalig unter `/mnt/user/appdata/postwerk/pre-restore-<zeit>/`.
+
 **Passwort vergessen:**
 
 ```bash

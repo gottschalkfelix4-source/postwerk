@@ -92,10 +92,11 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 
 	// A restore prepared in the web interface is swapped in before the
 	// database is opened.
-	if name, err := backup.ApplyPending(cfg.DataDir); err != nil {
+	applied, err := backup.ApplyPending(cfg.DataDir)
+	if err != nil {
 		log.Error("restore failed, keeping current data", "component", "backup", "err", err)
-	} else if name != "" {
-		log.Warn("backup restored", "component", "backup", "archive", name)
+	} else if applied != nil {
+		log.Warn("backup restored", "component", "backup", "archive", applied.Archive)
 	}
 
 	// Upload temp files of imports interrupted by a restart.
@@ -107,6 +108,15 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	}
 
 	st, err := store.Open(cfg.DataDir)
+	if err != nil && applied != nil {
+		// Never leave the server stuck on restored data it cannot open: the
+		// previous data comes back and the failure shows up in the UI.
+		log.Error("restored data cannot be opened, reverting to the previous data", "component", "backup", "archive", applied.Archive, "err", err)
+		if rerr := backup.Revert(cfg.DataDir, applied, err); rerr != nil {
+			return fmt.Errorf("open store: %w (zurücknehmen der Wiederherstellung fehlgeschlagen: %v)", err, rerr)
+		}
+		st, err = store.Open(cfg.DataDir)
+	}
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

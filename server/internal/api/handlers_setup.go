@@ -14,6 +14,7 @@ import (
 	"postwerk/internal/ai"
 	"postwerk/internal/auth"
 	"postwerk/internal/av"
+	"postwerk/internal/backup"
 	"postwerk/internal/mailauth"
 	"postwerk/internal/store"
 )
@@ -49,6 +50,12 @@ func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) (any, error
 	// only help attackers pick exploits. Admins see it in the dashboard.
 	if mode != "done" {
 		out["version"] = s.Version
+	}
+	if mode == "initial" {
+		// A restore that was rolled back on start (the assistant shows why).
+		if f := backup.LastFailure(s.Cfg.DataDir); f != nil {
+			out["restoreError"] = f.Error
+		}
 	}
 	return out, nil
 }

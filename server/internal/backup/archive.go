@@ -21,6 +21,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"postwerk/internal/vault"
 )
 
 // Manifest is stored as manifest.json at the start of every archive.
@@ -33,7 +35,17 @@ type Manifest struct {
 	Accounts  int       `json:"accounts"`
 	Messages  int       `json:"messages"`
 	Encrypted bool      `json:"encrypted"`
+	// Schema is the database schema version of the archived database.
+	Schema int `json:"schema,omitempty"`
+	// KeyFingerprint identifies the master key the archived secrets are
+	// encrypted with; KeyInArchive tells whether master.key is included.
+	KeyFingerprint string `json:"keyFingerprint,omitempty"`
+	KeyInArchive   bool   `json:"keyInArchive"`
 }
+
+// ArchiveFormat is the archive layout written by this build. Restores accept
+// formats 1 to ArchiveFormat; newer archives come from a newer Postwerk.
+const ArchiveFormat = 1
 
 const (
 	manifestName = "manifest.json"
@@ -61,10 +73,10 @@ type Source struct {
 func skipTop(name string) bool {
 	switch name {
 	case dbName, dbName + "-wal", dbName + "-shm", dbName + "-journal",
-		"backups", "restore-staging", pendingFile, "setup-token.txt", "admin-password.txt", "exports":
+		"backups", "restore-staging", pendingFile, failedFile, "setup-token.txt", "admin-password.txt", "exports":
 		return true
 	}
-	return strings.HasPrefix(name, "pre-restore-") || strings.HasPrefix(name, ".backup-") ||
+	return strings.HasPrefix(name, "pre-restore-") || strings.HasPrefix(name, "failed-restore-") || strings.HasPrefix(name, ".backup-") ||
 		strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".part")
 }
 
@@ -183,8 +195,17 @@ func Create(ctx context.Context, w io.Writer, src Source, password string) (int,
 	}
 
 	m := src.Manifest
-	m.Format = 1
+	m.Format = ArchiveFormat
 	m.Encrypted = password != ""
+	m.KeyInArchive = false
+	for _, f := range files {
+		if f.rel == vault.KeyFileName && !f.dir {
+			m.KeyInArchive = true
+		}
+	}
+	if m.Schema == 0 {
+		_ = src.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&m.Schema)
+	}
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = time.Now().UTC()
 	}
@@ -346,13 +367,24 @@ func ExtractWithLimits(ctx context.Context, r io.Reader, password, dest string, 
 			return nil, fmt.Errorf("archiv beschädigt: %w", err)
 		}
 		name := path.Clean(h.Name)
-		if name == manifestName {
+		if man == nil {
+			// The manifest is the first entry: the format is checked before
+			// anything is written to disk.
+			if name != manifestName {
+				return nil, errors.New("keine Postwerk-Sicherung: Manifest fehlt am Anfang des Archivs")
+			}
 			var m Manifest
 			if err := json.NewDecoder(io.LimitReader(tr, 1<<20)).Decode(&m); err != nil {
 				return nil, fmt.Errorf("manifest: %w", err)
 			}
+			if err := checkFormat(&m); err != nil {
+				return nil, err
+			}
 			man = &m
 			continue
+		}
+		if name == manifestName {
+			return nil, errors.New("archiv beschädigt: Manifest doppelt vorhanden")
 		}
 		if !strings.HasPrefix(name, dataPrefix) || strings.Contains(name, "..") || path.IsAbs(name) {
 			return nil, fmt.Errorf("ungültiger Pfad im Archiv: %q", h.Name)
@@ -408,6 +440,33 @@ func ExtractWithLimits(ctx context.Context, r io.Reader, password, dest string, 
 		return nil, err
 	}
 	return man, nil
+}
+
+// userError carries a complete message for the user plus a sentinel error
+// for errors.Is.
+type userError struct {
+	kind error
+	msg  string
+}
+
+func (e *userError) Error() string { return e.msg }
+func (e *userError) Unwrap() error { return e.kind }
+
+func errKind(kind error, format string, args ...any) error {
+	return &userError{kind: kind, msg: fmt.Sprintf(format, args...)}
+}
+
+// ErrFormat reports an archive this build cannot restore.
+var ErrFormat = errors.New("archivformat wird nicht unterstützt")
+
+func checkFormat(m *Manifest) error {
+	switch {
+	case m.Format > ArchiveFormat:
+		return errKind(ErrFormat, "Die Sicherung hat Format %d und stammt von einer neueren Postwerk-Version (%s) – bitte zuerst Postwerk aktualisieren", m.Format, m.Version)
+	case m.Format < 1:
+		return errKind(ErrFormat, "Das Archiv hat das unbekannte Format %d – keine gültige Postwerk-Sicherung", m.Format)
+	}
+	return nil
 }
 
 func checkDB(ctx context.Context, p string) error {

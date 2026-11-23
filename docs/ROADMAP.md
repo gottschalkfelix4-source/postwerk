@@ -30,6 +30,7 @@ Legende: ✅ fertig · 🟡 teilweise · ⏳ geplant
 | Betrieb | Web-Verwaltung, REST-API, Live-Logs, Prometheus-Metriken, Dashboard | ✅ |
 | | Backup im Web-Interface: Archive lokal, per WebDAV oder SMB, Zeitplan, Aufbewahrung, AES-256-Verschlüsselung, Download/Upload, Wiederherstellung per Klick | ✅ |
 | | Backup-/Restore-Befehl, Notfall-Passwort-Reset | ✅ |
+| | Serverumzug: „Aus Backup wiederherstellen“ im Setup-Assistenten (Upload oder SMB/WebDAV), Prüfung von Archivformat, Schema und Master-Schlüssel vor dem Einspielen, automatisches Zurücknehmen bei Startfehlern | ✅ |
 | | MTA-STS-Policy unter `/.well-known/mta-sts.txt` (Modus none/testing/enforce umschaltbar, Zertifikatsprüfung vor „enforce“) | ✅ |
 | | JMAP (RFC 8620/8621) als zusätzliche Client-API, siehe [API.md](API.md#jmap-rfc-8620--rfc-8621) | ✅ |
 | Webmail | Eigenes Webmail mit Ordnern, Threads, Suche, Tags, Entwürfen, Anhängen (über die REST-API) | ✅ |

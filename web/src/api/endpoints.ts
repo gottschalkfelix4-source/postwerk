@@ -9,6 +9,7 @@ import type {
   AccountSession,
   AppPassword,
   BackupArchive,
+  BackupManifest,
   BackupRun,
   BackupStatus,
   BackupTarget,
@@ -199,8 +200,8 @@ export const adminApi = {
   backupArchives: () => http.get<{ archives: BackupArchive[]; error?: string }>("/api/admin/backups"),
   startBackup: () => http.post<BackupStatus>("/api/admin/backups"),
   deleteBackup: (name: string) => http.delete<Ok>(`/api/admin/backups/${encodeURIComponent(name)}`),
-  restoreBackup: (name: string, password: string, accountPassword: string, code: string) =>
-    http.post<BackupStatus>(`/api/admin/backups/${encodeURIComponent(name)}/restore`, { password, accountPassword, code }),
+  restoreBackup: (name: string, password: string, accountPassword: string, code: string, masterKey = "") =>
+    http.post<BackupStatus>(`/api/admin/backups/${encodeURIComponent(name)}/restore`, { password, accountPassword, code, masterKey }),
   backupDownloadToken: (name: string, password: string, code: string) =>
     http.post<{ token: string }>(`/api/admin/backups/${encodeURIComponent(name)}/download-token`, { password, code }),
   testBackupTarget: (target: BackupTarget) => http.post<BackupTestResult>("/api/admin/backups/test", target),
@@ -222,6 +223,21 @@ export const setupApi = {
   status: () => http.get<SetupStatus>("/api/setup/status", { skipAuthRedirect: true }),
   initialize: (body: SetupInitializeRequest) =>
     http.post<Me>("/api/setup/initialize", body, { skipAuthRedirect: true }),
+  /** Restore from a backup on a fresh server (needs the setup token). */
+  restoreArchives: (token: string, target: BackupTarget) =>
+    http.post<{ archives: BackupArchive[]; target: string; error?: string }>(
+      "/api/setup/restore/archives",
+      { token, target },
+      { skipAuthRedirect: true },
+    ),
+  restoreStart: (body: { token: string; target: BackupTarget; name: string; password: string; masterKey: string }) =>
+    http.post<BackupStatus>("/api/setup/restore/start", body, { skipAuthRedirect: true }),
+  restoreUpload: (file: File, fields: { token: string; password: string; masterKey: string }, opts: Omit<UploadOptions, "mailboxId"> = {}) =>
+    uploadMultipart<{ manifest: BackupManifest }>("/api/setup/restore/upload", file, fields, opts),
+  restoreResume: (token: string, masterKey: string) =>
+    http.post<{ manifest: BackupManifest }>("/api/setup/restore/resume", { token, masterKey }, { skipAuthRedirect: true }),
+  restoreStatus: (token: string) =>
+    http.post<BackupStatus>("/api/setup/restore/status", { token }, { skipAuthRedirect: true }),
 };
 
 export const mailApi = {

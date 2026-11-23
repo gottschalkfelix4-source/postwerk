@@ -82,8 +82,23 @@ func Generate() (*Key, error) {
 	return New(b)
 }
 
-// Load resolves the master key for dataDir (see package doc).
-func Load(dataDir string) (*Key, error) {
+// Load resolves the master key for dataDir (see package doc). A missing
+// <data dir>/master.key is generated.
+func Load(dataDir string) (*Key, error) { return load(dataDir, true) }
+
+// Resolve is Load without generating a key: it returns an error wrapping
+// os.ErrNotExist when neither variable is set and dataDir holds no
+// master.key. A restore uses it to find the key the restored data will be
+// opened with.
+func Resolve(dataDir string) (*Key, error) { return load(dataDir, false) }
+
+// EnvConfigured reports whether the key comes from POSTWERK_MASTER_KEY or
+// POSTWERK_MASTER_KEY_FILE instead of the data directory.
+func EnvConfigured() bool {
+	return strings.TrimSpace(os.Getenv("POSTWERK_MASTER_KEY")) != "" || strings.TrimSpace(os.Getenv("POSTWERK_MASTER_KEY_FILE")) != ""
+}
+
+func load(dataDir string, create bool) (*Key, error) {
 	if v := strings.TrimSpace(os.Getenv("POSTWERK_MASTER_KEY")); v != "" {
 		raw, err := decodeKey(v)
 		if err != nil {
@@ -108,7 +123,7 @@ func Load(dataDir string) (*Key, error) {
 	}
 	p := filepath.Join(dataDir, KeyFileName)
 	k, err := readKeyFile(p)
-	if errors.Is(err, os.ErrNotExist) {
+	if create && errors.Is(err, os.ErrNotExist) {
 		k, err = createKeyFile(p)
 		if err == nil {
 			k.Generated = true
@@ -121,6 +136,28 @@ func Load(dataDir string) (*Key, error) {
 	k.File = p
 	k.InDataDir = true
 	return k, nil
+}
+
+// Parse decodes a base64 key as stored in master.key or POSTWERK_MASTER_KEY.
+func Parse(s string) (*Key, error) {
+	raw, err := decodeKey(s)
+	if err != nil {
+		return nil, err
+	}
+	return New(raw)
+}
+
+// WriteKeyFile stores k in the master.key format (base64, mode 0600).
+func WriteKeyFile(p string, k *Key) error {
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(base64.StdEncoding.EncodeToString(k.raw)+"\n"), 0o600)
+}
+
+// Equal reports whether both keys hold the same bytes.
+func (k *Key) Equal(o *Key) bool {
+	return k != nil && o != nil && string(k.raw) == string(o.raw)
 }
 
 func within(dir, p string) bool {

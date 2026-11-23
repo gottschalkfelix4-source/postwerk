@@ -21,7 +21,10 @@ const usage = `Verwendung: postwerk [befehl]
   version                       Version ausgeben
   backup [zielordner]           Archiv des gesamten Systems anlegen (Standard: <daten>/backups;
                                 verschlüsselt, wenn in der Oberfläche ein Backup-Passwort gesetzt ist)
-  restore <archiv> [passwort]   Archiv beim nächsten Start einspielen (danach Container neu starten)
+  restore <archiv> [passwort] [master-schlüssel]
+                                Archiv prüfen und beim nächsten Start einspielen (danach Container
+                                neu starten); den Master-Schlüssel nur angeben, wenn das Archiv
+                                keinen enthält (alter Server mit POSTWERK_MASTER_KEY)
   reset-password <e-mail> <pw>  Passwort eines Kontos setzen (und 2FA zurücksetzen)
   setup-token                   Setup-Token für die Ersteinrichtung anzeigen
   http-port open|redirect|auto-close
@@ -41,14 +44,17 @@ func command(cfg *config.Config, args []string) error {
 		}
 		return createBackup(ctx, cfg, dir)
 	case "restore":
-		if len(args) < 2 || len(args) > 3 {
+		if len(args) < 2 || len(args) > 4 {
 			return errors.New("Archiv angeben\n\n" + usage)
 		}
-		pw := ""
-		if len(args) == 3 {
+		pw, key := "", ""
+		if len(args) >= 3 {
 			pw = args[2]
 		}
-		return prepareRestore(ctx, cfg, args[1], pw)
+		if len(args) == 4 {
+			key = args[3]
+		}
+		return prepareRestore(ctx, cfg, args[1], pw, key)
 	case "reset-password":
 		if len(args) != 3 {
 			return errors.New("E-Mail und Passwort angeben\n\n" + usage)
@@ -127,7 +133,7 @@ func createBackup(ctx context.Context, cfg *config.Config, dir string) error {
 			_ = st.FinishBackupRun(ctx, runID, name, size, files, err)
 		}
 	}
-	man := backup.Manifest{Version: version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC()}
+	man := backup.Manifest{Version: version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC(), KeyFingerprint: st.Vault.Fingerprint()}
 	man.Domains, man.Accounts, man.Messages, _ = st.BackupCounts(ctx)
 	n, err := backup.Create(ctx, f, backup.Source{DataDir: cfg.DataDir, DB: st.DB, Manifest: man, Exclude: append([]string{dir}, backup.KeyExcludes(st, cfg.DataDir)...)}, password)
 	if cerr := f.Close(); err == nil {
@@ -157,7 +163,7 @@ func createBackup(ctx context.Context, cfg *config.Config, dir string) error {
 }
 
 // prepareRestore unpacks an archive; it is swapped in on the next start.
-func prepareRestore(ctx context.Context, cfg *config.Config, archive, password string) error {
+func prepareRestore(ctx context.Context, cfg *config.Config, archive, password, masterKey string) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -171,8 +177,12 @@ func prepareRestore(ctx context.Context, cfg *config.Config, archive, password s
 			st.Close()
 		}
 	}
-	man, err := backup.PrepareRestore(ctx, f, password, cfg.DataDir, filepath.Base(archive))
+	man, err := backup.PrepareRestore(ctx, f, cfg.DataDir, backup.RestoreOptions{Name: filepath.Base(archive), Password: password, MasterKey: masterKey})
 	if err != nil {
+		if backup.IsKeyError(err) {
+			_ = os.RemoveAll(backup.StagingDir(cfg.DataDir))
+			return fmt.Errorf("%w\n\nDen Schlüssel als drittes Argument angeben: postwerk restore <archiv> <passwort> <master-schlüssel>", err)
+		}
 		return err
 	}
 	chownLike(backup.StagingDir(cfg.DataDir), cfg.DataDir)

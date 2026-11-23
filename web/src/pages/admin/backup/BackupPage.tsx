@@ -146,15 +146,17 @@ function RestoreDialog({ archive, onClose }: { archive: BackupArchive | null; on
   const [accountPassword, setAccountPassword] = useState("");
   const [code, setCode] = useState("");
   const [confirmText, setConfirmText] = useState("");
+  const [masterKey, setMasterKey] = useState("");
   useEffect(() => {
     setPassword("");
     setAccountPassword("");
     setCode("");
     setConfirmText("");
+    setMasterKey("");
   }, [archive]);
   const sso = me.source === "oidc";
   const restore = useMutation({
-    mutationFn: () => adminApi.restoreBackup(archive!.name, password, accountPassword, code.trim()),
+    mutationFn: () => adminApi.restoreBackup(archive!.name, password, accountPassword, code.trim(), masterKey.trim()),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.status });
       toast.info("Wiederherstellung gestartet", "Der Server startet danach automatisch neu.");
@@ -203,6 +205,19 @@ function RestoreDialog({ archive, onClose }: { archive: BackupArchive | null; on
             {(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" placeholder="123456" />}
           </Field>
         )}
+        <details className="group rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+          <summary className="cursor-pointer text-sm text-zinc-600 dark:text-zinc-300">Sicherung von einem anderen Server?</summary>
+          <div className="mt-3">
+            <Field
+              label="Master-Schlüssel des alten Servers"
+              help="Nur nötig, wenn der alte Server den Schlüssel aus POSTWERK_MASTER_KEY las – dann steckt er nicht im Archiv. Sonst leer lassen."
+            >
+              {(id) => (
+                <Input id={id} value={masterKey} onChange={(e) => setMasterKey(e.target.value)} autoComplete="off" spellCheck={false} className="font-mono text-[13px]" placeholder="Base64, 44 Zeichen" />
+              )}
+            </Field>
+          </div>
+        </details>
         <Field label={<>Zur Bestätigung <strong>WIEDERHERSTELLEN</strong> eingeben</>}>
           {(id) => <Input id={id} value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoComplete="off" />}
         </Field>

@@ -83,7 +83,13 @@ func backupErr(err error) error {
 	case errors.Is(err, backup.ErrBusy):
 		return errf(409, "busy", err.Error())
 	case errors.Is(err, backup.ErrPassword), errors.Is(err, backup.ErrNeedPassword):
-		return invalid(err.Error())
+		return errf(400, "archive_password", err.Error())
+	case errors.Is(err, backup.ErrKeyMissing):
+		return errf(422, "master_key_required", err.Error())
+	case errors.Is(err, backup.ErrKeyMismatch):
+		return errf(422, "master_key_mismatch", err.Error())
+	case errors.Is(err, backup.ErrFormat):
+		return errf(422, "archive_format", err.Error())
 	}
 	return invalid(err.Error())
 }
@@ -147,6 +153,7 @@ func (s *Server) backupDelete(w http.ResponseWriter, r *http.Request, u *store.A
 func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
 	var req struct {
 		Password        string `json:"password"` // archive password
+		MasterKey       string `json:"masterKey"` // only for archives without master.key
 		AccountPassword string `json:"accountPassword"`
 		Code            string `json:"code"`
 	}
@@ -166,7 +173,7 @@ func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request, u *store.
 			req.Password = cfg.Password
 		}
 	}
-	if err := s.Backups.StartRestore(ctx, name, req.Password); err != nil {
+	if err := s.Backups.StartRestore(ctx, name, req.Password, req.MasterKey); err != nil {
 		return nil, backupErr(err)
 	}
 	s.Log.Warn("restore started", "component", "backup", "archive", name, "by", u.Email)

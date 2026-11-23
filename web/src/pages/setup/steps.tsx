@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArchiveRestore,
   ArrowRightLeft,
   Bot,
   Bug,
@@ -146,7 +147,11 @@ export function WelcomeStep({ onNext }: StepProps) {
               <Button variant="ghost" onClick={ctx.skip}>
                 Später einrichten
               </Button>
-            ) : undefined
+            ) : (
+              <Button variant="secondary" icon={ArchiveRestore} onClick={ctx.startRestore}>
+                Aus Backup wiederherstellen
+              </Button>
+            )
           }
         />
       }
@@ -171,6 +176,17 @@ export function WelcomeStep({ onNext }: StepProps) {
           ))}
         </div>
 
+        {needsToken && ctx.status.restoreError && (
+          <Notice tone="error" title="Die letzte Wiederherstellung wurde zurückgenommen">
+            {ctx.status.restoreError} – Der Server läuft mit den vorherigen Daten. Der Setup-Token wurde dabei neu erzeugt.
+          </Notice>
+        )}
+        {needsToken && (
+          <Notice tone="info" icon={ArchiveRestore}>
+            Umzug oder Neuaufbau? Mit „Aus Backup wiederherstellen“ spielst du eine Postwerk-Sicherung ein und hast danach alle Konten,
+            Mails und Einstellungen des alten Servers.
+          </Notice>
+        )}
         {needsToken ? (
           <div className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/40">
             <Field

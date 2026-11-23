@@ -221,7 +221,8 @@ func (s *Server) bodyLimit(r *http.Request) int64 {
 // streamingUpload reports endpoints that read large multipart bodies with
 // their own limits.
 func streamingUpload(r *http.Request) bool {
-	return r.URL.Path == "/api/mail/import" || r.URL.Path == "/api/admin/backups/upload" || strings.HasPrefix(r.URL.Path, "/jmap/upload/")
+	return r.URL.Path == "/api/mail/import" || r.URL.Path == "/api/admin/backups/upload" || r.URL.Path == "/api/setup/restore/upload" ||
+		strings.HasPrefix(r.URL.Path, "/jmap/upload/")
 }
 
 // bodyReadTimeout bounds how long reading a request body may take, so slow
@@ -484,6 +485,11 @@ func (s *Server) routes(m *http.ServeMux) {
 	// setup
 	m.HandleFunc("GET /api/setup/status", s.wrap(s.setupStatus))
 	m.HandleFunc("POST /api/setup/initialize", s.wrap(s.setupInitialize))
+	m.HandleFunc("POST /api/setup/restore/archives", s.wrap(s.setupRestoreArchives))
+	m.HandleFunc("POST /api/setup/restore/start", s.wrap(s.setupRestoreStart))
+	m.HandleFunc("POST /api/setup/restore/upload", s.wrap(s.setupRestoreUpload))
+	m.HandleFunc("POST /api/setup/restore/resume", s.wrap(s.setupRestoreResume))
+	m.HandleFunc("POST /api/setup/restore/status", s.wrap(s.setupRestoreStatus))
 	m.HandleFunc("POST /api/admin/setup/complete", s.admin(s.setupComplete))
 	m.HandleFunc("GET /api/admin/system/check", s.admin(s.systemCheck))
 	m.HandleFunc("POST /api/admin/system/test-clamav", s.admin(s.testClamAV))

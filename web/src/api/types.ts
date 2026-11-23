@@ -302,7 +302,32 @@ export interface BackupJob {
   startedAt: string;
 }
 
-export interface BackupResult { kind: "backup" | "restore"; archive: string; ok: boolean; error?: string; finishedAt: string; }
+export interface BackupResult {
+  kind: "backup" | "restore";
+  archive: string;
+  ok: boolean;
+  error?: string;
+  finishedAt: string;
+  /** A restore that waits for the master key of the old server. */
+  code?: "master_key_required" | "master_key_mismatch";
+  /** Fingerprint of the master key the archive was written with. */
+  keyFingerprint?: string;
+}
+
+/** manifest.json of a backup archive. */
+export interface BackupManifest {
+  format: number;
+  version: string;
+  hostname: string;
+  createdAt: string;
+  domains: number;
+  accounts: number;
+  messages: number;
+  encrypted: boolean;
+  schema?: number;
+  keyFingerprint?: string;
+  keyInArchive: boolean;
+}
 
 export interface BackupStatus { job: BackupJob | null; last: BackupResult | null; target: string; nextRun: string | null; }
 
@@ -513,7 +538,13 @@ export interface UpdateTaskRequest { title?: string; due?: string | null; done?:
 // Setup wizard (docs/API.md, "Einrichtung (Setup-Assistent)").
 // ---------------------------------------------------------------------------
 
-export interface SetupStatus { mode: "initial" | "configure" | "done"; hostname: string; version: string; }
+export interface SetupStatus {
+  mode: "initial" | "configure" | "done";
+  hostname: string;
+  version: string;
+  /** A restore from the setup assistant that was rolled back on start. */
+  restoreError?: string;
+}
 
 export type CheckStatus = "ok" | "missing" | "mismatch" | "warning" | "error" | "info";
 

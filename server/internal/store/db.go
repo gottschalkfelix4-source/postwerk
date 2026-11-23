@@ -43,14 +43,19 @@ func Open(dataDir string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(8)
 	db.SetConnMaxIdleTime(5 * time.Minute)
+	// Failures close the database again, so a caller can move the files
+	// away (a restore that is rolled back).
 	if err := migrate(db); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	if err := migrateLegacyCalendar(context.Background(), db); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("migrate calendar: %w", err)
 	}
 	blobs, err := NewBlobStore(filepath.Join(dataDir, "blobs"))
 	if err != nil {
+		db.Close()
 		return nil, err
 	}
 	key, err := vault.Load(dataDir)
@@ -554,6 +559,10 @@ var migrations = []string{
 		last_notified INTEGER NOT NULL
 	);`,
 }
+
+// SchemaVersion is the database schema version this build creates and
+// understands. A restore rejects databases from a newer build.
+func SchemaVersion() int { return len(migrations) }
 
 func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {

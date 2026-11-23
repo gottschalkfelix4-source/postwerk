@@ -135,9 +135,9 @@ func TestArchiveCreateExtractApply(t *testing.T) {
 	}
 	st.Close()
 	os.WriteFile(filepath.Join(dir, "acme", "cert"), []byte("geändert"), 0o600)
-	name, err := ApplyPending(dir)
-	if err != nil || name != "test.tar.gz" {
-		t.Fatalf("apply = %q, %v", name, err)
+	applied, err := ApplyPending(dir)
+	if err != nil || applied == nil || applied.Archive != "test.tar.gz" {
+		t.Fatalf("apply = %+v, %v", applied, err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "acme", "cert"))
 	if string(b) != "zertifikat" {
@@ -158,7 +158,7 @@ func TestArchiveCreateExtractApply(t *testing.T) {
 	if len(runs) != 2 || runs[0].Trigger != "restore" || runs[0].Archive != "test.tar.gz" || runs[1].Archive != "postwerk-20261121-120000.tar.gz" {
 		t.Errorf("history after restore = %+v", runs)
 	}
-	if name, _ := ApplyPending(dir); name != "" {
+	if a, _ := ApplyPending(dir); a != nil {
 		t.Error("restore applied twice")
 	}
 }
@@ -284,12 +284,12 @@ func TestManagerBackupAndRetention(t *testing.T) {
 	if len(runs) != 3 || runs[0].Status != "success" || runs[0].Size == 0 {
 		t.Errorf("runs = %+v", runs)
 	}
-	if err := m.StartRestore(ctx, list[0].Name, "falsch"); !errors.Is(err, ErrPassword) {
+	if err := m.StartRestore(ctx, list[0].Name, "falsch", ""); !errors.Is(err, ErrPassword) {
 		t.Errorf("restore with wrong password: %v", err)
 	}
 	restarted := make(chan struct{})
 	m.Restart = func() { close(restarted) }
-	if err := m.StartRestore(ctx, list[0].Name, "pw"); err != nil {
+	if err := m.StartRestore(ctx, list[0].Name, "pw", ""); err != nil {
 		t.Fatal(err)
 	}
 	select {

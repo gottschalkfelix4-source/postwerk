@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, CircleX, FolderOpen, HardDrive, Info, Network, PlugZap, ShieldAlert, Zap, type LucideIcon } from "lucide-react";
 import { adminApi } from "@/api/endpoints";
-import type { BackupSettings, BackupTargetType, BackupTestResult } from "@/api/types";
+import type { BackupSettings, BackupTarget, BackupTargetType, BackupTestResult } from "@/api/types";
 import { useDraft } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import {
@@ -134,14 +134,11 @@ export function BackupSettingsForm() {
   const set = (fn: (d: BackupSettings) => BackupSettings) => setDraft(fn);
   const t = draft.target;
   const setTarget = (patch: Partial<BackupSettings["target"]>) => set((d) => ({ ...d, target: { ...d.target, ...patch } }));
-  const setWebdav = (patch: Partial<BackupSettings["target"]["webdav"]>) => setTarget({ webdav: { ...t.webdav, ...patch } });
-  const setSmb = (patch: Partial<BackupSettings["target"]["smb"]>) => setTarget({ smb: { ...t.smb, ...patch } });
   const setSchedule = (patch: Partial<BackupSettings["schedule"]>) => set((d) => ({ ...d, schedule: { ...d.schedule, ...patch } }));
 
   const passwordMissing = draft.encrypt && draft.password !== MASK && [...draft.password].length < MIN_PASSWORD;
-  const webdavInvalid = t.type === "webdav" && !/^https?:\/\/\S+/.test(t.webdav.url.trim());
-  const smbInvalid = t.type === "smb" && (!t.smb.host.trim() || !t.smb.share.trim() || !t.smb.username.trim());
-  const valid = !passwordMissing && !webdavInvalid && !smbInvalid;
+  const targetInvalid = backupTargetInvalid(t);
+  const valid = !passwordMissing && !targetInvalid;
 
   return (
     <>
@@ -152,88 +149,16 @@ export function BackupSettingsForm() {
             title="Speicherziel"
             description="Ein Archiv enthält Datenbank, alle Mails, Kalender, Einstellungen, DKIM-Schlüssel und Zertifikate."
           >
-            <TargetPicker value={t.type} onChange={(type) => { setTarget({ type }); setTest(null); }} />
-
-            {t.type === "local" && (
-              <Field
-                label="Ordner"
-                help="Pfad im Container. Leer = /data/backups (liegt dann auf demselben Datenträger – für echten Schutz ein anderes Laufwerk einbinden)."
-              >
-                {(id) => (
-                  <Input id={id} value={t.localPath} onChange={(e) => setTarget({ localPath: e.target.value })} placeholder="/data/backups" className="font-mono text-[13px]" />
-                )}
-              </Field>
-            )}
-
-            {t.type === "webdav" && (
-              <>
-                <Field
-                  label="WebDAV-URL"
-                  required
-                  error={webdavInvalid && t.webdav.url ? "Mit http:// oder https:// beginnen" : undefined}
-                  help="Nextcloud: https://cloud.example.de/remote.php/dav/files/BENUTZER/Postwerk – der Ordner wird bei Bedarf angelegt."
-                >
-                  {(id) => (
-                    <Input
-                      id={id}
-                      value={t.webdav.url}
-                      onChange={(e) => setWebdav({ url: e.target.value })}
-                      placeholder="https://cloud.example.de/remote.php/dav/files/felix/Postwerk"
-                      className="font-mono text-[13px]"
-                    />
-                  )}
-                </Field>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Benutzername">
-                    {(id) => <Input id={id} value={t.webdav.username} onChange={(e) => setWebdav({ username: e.target.value })} autoComplete="off" />}
-                  </Field>
-                  <Field label="Passwort" help="Bei Nextcloud ein App-Passwort verwenden.">
-                    {(id) => <SecretInput id={id} value={t.webdav.password} onChange={(v) => setWebdav({ password: v })} />}
-                  </Field>
-                </div>
-                <SwitchRow
-                  label="Zertifikat nicht prüfen"
-                  description="Nur für NAS-Geräte mit selbstsigniertem Zertifikat im eigenen Netz."
-                  checked={t.webdav.skipTlsVerify}
-                  onChange={(v) => setWebdav({ skipTlsVerify: v })}
-                />
-              </>
-            )}
-
-            {t.type === "smb" && (
-              <>
-                <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
-                  <Field label="Server" required help="Hostname oder IP, z. B. 192.168.1.10 oder nas.local">
-                    {(id) => <Input id={id} value={t.smb.host} onChange={(e) => setSmb({ host: e.target.value })} placeholder="192.168.1.10" className="font-mono text-[13px]" />}
-                  </Field>
-                  <Field label="Port">
-                    {(id) => <NumberInput id={id} value={t.smb.port} min={1} max={65535} onChange={(v) => setSmb({ port: v })} />}
-                  </Field>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Freigabe" required help="Name der Freigabe, z. B. backups">
-                    {(id) => <Input id={id} value={t.smb.share} onChange={(e) => setSmb({ share: e.target.value })} placeholder="backups" className="font-mono text-[13px]" />}
-                  </Field>
-                  <Field label="Unterordner" help="Optional, wird bei Bedarf angelegt.">
-                    {(id) => <Input id={id} value={t.smb.path} onChange={(e) => setSmb({ path: e.target.value })} placeholder="postwerk" className="font-mono text-[13px]" />}
-                  </Field>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Field label="Benutzername" required>
-                    {(id) => <Input id={id} value={t.smb.username} onChange={(e) => setSmb({ username: e.target.value })} autoComplete="off" />}
-                  </Field>
-                  <Field label="Passwort">
-                    {(id) => <SecretInput id={id} value={t.smb.password} onChange={(v) => setSmb({ password: v })} />}
-                  </Field>
-                  <Field label="Domäne" help="Meist leer lassen.">
-                    {(id) => <Input id={id} value={t.smb.domain} onChange={(e) => setSmb({ domain: e.target.value })} placeholder="WORKGROUP" />}
-                  </Field>
-                </div>
-              </>
-            )}
+            <BackupTargetFields
+              target={t}
+              onChange={(patch) => {
+                setTarget(patch);
+                if (patch.type) setTest(null);
+              }}
+            />
 
             <div className="space-y-3">
-              <Button icon={PlugZap} onClick={() => testMut.mutate(draft.target)} loading={testMut.isPending} disabled={webdavInvalid || smbInvalid}>
+              <Button icon={PlugZap} onClick={() => testMut.mutate(draft.target)} loading={testMut.isPending} disabled={targetInvalid}>
                 Speicherziel testen
               </Button>
               <TestPanel result={test} pending={testMut.isPending} />
@@ -324,4 +249,108 @@ export function BackupSettingsForm() {
       <SaveBar dirty={dirty} saving={save.isPending} onSave={() => valid && save.mutate(draft)} onReset={reset} />
     </>
   );
+}
+
+/** Storage target type and its connection fields (also used by the setup assistant). */
+export function BackupTargetFields({ target: t, onChange }: { target: BackupTarget; onChange: (patch: Partial<BackupTarget>) => void }) {
+  const setTarget = onChange;
+  const setWebdav = (patch: Partial<BackupTarget["webdav"]>) => setTarget({ webdav: { ...t.webdav, ...patch } });
+  const setSmb = (patch: Partial<BackupTarget["smb"]>) => setTarget({ smb: { ...t.smb, ...patch } });
+  const { webdavInvalid } = targetProblems(t);
+  return (
+    <>
+      <TargetPicker value={t.type} onChange={(type) => setTarget({ type })} />
+
+      {t.type === "local" && (
+        <Field
+          label="Ordner"
+          help="Pfad im Container. Leer = /data/backups (liegt dann auf demselben Datenträger – für echten Schutz ein anderes Laufwerk einbinden)."
+        >
+          {(id) => (
+            <Input id={id} value={t.localPath} onChange={(e) => setTarget({ localPath: e.target.value })} placeholder="/data/backups" className="font-mono text-[13px]" />
+          )}
+        </Field>
+      )}
+
+      {t.type === "webdav" && (
+        <>
+          <Field
+            label="WebDAV-URL"
+            required
+            error={webdavInvalid && t.webdav.url ? "Mit http:// oder https:// beginnen" : undefined}
+            help="Nextcloud: https://cloud.example.de/remote.php/dav/files/BENUTZER/Postwerk – der Ordner wird bei Bedarf angelegt."
+          >
+            {(id) => (
+              <Input
+                id={id}
+                value={t.webdav.url}
+                onChange={(e) => setWebdav({ url: e.target.value })}
+                placeholder="https://cloud.example.de/remote.php/dav/files/felix/Postwerk"
+                className="font-mono text-[13px]"
+              />
+            )}
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Benutzername">
+              {(id) => <Input id={id} value={t.webdav.username} onChange={(e) => setWebdav({ username: e.target.value })} autoComplete="off" />}
+            </Field>
+            <Field label="Passwort" help="Bei Nextcloud ein App-Passwort verwenden.">
+              {(id) => <SecretInput id={id} value={t.webdav.password} onChange={(v) => setWebdav({ password: v })} />}
+            </Field>
+          </div>
+          <SwitchRow
+            label="Zertifikat nicht prüfen"
+            description="Nur für NAS-Geräte mit selbstsigniertem Zertifikat im eigenen Netz."
+            checked={t.webdav.skipTlsVerify}
+            onChange={(v) => setWebdav({ skipTlsVerify: v })}
+          />
+        </>
+      )}
+
+      {t.type === "smb" && (
+        <>
+          <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+            <Field label="Server" required help="Hostname oder IP, z. B. 192.168.1.10 oder nas.local">
+              {(id) => <Input id={id} value={t.smb.host} onChange={(e) => setSmb({ host: e.target.value })} placeholder="192.168.1.10" className="font-mono text-[13px]" />}
+            </Field>
+            <Field label="Port">
+              {(id) => <NumberInput id={id} value={t.smb.port} min={1} max={65535} onChange={(v) => setSmb({ port: v })} />}
+            </Field>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Freigabe" required help="Name der Freigabe, z. B. backups">
+              {(id) => <Input id={id} value={t.smb.share} onChange={(e) => setSmb({ share: e.target.value })} placeholder="backups" className="font-mono text-[13px]" />}
+            </Field>
+            <Field label="Unterordner" help="Optional, wird bei Bedarf angelegt.">
+              {(id) => <Input id={id} value={t.smb.path} onChange={(e) => setSmb({ path: e.target.value })} placeholder="postwerk" className="font-mono text-[13px]" />}
+            </Field>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Benutzername" required>
+              {(id) => <Input id={id} value={t.smb.username} onChange={(e) => setSmb({ username: e.target.value })} autoComplete="off" />}
+            </Field>
+            <Field label="Passwort">
+              {(id) => <SecretInput id={id} value={t.smb.password} onChange={(v) => setSmb({ password: v })} />}
+            </Field>
+            <Field label="Domäne" help="Meist leer lassen.">
+              {(id) => <Input id={id} value={t.smb.domain} onChange={(e) => setSmb({ domain: e.target.value })} placeholder="WORKGROUP" />}
+            </Field>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function targetProblems(t: BackupTarget) {
+  return {
+    webdavInvalid: t.type === "webdav" && !/^https?:\/\/\S+/.test(t.webdav.url.trim()),
+    smbInvalid: t.type === "smb" && (!t.smb.host.trim() || !t.smb.share.trim() || !t.smb.username.trim()),
+  };
+}
+
+/** Required connection fields are missing or malformed. */
+export function backupTargetInvalid(t: BackupTarget): boolean {
+  const p = targetProblems(t);
+  return p.webdavInvalid || p.smbInvalid;
 }

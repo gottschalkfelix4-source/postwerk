@@ -36,6 +36,11 @@ type Result struct {
 	OK         bool      `json:"ok"`
 	Error      string    `json:"error,omitempty"`
 	FinishedAt time.Time `json:"finishedAt"`
+	// Code marks restores that wait for the master key:
+	// master_key_required | master_key_mismatch.
+	Code string `json:"code,omitempty"`
+	// KeyFingerprint is the fingerprint of the archive's master key.
+	KeyFingerprint string `json:"keyFingerprint,omitempty"`
 }
 
 type Manager struct {
@@ -119,6 +124,9 @@ func (m *Manager) Status() Status {
 	if m.last != nil {
 		l := *m.last
 		st.Last = &l
+	} else if f := LastFailure(m.DataDir); f != nil {
+		// A restore that was rolled back on start.
+		st.Last = &Result{Kind: "restore", Archive: f.Archive, Error: f.Error, FinishedAt: f.At}
 	}
 	t, cfg, err := m.target()
 	if err == nil {
@@ -227,7 +235,7 @@ func (m *Manager) writeArchive(ctx context.Context, t Target, cfg store.BackupSe
 		password = cfg.Password
 	}
 	set := m.Settings.Get()
-	man := Manifest{Version: m.Version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC()}
+	man := Manifest{Version: m.Version, Hostname: set.Server.Hostname, CreatedAt: time.Now().UTC(), KeyFingerprint: m.Store.Vault.Fingerprint()}
 	man.Domains, man.Accounts, man.Messages, _ = m.Store.BackupCounts(ctx)
 	src := Source{
 		DataDir: m.DataDir, DB: m.Store.DB, Manifest: man, Exclude: m.archiveExcludes(t),
@@ -389,15 +397,41 @@ func (m *Manager) Upload(ctx context.Context, filename string, f *os.File) (stri
 	return name, nil
 }
 
-// StartRestore checks the archive and password, then unpacks it in the
-// background. When everything is in place Restart is called.
-func (m *Manager) StartRestore(ctx context.Context, name, password string) error {
-	if !ValidName(name) {
-		return ErrNotFound
-	}
+// StartRestore checks the archive and password on the configured target,
+// then unpacks and verifies it in the background. When everything is in
+// place Restart is called.
+func (m *Manager) StartRestore(ctx context.Context, name, password, masterKey string) error {
 	t, _, err := m.target()
 	if err != nil {
 		return err
+	}
+	return m.startRestore(ctx, t, "manual", name, password, masterKey)
+}
+
+// StartRestoreFrom is StartRestore for a target that is not (yet) saved in
+// the settings, for example while a fresh server is being set up.
+func (m *Manager) StartRestoreFrom(ctx context.Context, cfg store.BackupTarget, name, password, masterKey string) error {
+	t, err := NewTarget(cfg, m.DataDir)
+	if err != nil {
+		return err
+	}
+	return m.startRestore(ctx, t, "setup", name, password, masterKey)
+}
+
+// ListTarget lists the archives on a target that is not saved in the
+// settings and returns its description.
+func (m *Manager) ListTarget(ctx context.Context, cfg store.BackupTarget) ([]Entry, string, error) {
+	t, err := NewTarget(cfg, m.DataDir)
+	if err != nil {
+		return nil, "", err
+	}
+	list, err := t.List(ctx)
+	return list, t.Describe(), err
+}
+
+func (m *Manager) startRestore(ctx context.Context, t Target, trigger, name, password, masterKey string) error {
+	if !ValidName(name) {
+		return ErrNotFound
 	}
 	// Quick check so a wrong password fails right away.
 	rc, _, err := t.Open(ctx, name)
@@ -415,46 +449,87 @@ func (m *Manager) StartRestore(ctx context.Context, name, password string) error
 	if err != nil {
 		return err
 	}
-	if _, err := m.begin("restore", "manual", name); err != nil {
+	if _, err := m.begin("restore", trigger, name); err != nil {
 		return err
 	}
-	go m.runRestore(t, name, password)
+	go m.runRestore(t, name, password, masterKey)
 	return nil
 }
 
-func (m *Manager) runRestore(t Target, name, password string) {
+func (m *Manager) runRestore(t Target, name, password, masterKey string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	defer cancel()
-	err := m.stage(ctx, t, name, password)
+	man, err := m.stage(ctx, t, name, password, masterKey)
+	m.restoreDone(name, man, err)
+}
+
+// RestoreStream unpacks and verifies an archive read from r (an upload)
+// and restarts the server when it is in place. size may be -1.
+func (m *Manager) RestoreStream(ctx context.Context, r io.Reader, size int64, name, password, masterKey string) (*Manifest, error) {
+	if _, err := m.begin("restore", "upload", name); err != nil {
+		return nil, err
+	}
+	m.update(func(j *Job) { j.Phase = "Archiv empfangen und entpacken"; j.Total = size })
+	pr := &progressReader{r: r, fn: func(done int64) { m.update(func(j *Job) { j.Done = done }) }}
+	man, err := PrepareRestore(ctx, pr, m.DataDir, RestoreOptions{Name: name, Password: password, MasterKey: masterKey})
+	m.restoreDone(name, man, err)
+	return man, err
+}
+
+// ResumeRestore continues a restore that stopped because the master key
+// was missing or wrong; the unpacked archive is still staged.
+func (m *Manager) ResumeRestore(ctx context.Context, masterKey string) (*Manifest, error) {
+	if _, err := m.begin("restore", "manual", ""); err != nil {
+		return nil, err
+	}
+	m.update(func(j *Job) { j.Phase = "Master-Schlüssel prüfen" })
+	name, man, err := ResumeRestore(ctx, m.DataDir, masterKey)
+	m.update(func(j *Job) { j.Archive = name })
+	m.restoreDone(name, man, err)
+	return man, err
+}
+
+// restoreDone records the outcome of staging and restarts on success.
+func (m *Manager) restoreDone(name string, man *Manifest, err error) {
 	if err != nil {
 		m.Log.Error("restore failed", "component", "backup", "archive", name, "err", err)
-		_ = os.RemoveAll(StagingDir(m.DataDir))
-		m.finish("restore", name, err)
+		m.mu.Lock()
+		m.job = nil
+		r := &Result{Kind: "restore", Archive: name, Error: err.Error(), FinishedAt: time.Now().UTC()}
+		switch {
+		case errors.Is(err, ErrKeyMissing):
+			r.Code = "master_key_required"
+		case errors.Is(err, ErrKeyMismatch):
+			r.Code = "master_key_mismatch"
+		}
+		if man != nil {
+			r.KeyFingerprint = man.KeyFingerprint
+		}
+		m.last = r
+		m.mu.Unlock()
 		return
 	}
+	m.Log.Info("restore staged", "component", "backup", "archive", name, "created", man.CreatedAt, "accounts", man.Accounts, "messages", man.Messages)
 	m.Log.Warn("restore prepared, restarting", "component", "backup", "archive", name)
 	m.update(func(j *Job) { j.Phase = "Neustart" })
 	if m.Restart != nil {
-		time.Sleep(time.Second) // let the UI see the final state
-		m.Restart()
+		go func() {
+			time.Sleep(time.Second) // let the UI see the final state
+			m.Restart()
+		}()
 	}
 }
 
-func (m *Manager) stage(ctx context.Context, t Target, name, password string) error {
+func (m *Manager) stage(ctx context.Context, t Target, name, password, masterKey string) (*Manifest, error) {
 	m.update(func(j *Job) { j.Phase = "Archiv laden und entpacken" })
 	rc, size, err := t.Open(ctx, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rc.Close()
 	m.update(func(j *Job) { j.Total = size })
 	pr := &progressReader{r: rc, fn: func(done int64) { m.update(func(j *Job) { j.Done = done }) }}
-	man, err := PrepareRestore(ctx, pr, password, m.DataDir, name)
-	if err != nil {
-		return err
-	}
-	m.Log.Info("restore staged", "component", "backup", "archive", name, "created", man.CreatedAt, "accounts", man.Accounts, "messages", man.Messages)
-	return nil
+	return PrepareRestore(ctx, pr, m.DataDir, RestoreOptions{Name: name, Password: password, MasterKey: masterKey})
 }
 
 // TestTarget writes, lists and deletes a small file on the given target.

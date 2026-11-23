@@ -126,12 +126,19 @@ auf einem **WebDAV**-Speicher (Nextcloud, Synology, Hetzner Storage Box …) ode
 Passwort (AES-256), Herunterladen, Hochladen und Wiederherstellen per Klick. Bei einer Wiederherstellung
 startet der Server kurz neu, der vorherige Stand bleibt unter `/data/pre-restore-…` erhalten.
 
+**Serverumzug:** Auf einem frisch installierten Postwerk bietet der Setup-Assistent „Aus Backup
+wiederherstellen“ an – Archiv hochladen oder vom SMB-/WebDAV-Ziel laden, Backup-Passwort eingeben, fertig.
+Das Archiv wird vorher vollständig geprüft (Archivformat, Passwort, Datenbank, Master-Schlüssel); passt
+etwas nicht, bleibt der Server unverändert. Danach ist alles wie auf dem alten Server, inklusive Konten,
+DKIM-Schlüsseln und Einstellungen. Schritt für Schritt: [UNRAID.md](docs/UNRAID.md#backup-update-fehlersuche).
+
 ```bash
 # Sicherung von der Kommandozeile (Standard: /data/backups), läuft auch im Betrieb
 docker compose exec postwerk postwerk backup
 
-# Archiv beim nächsten Start einspielen, danach neu starten
-docker compose exec postwerk postwerk restore /data/backups/postwerk-20261121-033000.tar.gz.enc
+# Archiv prüfen und beim nächsten Start einspielen, danach neu starten
+# (Passwort optional; Master-Schlüssel nur, wenn der alte Server POSTWERK_MASTER_KEY nutzte)
+docker compose exec postwerk postwerk restore /data/backups/postwerk-20261121-033000.tar.gz.enc ['passwort'] ['master-schlüssel']
 docker compose restart postwerk
 
 # Passwort eines Kontos setzen und 2FA zurücksetzen
@@ -149,7 +156,8 @@ beim ersten Start als `/data/master.key` erzeugt.
   nach einer Wiederherstellung alle Geheimnisse verloren. Ein unverschlüsseltes Backup schützt die
   Geheimnisse daher nicht – Backup-Verschlüsselung einschalten.
 - **`POSTWERK_MASTER_KEY` bzw. Datei außerhalb von `/data`**: Der Schlüssel ist in keinem Backup. Für jede
-  Wiederherstellung muss derselbe Schlüssel gesetzt sein, sonst startet Postwerk nicht. Zum Umstellen den
+  Wiederherstellung muss derselbe Schlüssel gesetzt sein oder bei der Wiederherstellung angegeben werden;
+  ein Archiv mit falschem Schlüssel wird abgelehnt. Zum Umstellen den
   Inhalt von `/data/master.key` als `POSTWERK_MASTER_KEY` setzen und die Datei danach löschen.
 
 Unter **Einstellungen → Sicherheit** lassen sich zusätzlich alle Nachrichten-Dateien auf der Festplatte

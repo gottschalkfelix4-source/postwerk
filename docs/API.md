@@ -281,12 +281,19 @@ interface SystemCheck {
 |---|---|---|---|
 | GET | `/api/setup/status` | – (ohne Anmeldung) | `SetupStatus` |
 | POST | `/api/setup/initialize` | `{ token, hostname, domain, adminEmail, adminName, adminPassword }` – nur im Modus `initial` | `Me` (setzt Session-Cookie) |
+| POST | `/api/setup/restore/archives` | `{ token, target: BackupSettings["target"] }` – nur im Modus `initial` | `{ archives: { name, size, modified, encrypted }[]; target; error? }` |
+| POST | `/api/setup/restore/start` | `{ token, target, name, password, masterKey }` | `BackupStatus`; Wiederherstellung läuft im Hintergrund, danach Neustart |
+| POST | `/api/setup/restore/upload` | multipart: Felder `token`, `password`, `masterKey` **vor** `file` | `{ manifest }`; das Archiv wird beim Empfang entpackt und geprüft, danach Neustart |
+| POST | `/api/setup/restore/resume` | `{ token, masterKey }` | `{ manifest }`; setzt eine Wiederherstellung fort, die auf den Master-Schlüssel wartet |
+| POST | `/api/setup/restore/status` | `{ token }` | `BackupStatus` (Fortschritt, `last.code` bei fehlendem Schlüssel) |
 | POST | `/api/admin/setup/complete` | – | `{ ok }` (Modus → `done`) |
 | GET | `/api/admin/system/check` | – | `SystemCheck` |
 | POST | `/api/admin/system/test-clamav` | `{ address }` | `{ ok, error? }` |
 | GET | `/api/admin/domains/{name}/dns/check` | – | `DnsCheck[]` (Live-Abfrage im DNS) |
 
-Fehlercodes: `invalid_token` (403), `already_initialized` (409).
+Fehlercodes: `invalid_token` (403), `already_initialized` (409); bei der Wiederherstellung zusätzlich
+die Codes aus [Backup → Wiederherstellung](#wiederherstellung-und-serverumzug). `SetupStatus` enthält im
+Modus `initial` ggf. `restoreError`: eine Wiederherstellung, die beim Start zurückgenommen wurde.
 
 ## Migration (Import von einem anderen Mailserver)
 
@@ -613,9 +620,26 @@ interface DnsRecord {
 ## Backup
 
 Archive des gesamten Systems (`postwerk-JJJJMMTT-HHMMSS.tar.gz`, verschlüsselt mit Endung `.enc`).
-Inhalt: `manifest.json` und `data/` (Datenbank-Snapshot, Mails, Zertifikate). Verschlüsselte Archive
-beginnen mit `PWBACKUP1` und einem 16-Byte-Salt, danach folgen AES-256-GCM-Blöcke à 64 KiB
-(Schlüssel per scrypt).
+Inhalt: zuerst `manifest.json`, dann `data/` – ein Snapshot der Datenbank (alle Konten, Domains mit
+DKIM-Schlüsseln, Aliase, Sieve-Filter, Kalender, Kontakte, Berichte, Einstellungen), alle Mail-Blobs,
+Zertifikate und `master.key`, sofern der Master-Schlüssel im Datenverzeichnis liegt. Nicht enthalten:
+`backups/`, `exports/`, Setup-Token und Reste früherer Wiederherstellungen. Verschlüsselte Archive
+beginnen mit `PWBACKUP2` (Parameter für scrypt und 16-Byte-Salt), danach folgen AES-256-GCM-Blöcke à
+64 KiB; ältere `PWBACKUP1`-Archive bleiben lesbar.
+
+```ts
+interface BackupManifest {
+  format: number;           // Archivformat, derzeit 1
+  version: string;          // Postwerk-Version, die das Archiv geschrieben hat
+  hostname: string;
+  createdAt: string;
+  domains: number; accounts: number; messages: number;
+  encrypted: boolean;
+  schema: number;           // Datenbankschema
+  keyFingerprint: string;   // Fingerabdruck des Master-Schlüssels der Geheimnisse
+  keyInArchive: boolean;    // master.key liegt im Archiv
+}
+```
 
 ### Einstellungen (`GET/PUT /api/admin/settings`, Abschnitt `backup`)
 
@@ -630,7 +654,7 @@ interface BackupSettings {
   schedule: { enabled: boolean; frequency: "hourly" | "daily" | "weekly"; time: string /* HH:MM */; weekday: number /* 0 = So */ };
   keep: number;                        // Archive auf dem Ziel behalten, 0 = alle
   encrypt: boolean;
-  password: string;                    // maskiert, mind. 8 Zeichen
+  password: string;                    // maskiert, mind. 12 Zeichen
 }
 ```
 
@@ -645,8 +669,38 @@ interface BackupSettings {
 | POST | `/api/admin/backups/upload` | multipart, Feld `file` | `{ name }` |
 | POST | `/api/admin/backups/{name}/download-token` | `{ password, code }` (Anmeldepasswort, ggf. 2FA-Code) | `{ token }`: einmalig, 2 Minuten gültig |
 | GET | `/api/admin/backups/{name}/download?token=…` | – | Archiv als Datei (403 ohne gültiges Token) |
-| POST | `/api/admin/backups/{name}/restore` | `{ password, accountPassword, code }` (`password` = Archiv-Passwort, leer = eingestelltes; `accountPassword`/`code` = Anmeldepasswort und ggf. 2FA-Code) | startet die Wiederherstellung, danach Neustart |
+| POST | `/api/admin/backups/{name}/restore` | `{ password, accountPassword, code, masterKey? }` (`password` = Archiv-Passwort, leer = eingestelltes; `accountPassword`/`code` = Anmeldepasswort und ggf. 2FA-Code; `masterKey` nur für Archive ohne `master.key`) | startet die Wiederherstellung, danach Neustart |
 | DELETE | `/api/admin/backups/{name}` | – | `Ok` |
+
+### Wiederherstellung und Serverumzug
+
+Eine Wiederherstellung läuft in zwei Schritten. Zuerst wird das Archiv im laufenden Betrieb nach
+`/data/restore-staging` entpackt und geprüft; erst wenn alles stimmt, wird es zum Einspielen beim nächsten
+Start vorgemerkt und der Server startet neu. Geprüft wird:
+
+1. **Archivformat:** `manifest.json` muss der erste Eintrag sein; ein Format oder Datenbankschema, das
+   neuer ist als die laufende Version, wird abgelehnt (`archive_format`, 422) – erst Postwerk aktualisieren.
+2. **Passwort und Unversehrtheit:** falsches Passwort (`archive_password`, 400), abgeschnittene oder
+   veränderte Archive, unbekannte Pfade und eine beschädigte Datenbank (`PRAGMA quick_check`) führen zum
+   Abbruch.
+3. **Master-Schlüssel:** Der Schlüssel, mit dem der Server nach dem Neustart arbeiten würde
+   (`POSTWERK_MASTER_KEY`, `POSTWERK_MASTER_KEY_FILE` oder `master.key` aus dem Archiv), muss den
+   Prüfwert der Datenbank entschlüsseln. Fehlt er im Archiv, antwortet die API mit
+   `master_key_required` (422), passt er nicht, mit `master_key_mismatch` (422). Das entpackte Archiv
+   bleibt dann liegen; mit dem Schlüssel des alten Servers geht es per `…/restore/resume` (Assistent)
+   bzw. erneutem Aufruf mit `masterKey` weiter. Ein angegebener Schlüssel wird als `master.key` in die
+   wiederhergestellten Daten geschrieben, sofern der Server keine `POSTWERK_MASTER_KEY*`-Variable nutzt.
+4. **Öffnen:** Die Datenbank wird probehalber so geöffnet wie beim Start (inkl. ausstehender Migrationen).
+
+Schlägt einer der Schritte fehl, bleibt der laufende Server unverändert. Beim Start werden die bisherigen
+Daten nach `/data/pre-restore-<zeit>` verschoben und die neuen eingesetzt. Lässt sich der
+wiederhergestellte Stand dann trotzdem nicht öffnen, nimmt Postwerk den Tausch zurück: die alten Daten
+kommen zurück, die neuen landen in `/data/failed-restore-<zeit>`, und der Grund erscheint auf der
+Backup-Seite bzw. als `restoreError` im Setup-Status. Es bleibt jeweils nur der neueste dieser Ordner.
+
+Auf einem **frisch installierten Server** (noch kein Konto) bietet der Setup-Assistent „Aus Backup
+wiederherstellen“ an; die Endpunkte unter `/api/setup/restore/…` sind mit dem Setup-Token geschützt
+(siehe [Einrichtung](#einrichtung-setup-assistent)).
 
 ## KI: in Ordner einsortieren
 
@@ -912,7 +966,9 @@ enthalten – ohne ihn wären nach einer Wiederherstellung alle Geheimnisse verl
 Archive schützen die Geheimnisse deshalb nicht; die Backup-Seite weist darauf hin. Kommt der Schlüssel
 aus `POSTWERK_MASTER_KEY` oder einer Datei außerhalb des Datenverzeichnisses, ist er in keinem Archiv
 (auch eine liegengebliebene `master.key` wird dann ausgelassen) – für jede Wiederherstellung muss
-derselbe Schlüssel gesetzt sein. `GET /api/admin/backups/status` enthält dazu
+derselbe Schlüssel gesetzt sein oder bei der Wiederherstellung angegeben werden (siehe
+[Wiederherstellung und Serverumzug](#wiederherstellung-und-serverumzug)). Das Manifest jedes Archivs
+nennt den Fingerabdruck des Schlüssels. `GET /api/admin/backups/status` enthält dazu
 `status.masterKey: { source: "env" | "env-file" | "data-file"; inArchive: boolean; fingerprint: string }`.
 
 ### Speicherverschlüsselung der Nachrichten (Admin, optional)

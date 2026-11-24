@@ -13,7 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hirochachacha/go-smb2"
+	// cloudsoda/go-smb2 ist der gepflegte Fork von hirochachacha/go-smb2 mit
+	// dem Fix für GO-2026-5051 (Panic/OOB-Read in ReadDir/ReadDirPlus gegen
+	// manipulierte SMB-Antworten); das Original hat keinen Fix.
+	"github.com/cloudsoda/go-smb2"
 )
 
 // smbTarget writes to a Windows/Samba share (NAS, Unraid, Synology,
@@ -68,13 +71,14 @@ func (c *smbConn) Close() {
 }
 
 func (s *smbTarget) connect(ctx context.Context) (*smbConn, error) {
+	addr := net.JoinHostPort(s.host, strconv.Itoa(s.port))
 	d := net.Dialer{Timeout: 15 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(s.host, strconv.Itoa(s.port)))
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("SMB: %s nicht erreichbar: %w", s.host, err)
 	}
 	dialer := &smb2.Dialer{Initiator: &smb2.NTLMInitiator{User: s.user, Password: s.pass, Domain: s.domain}}
-	sess, err := dialer.DialContext(ctx, conn)
+	sess, err := dialer.DialConn(ctx, conn, addr)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("SMB: Anmeldung fehlgeschlagen: %w", err)

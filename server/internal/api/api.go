@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -176,17 +177,62 @@ func (s *Server) admin(h userHandler) http.HandlerFunc {
 	})
 }
 
+// sessionCookieName returns the session cookie name. Whenever the cookie must
+// be Secure, a "__Host-" prefix is used so the cookie cannot be set or
+// overridden by a subdomain (a "__Host-" prefix also forbids a Domain
+// attribute and forces Secure). In plain HTTP the plain name is kept.
+func (s *Server) sessionCookieName(r *http.Request) string {
+	if s.secureCookie(r) {
+		return "__Host-" + sessionCookie
+	}
+	return sessionCookie
+}
+
 // sessionHash returns the token hash of the request's session cookie.
-func sessionHash(r *http.Request) string {
-	c, err := r.Cookie(sessionCookie)
+func (s *Server) sessionHash(r *http.Request) string {
+	c, err := r.Cookie(s.sessionCookieName(r))
 	if err != nil || c.Value == "" {
 		return ""
 	}
 	return auth.HashToken(c.Value)
 }
 
+// crossOrigin reports whether a browser request carries an Origin header that
+// belongs to a different host than the one Postwerk is being served under.
+// Same-origin requests always originate from the request host; behind a
+// reverse proxy the browser still sends the public origin, so the configured
+// public URL is checked as well. Requests without an Origin (CLI, mail
+// clients, curl) are allowed. It is a second CSRF layer alongside the
+// required X-Postwerk header and additionally guards the password login,
+// where the header is not mandatory.
+func (s *Server) crossOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Hostname() == "" {
+		return true
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if strings.EqualFold(u.Hostname(), host) {
+		return false
+	}
+	if s.Settings != nil {
+		if pub := strings.TrimSpace(s.Settings.Get().Web.PublicURL); pub != "" {
+			if pu, err := url.Parse(pub); err == nil && strings.EqualFold(u.Hostname(), pu.Hostname()) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (s *Server) currentUser(r *http.Request) (*store.Account, error) {
-	h := sessionHash(r)
+	h := s.sessionHash(r)
 	if h == "" {
 		return nil, errUnauthorized
 	}
@@ -427,6 +473,10 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			switch r.Method {
 			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				if s.crossOrigin(r) {
+					s.writeErr(w, r, errf(403, "forbidden", "Unerlaubter Ursprung (Origin-CSRF-Schutz)"))
+					return
+				}
 				if r.Header.Get("X-Postwerk") != "1" {
 					s.writeErr(w, r, errf(403, "forbidden", "CSRF-Header fehlt"))
 					return

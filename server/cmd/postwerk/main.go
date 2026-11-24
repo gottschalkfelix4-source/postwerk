@@ -289,7 +289,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		healthMux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 		healthMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 		healthSrv := &http.Server{Addr: cfg.HealthAddr, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
-			IdleTimeout: 120 * time.Second, Handler: healthMux}
+			IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10, Handler: healthMux}
 		go func() { <-ctx.Done(); shutdown(healthSrv) }()
 		go func() { _ = healthSrv.ListenAndServe() }()
 	}
@@ -297,7 +297,7 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 		// No global ReadTimeout/WriteTimeout: large uploads and downloads must
 		// keep working; request bodies get per-request deadlines in the API.
 		httpsSrv := &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout: 120 * time.Second}
+			IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 		listeners = append(listeners, func(ctx context.Context) error {
 			log.Info("listening", "component", "http", "proto", "https", "addr", cfg.HTTPSAddr)
 			go func() { <-ctx.Done(); shutdown(httpsSrv) }()

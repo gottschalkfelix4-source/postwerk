@@ -27,6 +27,20 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - SETGID
+      - SETUID
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 2g
+    pids_limit: 1024
+    cpus: 4
     environment:
       # ÄNDERN: vollständiger Hostname des Mailservers (A-Record und Reverse-DNS zeigen darauf)
       POSTWERK_HOSTNAME: mail.example.com
@@ -68,6 +82,9 @@ services:
     image: clamav/clamav:stable
     container_name: postwerk-clamav
     restart: unless-stopped
+    mem_limit: 2g
+    pids_limit: 1024
+    cpus: 2
     volumes:
       - clamav-db:/var/lib/clamav
     logging: *logging
@@ -79,6 +96,9 @@ services:
     image: ollama/ollama:latest
     container_name: postwerk-ollama
     restart: unless-stopped
+    mem_limit: 8g
+    pids_limit: 2048
+    cpus: 4
     volumes:
       - ollama-models:/root/.ollama
     logging: *logging

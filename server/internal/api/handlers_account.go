@@ -65,7 +65,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) (any, error) {
 	out := map[string]any{"ok": true}
-	if h := sessionHash(r); h != "" {
+	if h := s.sessionHash(r); h != "" {
 		// After an SSO login, optionally end the session at the identity provider too.
 		if method, _, err := s.Store.SessionMeta(r.Context(), h); err == nil && method == store.SessionOIDC {
 			if cfg := s.Settings.Get().OIDC; cfg.RPLogout {
@@ -81,7 +81,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
+	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(r), Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
 		Secure: s.secureCookie(r), SameSite: http.SameSiteStrictMode})
 }
 
@@ -209,7 +209,7 @@ func (s *Server) totpEnable(w http.ResponseWriter, r *http.Request, u *store.Acc
 	if err := s.Store.UpdateAccount(r.Context(), u.ID, store.AccountPatch{TOTPEnabled: &t}); err != nil {
 		return nil, err
 	}
-	if _, err := s.Store.DeleteOtherSessions(r.Context(), u.ID, sessionHash(r)); err != nil {
+	if _, err := s.Store.DeleteOtherSessions(r.Context(), u.ID, s.sessionHash(r)); err != nil {
 		return nil, err
 	}
 	s.Log.Info("2fa enabled", "component", "auth", "user", u.Email)
@@ -234,7 +234,7 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request, u *store.Ac
 	if err := s.Store.ReplaceRecoveryCodes(r.Context(), u.ID, nil); err != nil {
 		return nil, err
 	}
-	if _, err := s.Store.DeleteOtherSessions(r.Context(), u.ID, sessionHash(r)); err != nil {
+	if _, err := s.Store.DeleteOtherSessions(r.Context(), u.ID, s.sessionHash(r)); err != nil {
 		return nil, err
 	}
 	s.Log.Info("2fa disabled", "component", "auth", "user", u.Email)
@@ -324,7 +324,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, u *store.A
 	if err != nil {
 		return nil, err
 	}
-	cur := store.SessionID(sessionHash(r))
+	cur := store.SessionID(s.sessionHash(r))
 	for i := range list {
 		list[i].Current = list[i].ID == cur
 	}
@@ -336,14 +336,14 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request, u *store.
 	if err := s.Store.DeleteSessionByID(r.Context(), u.ID, id); err != nil {
 		return nil, err
 	}
-	if id == store.SessionID(sessionHash(r)) {
+	if id == store.SessionID(s.sessionHash(r)) {
 		s.clearSessionCookie(w, r)
 	}
 	return ok(), nil
 }
 
 func (s *Server) logoutOtherSessions(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
-	n, err := s.Store.DeleteOtherSessions(r.Context(), u.ID, sessionHash(r))
+	n, err := s.Store.DeleteOtherSessions(r.Context(), u.ID, s.sessionHash(r))
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +382,7 @@ func (s *Server) startSessionVia(w http.ResponseWriter, r *http.Request, account
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.secureCookie(r),
+		Name: s.sessionCookieName(r), Value: tok, Path: "/", HttpOnly: true, Secure: s.secureCookie(r),
 		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds()),
 	})
 	return nil

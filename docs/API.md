@@ -6,8 +6,11 @@ sofern nicht anders angegeben. Zeitangaben sind RFC-3339-Strings (UTC).
 ## Konventionen
 
 - **Session:** Nach dem Login setzt der Server das Cookie `pw_session` (HttpOnly, SameSite=Strict).
+  Sobald das Cookie `Secure` ist (HTTPS aktiv), trägt es den `__Host-`-Präfix.
 - **CSRF:** Jeder Request mit Methode `POST`, `PUT`, `PATCH` oder `DELETE` muss den Header
-  `X-Postwerk: 1` tragen, sonst antwortet der Server mit `403`.
+  `X-Postwerk: 1` tragen, sonst antwortet der Server mit `403`. Zusätzlich wird ein von einem
+  Browser gesendeter `Origin`-Header gegen den eigenen Host (bzw. die konfigurierte öffentliche URL)
+  geprüft; fremde Ursprünge werden mit `403` abgelehnt. Requests ohne `Origin` (CLI, Mail-Clients) bleiben erlaubt.
 - **Fehler:** HTTP-Status ≥ 400 mit Body `{ "error": "<code>", "message": "<Text für Menschen>" }`.
   Wichtige Codes: `unauthorized` (401), `totp_required` (401), `forbidden` (403), `not_found` (404),
   `invalid` (400), `conflict` (409), `rate_limited` (429), `ai_disabled` (503).

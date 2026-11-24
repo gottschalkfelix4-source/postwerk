@@ -256,7 +256,7 @@ func (s *Server) bindSSOSubject(ctx context.Context, cfg store.OIDCSettings, acc
 // change. Accounts without local password confirm by a recent SSO login.
 func (s *Server) reauth(r *http.Request, u *store.Account, password, code string, needCode bool) error {
 	if u.Source == store.SourceOIDC {
-		method, created, err := s.Store.SessionMeta(r.Context(), sessionHash(r))
+		method, created, err := s.Store.SessionMeta(r.Context(), s.sessionHash(r))
 		if err != nil {
 			return errUnauthorized
 		}

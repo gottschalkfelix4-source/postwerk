@@ -10,7 +10,8 @@ Verwaltung und Webmail und KI-Funktionen, die komplett lokal laufen können.
   DNSBL (IPv4 und IPv6) und Greylisting, ClamAV, Sendelimits pro Konto, 2FA mit
   Wiederherstellungscodes, App-Passwörter, Brute-Force-Sperre, verschlüsselte Geheimnisse
   (Master-Schlüssel), Verschlüsselung gespeicherter Mails mit dem eigenen OpenPGP-/S/MIME-Schlüssel,
-  DSGVO-Datenexport
+  DSGVO-Datenexport; Session-Cookie mit `__Host-`-Präfix unter HTTPS, zweite CSRF-Schicht über eine
+  `Origin`-Prüfung; Container läuft unprivileged mit drop-all-Capabilities und read-only-Rootfs
 - **Betrieb:** Dashboard-Warnungen auch per Mail und Webhook, automatisches Aufräumen (Papierkorb, Spam,
   ausgemusterte DKIM-Schlüssel, alte Kalender-Löschmarkierungen)
 - **Filter & Groupware:** Sieve-Filterregeln mit Regel-Editor im Webmail, Plus-Adressen
@@ -43,6 +44,13 @@ curl -fsSL https://raw.githubusercontent.com/gottschalkfelix4-source/postwerk/ma
 
 Was schon fertig ist und was noch kommt, steht in
 [docs/ROADMAP.md](docs/ROADMAP.md). Die API ist in [docs/API.md](docs/API.md) beschrieben.
+
+## Sicherheit
+
+Wie du Sicherheitsprobleme vertraulich meldest und was abgedeckt ist, steht in
+[SECURITY.md](SECURITY.md). Ein wöchentlicher CI-Lauf prüft das Backend mit
+`govulncheck` und `go test -race ./...` sowie das Frontend mit `npm audit`
+(siehe `.github/workflows/security.yml`).
 
 ## Schnellstart mit Docker
 

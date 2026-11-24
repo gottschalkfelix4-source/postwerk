@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -109,6 +110,54 @@ func TestInternalErrorIsGeneric(t *testing.T) {
 	body := rec.Body.String()
 	if strings.Contains(body, "secret.db") || !strings.Contains(body, "Referenz") {
 		t.Fatalf("internal details leaked or reference missing: %s", body)
+	}
+}
+
+// TestCrossOriginRejected verifies the second CSRF layer: even with the
+// X-Postwerk header present, a browser request from a foreign origin is
+// refused, while a same-origin request passes the middleware.
+func TestCrossOriginRejected(t *testing.T) {
+	e := newAuthEnv(t)
+	e.login(t, "")
+
+	same := httptest.NewRequest("POST", "/api/mail/mailboxes", strings.NewReader(`{"name":"X"}`))
+	same.Header.Set("X-Postwerk", "1")
+	same.Header.Set("Content-Type", "application/json")
+	same.Header.Set("Origin", "https://mail.example.test")
+	same.Host = "mail.example.test"
+	sameRec := httptest.NewRecorder()
+	e.h.ServeHTTP(sameRec, same)
+	if sameRec.Code == 403 {
+		t.Fatalf("same-origin request rejected: %d %s", sameRec.Code, sameRec.Body.String())
+	}
+
+	cross := httptest.NewRequest("POST", "/api/mail/mailboxes", strings.NewReader(`{"name":"X"}`))
+	cross.Header.Set("X-Postwerk", "1")
+	cross.Header.Set("Content-Type", "application/json")
+	cross.Header.Set("Origin", "https://evil.example.net")
+	cross.Host = "mail.example.test"
+	crossRec := httptest.NewRecorder()
+	e.h.ServeHTTP(crossRec, cross)
+	if crossRec.Code != 403 {
+		t.Fatalf("cross-origin request allowed: %d %s", crossRec.Code, crossRec.Body.String())
+	}
+}
+
+// TestSessionCookieSecurePrefix checks that the session cookie gets a
+// "__Host-" prefix once it must be Secure, so a subdomain cannot set it.
+func TestSessionCookieSecurePrefix(t *testing.T) {
+	e := newAuthEnv(t)
+
+	plain := httptest.NewRequest("GET", "/api/auth/me", nil)
+	if got := e.s.sessionCookieName(plain); got != sessionCookie {
+		t.Fatalf("plain cookie name = %q, want %q", got, sessionCookie)
+	}
+
+	sec := httptest.NewRequest("GET", "/api/auth/me", nil)
+	sec.TLS = &tls.ConnectionState{}
+	want := "__Host-" + sessionCookie
+	if got := e.s.sessionCookieName(sec); got != want {
+		t.Fatalf("secure cookie name = %q, want %q", got, want)
 	}
 }
 

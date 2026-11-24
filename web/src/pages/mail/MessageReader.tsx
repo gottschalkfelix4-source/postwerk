@@ -479,7 +479,7 @@ function HtmlBody({ html }: { html: string }) {
           ref={frameRef}
           title="Nachrichteninhalt"
           srcDoc={doc}
-          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
           onLoad={onLoad}
           className="block w-full border-0"

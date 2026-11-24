@@ -110,7 +110,11 @@ func (m *Manager) Start(ctx context.Context, accountID, requestedBy int64, admin
 		delete(m.running, accountID)
 		m.mu.Unlock()
 	}()
-	return e, nil
+	// Return a copy: the background run() keeps mutating e (status, progress),
+	// and the caller (API handler) serializes the result to JSON while run() is
+	// already writing. Sharing the pointer caused a data race under -race.
+	copy := *e
+	return &copy, nil
 }
 
 // Wait blocks until all running exports are finished (tests, shutdown).

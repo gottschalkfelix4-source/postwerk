@@ -15,6 +15,7 @@ const Domains = lazy(() => import("@/pages/admin/Domains"));
 const DomainDetail = lazy(() => import("@/pages/admin/DomainDetail"));
 const Aliases = lazy(() => import("@/pages/admin/Aliases"));
 const Queue = lazy(() => import("@/pages/admin/Queue"));
+const Quarantine = lazy(() => import("@/pages/admin/Quarantine"));
 const Logs = lazy(() => import("@/pages/admin/Logs"));
 const Security = lazy(() => import("@/pages/admin/Security"));
 const Metrics = lazy(() => import("@/pages/admin/Metrics"));
@@ -92,6 +93,7 @@ export const router = createBrowserRouter([
               },
               { path: "backup", element: <BackupPage />, handle: h({ crumb: "Backup" }) },
               { path: "queue", element: <Queue />, handle: h({ crumb: "Warteschlange" }) },
+              { path: "quarantine", element: <Quarantine />, handle: h({ crumb: "Quarantäne" }) },
               { path: "logs", element: <Logs />, handle: h({ crumb: "Logs" }) },
               { path: "security", element: <Security />, handle: h({ crumb: "Sicherheit" }) },
               { path: "metrics", element: <Metrics />, handle: h({ crumb: "Metriken" }) },

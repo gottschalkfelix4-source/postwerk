@@ -284,6 +284,10 @@ type TestResult struct {
 	MailError  string   `json:"mailError,omitempty"`
 	Webhook    bool     `json:"webhook"`
 	WebhookErr string   `json:"webhookError,omitempty"`
+	Telegram   bool     `json:"telegram"`
+	TelegramErr string  `json:"telegramError,omitempty"`
+	Ntfy       bool     `json:"ntfy"`
+	NtfyErr    string   `json:"ntfyError,omitempty"`
 }
 
 // SendTest sends a test notification with the saved settings, also while
@@ -306,6 +310,16 @@ func (n *Service) SendTest(ctx context.Context) TestResult {
 		if err := n.sendWebhook(ctx, cfg, EventTest, w, n.now()); err != nil {
 			res.WebhookErr = err.Error()
 		}
+	}
+	if err := n.sendTelegram(ctx, cfg, EventTest, w); err != nil {
+		res.TelegramErr = err.Error()
+	} else {
+		res.Telegram = cfg.Notifications.Telegram.Enabled
+	}
+	if err := n.sendNtfy(ctx, cfg, EventTest, w); err != nil {
+		res.NtfyErr = err.Error()
+	} else {
+		res.Ntfy = cfg.Notifications.Ntfy.Enabled
 	}
 	return res
 }
@@ -334,12 +348,19 @@ func (n *Service) recipients(ctx context.Context, nc store.NotificationSettings)
 }
 
 // send delivers one notification by mail and webhook. Only a failed mail
-// is reported: a broken webhook must not cause a storm of repeated mails.
+// is reported: a broken optional channel (webhook, Telegram, ntfy) must not
+// cause a storm of repeated mails.
 func (n *Service) send(ctx context.Context, cfg store.Settings, event string, w Warning, since time.Time) error {
 	if cfg.Notifications.WebhookURL != "" {
 		if err := n.sendWebhook(ctx, cfg, event, w, since); err != nil {
 			n.Log.Warn("notification webhook failed", "component", "notify", "warning", w.ID, "err", err)
 		}
+	}
+	if err := n.sendTelegram(ctx, cfg, event, w); err != nil {
+		n.Log.Warn("notification telegram failed", "component", "notify", "warning", w.ID, "err", err)
+	}
+	if err := n.sendNtfy(ctx, cfg, event, w); err != nil {
+		n.Log.Warn("notification ntfy failed", "component", "notify", "warning", w.ID, "err", err)
 	}
 	rcpts, err := n.recipients(ctx, cfg.Notifications)
 	if err == nil {
@@ -519,6 +540,113 @@ func (n *Service) sendWebhook(ctx context.Context, cfg store.Settings, event str
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("Webhook antwortet mit HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// sendTelegram delivers a notification to a Telegram chat via a bot (only
+// when the optional Telegram settings are enabled).
+func (n *Service) sendTelegram(ctx context.Context, cfg store.Settings, event string, w Warning) (err error) {
+	nc := cfg.Notifications.Telegram
+	defer func() {
+		result := "ok"
+		if err != nil {
+			result = "failed"
+		}
+		metrics.Notifications.WithLabelValues("telegram", result).Inc()
+	}()
+	if !nc.Enabled || strings.TrimSpace(nc.BotToken) == "" || strings.TrimSpace(nc.ChatID) == "" {
+		return nil // optional channel: silently disabled
+	}
+	text := subject(event, w)
+	if w.Detail != "" {
+		text += "\n" + w.Detail
+	}
+	if u := linkURL(cfg, w); u != "" {
+		text += "\n" + u
+	}
+	payload := map[string]any{"chat_id": nc.ChatID, "text": text, "disable_web_page_preview": true}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	apiURL := "https://api.telegram.org/bot" + nc.BotToken + "/sendMessage"
+	ctx, cancel := context.WithTimeout(ctx, webhookTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Postwerk")
+	client := n.Client
+	if client == nil {
+		client = &http.Client{Timeout: webhookTimeout, CheckRedirect: httpx.SameHostRedirect}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("Telegram antwortet mit HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// sendNtfy pushes a notification to an ntfy.sh-compatible server (only when
+// the optional ntfy settings are enabled).
+func (n *Service) sendNtfy(ctx context.Context, cfg store.Settings, event string, w Warning) (err error) {
+	nc := cfg.Notifications.Ntfy
+	defer func() {
+		result := "ok"
+		if err != nil {
+			result = "failed"
+		}
+		metrics.Notifications.WithLabelValues("ntfy", result).Inc()
+	}()
+	if !nc.Enabled || strings.TrimSpace(nc.Server) == "" || strings.TrimSpace(nc.Topic) == "" {
+		return nil // optional channel: silently disabled
+	}
+	target := strings.TrimRight(nc.Server, "/") + "/" + strings.Trim(nc.Topic, "/")
+	if !ValidWebhookURL(target) {
+		return errors.New("ungültige ntfy-Server-URL")
+	}
+	msgs := []string{subject(event, w)}
+	if w.Detail != "" {
+		msgs = append(msgs, w.Detail)
+	}
+	if u := linkURL(cfg, w); u != "" {
+		msgs = append(msgs, u)
+	}
+	text := strings.Join(msgs, "\n")
+	ctx, cancel := context.WithTimeout(ctx, webhookTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(text))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Title", strings.TrimPrefix(subject(event, w), "[Postwerk] "))
+	if nc.Priority > 0 {
+		req.Header.Set("Priority", fmt.Sprintf("%d", nc.Priority))
+	}
+	if nc.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+nc.Token)
+	}
+	req.Header.Set("User-Agent", "Postwerk")
+	client := n.Client
+	if client == nil {
+		client = &http.Client{Timeout: webhookTimeout, CheckRedirect: httpx.SameHostRedirect}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("ntfy antwortet mit HTTP %d", resp.StatusCode)
 	}
 	return nil
 }

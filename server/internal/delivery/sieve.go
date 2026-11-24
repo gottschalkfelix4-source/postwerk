@@ -168,6 +168,7 @@ func (s *Service) applySieve(ctx context.Context, acct *store.Account, raw []byt
 	}
 	var redirects []string
 	var vacation *sieve.Vacation
+	unsubscribedRedirected := false
 	for _, a := range actions {
 		switch a.Type {
 		case "keep":
@@ -188,6 +189,28 @@ func (s *Service) applySieve(ctx context.Context, acct *store.Account, raw []byt
 			vacation = a.Vacation
 		case "discard":
 			log.Info("sieve discarded message", "from", envFrom)
+		}
+	}
+
+	// Newsletters the user unsubscribed from (List-Unsubscribe in the webmail)
+	// are filed into the Newsletter folder instead of the inbox. The folder is
+	// created on demand so the rule works out of the box.
+	if !unsubscribedRedirected && parsed != nil && parsed.From.Email != "" {
+		if s.Store.IsUnsubscribed(ctx, acct.ID, parsed.From.Email) {
+			nl, err := s.Store.MailboxByName(ctx, acct.ID, "Newsletter")
+			if errors.Is(err, store.ErrNotFound) {
+				nl, err = s.Store.EnsureMailbox(ctx, acct.ID, "Newsletter")
+			}
+			if err == nil {
+				if i, ok := seen[inbox]; ok && targets[i].id == inbox {
+					targets[i].id = nl
+					log.Info("unsubscribed sender filed into Newsletter", "from", parsed.From.Email)
+					unsubscribedRedirected = true
+				} else if !ok {
+					addTarget(nl, res.KeepFlags)
+					unsubscribedRedirected = true
+				}
+			}
 		}
 	}
 

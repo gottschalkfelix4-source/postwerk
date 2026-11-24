@@ -120,7 +120,24 @@ function ComposerPanel({ initial, onClose }: { initial: Draft; onClose: () => vo
 
   const send = useMutation({
     mutationFn: () => mailApi.send({ ...payload(), ...(d.draftId !== undefined ? { draftId: d.draftId } : {}) }),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (res.ok && "pending" in res && res.pending) {
+        // Undo Send: the message is parked; offer to cancel it.
+        toast.success(`Zugestellt in ${res.undoSeconds} s`, {
+          action: {
+            label: "Rückgängig",
+            onClick: () => {
+              void mailApi
+                .undoPendingSend(res.id)
+                .then(() => toast.success("Senden abgebrochen"))
+                .catch((err) => toast.error(err, "Abbrechen fehlgeschlagen"));
+            },
+          },
+        });
+        refreshMail();
+        onClose();
+        return;
+      }
       toast.success("Nachricht gesendet");
       refreshMail();
       onClose();

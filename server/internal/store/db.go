@@ -558,6 +558,25 @@ var migrations = []string{
 		last_seen INTEGER NOT NULL,
 		last_notified INTEGER NOT NULL
 	);`,
+	// Webmail "Undo Send": a send is parked for a few seconds before it is
+	// submitted, so the sender can cancel it (store/pending_sends.go).
+	`CREATE TABLE pending_sends (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		from_addr TEXT NOT NULL,
+		rcpts TEXT NOT NULL,
+		raw BLOB NOT NULL,
+		created_at INTEGER NOT NULL,
+		send_at INTEGER NOT NULL
+	);
+	CREATE INDEX pending_sends_due ON pending_sends(send_at);
+	CREATE TABLE unsubscribers (
+		id INTEGER PRIMARY KEY,
+		account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+		sender TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		UNIQUE(account_id, sender)
+	);`,
 }
 
 // SchemaVersion is the database schema version this build creates and

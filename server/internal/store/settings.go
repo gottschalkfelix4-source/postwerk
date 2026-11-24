@@ -146,6 +146,9 @@ type WebSettings struct {
 	BehindProxy    bool     `json:"behindProxy"`
 	TrustedProxies []string `json:"trustedProxies"`
 	SecureCookies  bool     `json:"secureCookies"`
+	// UndoSendSeconds delays webmail sends so the sender can cancel them
+	// (0 = off). The delay applies per send and survives restarts.
+	UndoSendSeconds int `json:"undoSendSeconds"`
 }
 
 type TLSSettings struct {
@@ -227,6 +230,15 @@ type AISettings struct {
 	Features         AIFeatures `json:"features"`
 	Categories       []string   `json:"categories"`
 	AutoFile         AIAutoFile `json:"autoFile"`
+	// Briefing sends a daily summary of the latest messages to every account
+	// (optional, off by default). Time is "HH:MM" in server local time.
+	Briefing BriefingSettings `json:"briefing"`
+}
+
+// BriefingSettings configure the optional daily AI summary mail.
+type BriefingSettings struct {
+	Enabled bool   `json:"enabled"`
+	Time    string `json:"time"`
 }
 
 // AIAutoFile moves analyzed messages out of the inbox into folders.
@@ -275,6 +287,7 @@ func DefaultSettings(hostname string) Settings {
 	s.TLS.Mode = "selfsigned"
 	s.TLS.HTTPPort = "open"
 	s.Web.TrustedProxies = []string{}
+	s.Web.UndoSendSeconds = 10
 	s.Spam.Enabled = true
 	s.Spam.JunkThreshold = 5
 	s.Spam.RejectThreshold = 15
@@ -297,6 +310,7 @@ func DefaultSettings(hostname string) Settings {
 	s.AI.TimeoutSeconds = 120
 	s.AI.Features = AIFeatures{SpamCheck: true, Classify: true, Priority: true, Summarize: true, ReplyDraft: true, SemanticSearch: true, ExtractEvents: true}
 	s.AI.Categories = []string{"Rechnung", "Newsletter", "Support", "Privat", "Arbeit", "Versand", "Termin"}
+	s.AI.Briefing = BriefingSettings{Time: "07:00"}
 	s.AI.AutoFile = AIAutoFile{Mode: "categories", KeepImportant: true,
 		CategoryFolders: map[string]string{"Rechnung": "Rechnungen", "Newsletter": "Newsletter", "Versand": "Versand"}}
 	s.DMS.Paperless.URL = "http://paperless:8000"

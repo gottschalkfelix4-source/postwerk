@@ -45,6 +45,10 @@ export interface NotificationTestResult {
   mailError?: string;
   webhook: boolean;
   webhookError?: string;
+  telegram: boolean;
+  telegramError?: string;
+  ntfy: boolean;
+  ntfyError?: string;
 }
 
 export const limitsApi = {

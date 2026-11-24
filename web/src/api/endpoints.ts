@@ -16,6 +16,7 @@ import type {
   BackupTestResult,
   Ban,
   BulkRequest,
+  Address,
   AddressBook,
   AddressSuggestion,
   Calendar,
@@ -70,6 +71,7 @@ import type {
   RestartMigrationRequest,
   ScoredMessage,
   SendRequest,
+  SendResult,
   Settings,
   SettingsUpdate,
   SetupInitializeRequest,
@@ -85,6 +87,7 @@ import type {
   TotpEnableResult,
   RecoveryCodes,
   RecoveryCodesStatus,
+  UnsubscribeInfo,
   UpdateAccountRequest,
   UpdateMessageRequest,
   UpdateTaskRequest,
@@ -159,6 +162,10 @@ export const adminApi = {
   queue: () => http.get<QueueItem[]>("/api/admin/queue"),
   retryQueueItem: (id: number) => http.post<Ok>(`/api/admin/queue/${id}/retry`),
   deleteQueueItem: (id: number) => http.delete<Ok>(`/api/admin/queue/${id}`),
+
+  quarantine: () => http.get<{ items: QuarantineItem[]; limit: number }>("/api/admin/quarantine"),
+  quarantineRelease: (id: number) => http.post<Ok>(`/api/admin/quarantine/${id}/release`),
+  quarantineDelete: (id: number) => http.post<Ok>(`/api/admin/quarantine/${id}/delete`),
 
   logs: (params: { level?: string; q?: string; limit?: number }) =>
     http.get<LogEntry[]>("/api/admin/logs", { query: params }),
@@ -265,7 +272,11 @@ export const mailApi = {
   deleteMessage: (id: number) => http.delete<Ok>(`/api/mail/messages/${id}`),
   bulk: (body: BulkRequest) => http.post<{ ok: boolean; count: number }>("/api/mail/messages/bulk", body),
   thread: (threadId: number) => http.get<MessageDetail[]>(`/api/mail/threads/${threadId}`),
-  send: (body: SendRequest) => http.post<{ ok: boolean; id: number }>("/api/mail/send", body),
+  send: (body: SendRequest) => http.post<SendResult>("/api/mail/send", body),
+  /** Cancels a send that is still parked by Undo Send. */
+  undoPendingSend: (id: number) => http.post<Ok>(`/api/mail/send/pending/${id}/undo`),
+  /** One-click list-unsubscribe; also files the sender into "Newsletter". */
+  unsubscribe: (id: number) => http.post<{ ok: boolean; unsubscribe: UnsubscribeInfo }>(`/api/mail/messages/${id}/unsubscribe`),
   saveDraft: (body: DraftRequest) => http.post<{ id: number }>("/api/mail/drafts", body),
   tags: () => http.get<TagCount[]>("/api/mail/tags"),
 
@@ -346,6 +357,16 @@ export const dmsApi = {
 };
 
 export const metricsUrl = buildUrl("/metrics");
+
+/** One message in the admin quarantine (all junk folders). */
+export interface QuarantineItem {
+  id: number;
+  accountId: number;
+  account: string;
+  subject: string;
+  from: Address;
+  receivedAt: string;
+}
 
 export interface UploadOptions {
   /** Target mailbox; omitted means the inbox. */

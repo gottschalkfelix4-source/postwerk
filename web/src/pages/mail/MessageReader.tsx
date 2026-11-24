@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ArrowLeft,
@@ -25,6 +25,7 @@ import {
   Trash2,
   TriangleAlert,
   Code,
+  UserX,
 } from "lucide-react";
 import { dmsApi, mailApi } from "@/api/endpoints";
 import type { Address, Attachment, AuthResults, BulkAction, Mailbox, MessageDetail } from "@/api/types";
@@ -44,6 +45,7 @@ import {
   Skeleton,
   SkeletonText,
   toneFor,
+  useConfirm,
   useToast,
   type BadgeTone,
 } from "@/components/ui";
@@ -117,6 +119,9 @@ function ReaderContent({
     queryFn: () => mailApi.thread(threadId!),
     enabled: threadId !== undefined,
   });
+  const toast = useToast();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
 
   if (detail.isLoading) {
     return (
@@ -146,6 +151,15 @@ function ReaderContent({
   const archive = mailboxes.find((b) => b.role === "archive");
   const inJunk = box?.role === "junk";
   const messages = thread.data && thread.data.length > 0 ? thread.data : [m];
+
+  const doUnsubscribe = useMutation({
+    mutationFn: (id: number) => mailApi.unsubscribe(id),
+    onSuccess: () => {
+      toast.success("Abgemeldet", "Der Absender wurde in „Newsletter“ einsortiert.");
+      void qc.invalidateQueries({ queryKey: qk.messages });
+    },
+    onError: (err) => toast.error(err, "Abmelden fehlgeschlagen"),
+  });
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -190,6 +204,22 @@ function ReaderContent({
               <DropdownItem icon={Code} onClick={() => { close(); window.open(mailApi.rawUrl(m.id), "_blank", "noopener"); }}>
                 Original anzeigen
               </DropdownItem>
+              {m.unsubscribe?.header && (
+                <DropdownItem
+                  icon={UserX}
+                  onClick={() => {
+                    close();
+                    void confirm({
+                      title: "Von Newsletter abmelden?",
+                      message:
+                        "Postwerk ruft den Ein-Klick-Abmelde-Link des Absenders auf und sortiert ihn in den Ordner „Newsletter“ ein.",
+                      confirmLabel: "Abmelden",
+                    }).then((ok) => ok && doUnsubscribe.mutate(m.id));
+                  }}
+                >
+                  Abmelden (Newsletter)
+                </DropdownItem>
+              )}
             </>
           )}
         </Dropdown>

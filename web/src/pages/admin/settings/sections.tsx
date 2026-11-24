@@ -284,6 +284,21 @@ export function WebSection({ settings, save, saving }: SectionProps) {
           }}
         />
       </FormSection>
+      <FormSection title="Senden" description="Wartezeit vor dem Senden von Webmail-Nachrichten, damit ein versehentlicher Versand rückgängig gemacht werden kann (optional, standardmäßig aus).">
+        <Field label="Senden rückgängig machen" help="0 = aus. Der Versand wird für diese Sekundenzahl verzögert; in der Wartezeit bietet das Webmail „Rückgängig“ an.">
+          {(id) => (
+            <NumberInput
+              id={id}
+              value={draft.undoSendSeconds}
+              min={0}
+              max={300}
+              step={5}
+              suffix="Sekunden"
+              onChange={(v) => set({ undoSendSeconds: v })}
+            />
+          )}
+        </Field>
+      </FormSection>
       {draft.behindProxy && (
         <FormSection title="Anleitung" description="Konfiguration für deinen Proxy. Proxy-Typ und Zieladresse werden nur in diesem Browser gemerkt.">
           <ProxyKindPicker value={guide.kind} onChange={guide.setKind} compact />
@@ -816,6 +831,30 @@ export function AiSection({ settings, save, saving }: SectionProps) {
         classify={draft.features.classify}
         onChange={(autoFile) => set({ autoFile })}
       />
+      <FormSection
+        title="Tagesbriefing"
+        description="Optional: jeden Tag eine Zusammenfassung aller neuen Nachrichten als Mail pro Konto. Standardmäßig aus."
+      >
+        <SwitchRow
+          label="Tagesbriefing aktivieren"
+          description="Nutzt die Zusammenfassungs-Funktion; pro Tag und Konto entsteht genau eine Mail."
+          checked={draft.briefing.enabled}
+          onChange={(v) => set({ briefing: { ...draft.briefing, enabled: v } })}
+        />
+        {draft.briefing.enabled && (
+          <Field label="Uhrzeit" help="Ortszeit des Servers, Format HH:MM.">
+            {(id) => (
+              <Input
+                id={id}
+                type="time"
+                value={draft.briefing.time}
+                onChange={(e) => set({ briefing: { ...draft.briefing, time: e.target.value } })}
+                className="w-40"
+              />
+            )}
+          </Field>
+        )}
+      </FormSection>
     </Shell>
   );
 }

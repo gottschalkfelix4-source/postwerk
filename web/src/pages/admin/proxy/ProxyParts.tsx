@@ -43,6 +43,7 @@ export function webOf(w: Partial<WebSettings> | undefined): WebSettings {
     behindProxy: w?.behindProxy ?? false,
     trustedProxies: w?.trustedProxies ?? [],
     secureCookies: w?.secureCookies ?? false,
+    undoSendSeconds: w?.undoSendSeconds ?? 0,
   };
 }
 
@@ -54,6 +55,7 @@ export function withProxySuggestions(w: WebSettings, detect: ProxyDetect | undef
     behindProxy: true,
     trustedProxies: w.trustedProxies.length > 0 ? w.trustedProxies : detect?.suggestedTrustedProxy ? [detect.suggestedTrustedProxy] : [],
     secureCookies: w.behindProxy ? w.secureCookies : w.secureCookies || publicUrl.startsWith("https://"),
+    undoSendSeconds: w.undoSendSeconds,
   };
 }
 

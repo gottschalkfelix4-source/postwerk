@@ -19,6 +19,20 @@ type NotificationSettings struct {
 	WebhookURL string `json:"webhookUrl"`
 	// WebhookToken is sent as "Authorization: Bearer <token>" (optional).
 	WebhookToken string `json:"webhookToken" secret:"true"`
+	// Telegram sends a message to a chat via a bot (optional).
+	Telegram struct {
+		Enabled  bool   `json:"enabled"`
+		BotToken string `json:"botToken" secret:"true"`
+		ChatID   string `json:"chatId"`
+	} `json:"telegram"`
+	// Ntfy pushes to an ntfy.sh-compatible server (optional).
+	Ntfy struct {
+		Enabled  bool   `json:"enabled"`
+		Server   string `json:"server"`
+		Topic    string `json:"topic"`
+		Token    string `json:"token" secret:"true"`
+		Priority int    `json:"priority"`
+	} `json:"ntfy"`
 }
 
 // NotificationCategories are the known warning categories.

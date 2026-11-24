@@ -55,7 +55,10 @@ export const adminNav: NavGroup[] = [
   },
   {
     title: "Warteschlange",
-    items: [{ to: "/admin/queue", label: "Ausgehend", icon: Send, keywords: "queue zustellung" }],
+    items: [
+      { to: "/admin/queue", label: "Ausgehend", icon: Send, keywords: "queue zustellung" },
+      { to: "/admin/quarantine", label: "Quarantäne", icon: ShieldAlert, keywords: "spam junk freigeben" },
+    ],
   },
   {
     title: "Telemetrie",

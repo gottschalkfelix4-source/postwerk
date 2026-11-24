@@ -139,6 +139,9 @@ type messageDetail struct {
 	Auth        store.AuthResults    `json:"auth"`
 	Virus       *string              `json:"virus"`
 	AI          aiDetail             `json:"ai"`
+	// Unsubscribe is the parsed List-Unsubscribe header (empty when the
+	// message does not offer an unsubscribe).
+	Unsubscribe unsubscribeInfo `json:"unsubscribe"`
 	// Encrypted marks messages stored encrypted with the user's key.
 	Encrypted bool `json:"encrypted"`
 }
@@ -173,6 +176,7 @@ func (s *Server) detail(m *store.Message) (*messageDetail, error) {
 	if p.HTML != "" {
 		d.HTMLBody = &p.HTML
 	}
+	d.Unsubscribe = parseUnsubscribeHeader(p.Header.Get("List-Unsubscribe"))
 	if d.Auth.SPF == "" {
 		d.Auth = store.AuthResults{SPF: "none", DKIM: "none", DMARC: "none"}
 	}
@@ -517,6 +521,14 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, u *store.Account) 
 	}
 	if int64(len(raw)) > s.Settings.Get().Server.MaxMessageSize {
 		return nil, invalid("Nachricht ist zu groß")
+	}
+	if pend, err := s.parkSend(r.Context(), u, u.Email, rcpts, raw); err != nil {
+		return nil, err
+	} else if pend != nil {
+		// Undo Send is active: the message is parked and delivered after
+		// the window unless the sender cancels it.
+		s.Log.Info("send parked for undo", "component", "webmail", "user", u.Email, "pending", pend.ID)
+		return map[string]any{"ok": true, "pending": true, "id": pend.ID, "undoSeconds": s.undoSeconds()}, nil
 	}
 	sent, err := s.Delivery.Submit(r.Context(), u, u.Email, rcpts, raw, true)
 	if err != nil {

@@ -659,8 +659,10 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/mail/threads/{id}", s.user(s.thread))
 	m.HandleFunc("POST /api/mail/send", s.user(s.send))
 	m.HandleFunc("POST /api/mail/drafts", s.user(s.saveDraft))
+	m.HandleFunc("POST /api/mail/messages/{id}/unsubscribe", s.user(s.unsubscribeMessage))
 	m.HandleFunc("GET /api/mail/tags", s.user(s.tags))
 	s.sieveRoutes(m)
+	s.undoRoutes(m)
 
 	// ai
 	m.HandleFunc("GET /api/ai/status", s.user(s.aiStatus))
@@ -687,6 +689,9 @@ func (s *Server) routes(m *http.ServeMux) {
 
 	// send limits and notifications
 	s.limitsRoutes(m)
+
+	// quarantine (junk overview for admins)
+	s.quarantineRoutes(m)
 }
 
 // background returns a context detached from the request for slow work.

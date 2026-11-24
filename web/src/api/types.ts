@@ -113,6 +113,8 @@ export interface Settings {
     trustedProxies: string[];     // IPs or CIDRs whose X-Forwarded-For/-Proto are trusted.
                                   // Empty + behindProxy = trust private networks and loopback.
     secureCookies: boolean;       // session cookie only over HTTPS
+    /** Seconds the webmail delays sends so they can be undone (0 = off). */
+    undoSendSeconds: number;
   };
   tls: {
     mode: TlsMode;
@@ -151,6 +153,8 @@ export interface Settings {
       categoryFolders: Record<string, string>;   // category → folder name ("" = stays in the inbox)
       keepImportant: boolean;                    // high priority stays in the inbox
     };
+    /** Optional daily summary mail ("Tagesbriefing"), off by default. */
+    briefing: { enabled: boolean; time: string };
   };
   dms: { paperless: { enabled: boolean; url: string; token: string /* masked */; autoForward: boolean; categories: string[]; accounts: string[] } };
   security: { bruteForce: { maxAttempts: number; windowSeconds: number; banSeconds: number } };
@@ -208,6 +212,10 @@ export interface NotificationSettings {
   minSeverity: "warning" | "error";
   webhookUrl: string;              // optional, http(s)
   webhookToken: string;            // masked; sent as Bearer token
+  /** Optional Telegram bot notification (off by default). */
+  telegram: { enabled: boolean; botToken: string /* masked */; chatId: string };
+  /** Optional ntfy.sh push notification (off by default). */
+  ntfy: { enabled: boolean; server: string; topic: string; token: string /* masked */; priority: number };
 }
 
 export type MtaStsMode = "none" | "testing" | "enforce";
@@ -372,6 +380,8 @@ export interface MessageDetail extends MessageSummary {
   attachments: Attachment[]; auth: AuthResults;
   virus: string | null;                         // signature name, if found
   ai: { summary: string | null; reasons: string[]; events: ExtractedEvent[]; tasks: ExtractedTask[] } ;
+  /** Parsed List-Unsubscribe header (header = "" when the mail offers none). */
+  unsubscribe: UnsubscribeInfo;
 }
 
 /** Event or occurrence of a recurring event. All-day events use plain dates with an exclusive end. */
@@ -508,6 +518,18 @@ export interface OutgoingAttachment { filename: string; contentType: string; dat
 export interface SendRequest {
   to: string[]; cc?: string[]; bcc?: string[]; subject: string; text: string; html?: string;
   inReplyTo?: number; draftId?: number; attachments?: OutgoingAttachment[];
+}
+
+/** Result of a send: pending=true when Undo Send delayed the delivery. */
+export type SendResult =
+  | { ok: true; pending: true; id: number; undoSeconds: number }
+  | { ok: boolean; id: number };
+
+/** Parsed List-Unsubscribe header of a message (empty header = none). */
+export interface UnsubscribeInfo {
+  header: string;
+  https: string;
+  mailto: string;
 }
 
 export type DraftRequest = SendRequest & { draftId?: number };

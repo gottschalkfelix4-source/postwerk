@@ -211,6 +211,8 @@ func run(cfg *config.Config, ring *logx.Ring, log *slog.Logger) error {
 	go q.Run(ctx)
 	go aiWorker.Run(ctx)
 	go housekeeping(ctx, st, settings, tp, log)
+	go runPendingSends(ctx, st, svc, log)
+	go briefingLoop(ctx, settings, aiClient, st, svc, log)
 
 	maxSize := func() int64 { return settings.Get().Server.MaxMessageSize }
 	smtpLog := log.With("component", "smtp")

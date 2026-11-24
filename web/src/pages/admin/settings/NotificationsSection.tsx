@@ -41,6 +41,8 @@ const fallback: NotificationSettings = {
   minSeverity: "warning",
   webhookUrl: "",
   webhookToken: "",
+  telegram: { enabled: false, botToken: "", chatId: "" },
+  ntfy: { enabled: false, server: "", topic: "", token: "", priority: 3 },
 };
 
 /** Settings section "notifications": operational warnings by mail and webhook. */
@@ -61,7 +63,7 @@ export function NotificationsSection({ settings, save, saving }: SectionProps) {
     <>
       <Shell
         title="Benachrichtigungen"
-        description="Probleme aus dem Dashboard per Mail (und optional Webhook) melden – z. B. ablaufende Zertifikate, fehlgeschlagene Sicherungen oder eine gesperrte IP."
+        description="Probleme aus dem Dashboard per Mail (und optional Webhook, Telegram oder ntfy) melden – z. B. ablaufende Zertifikate, fehlgeschlagene Sicherungen oder eine gesperrte IP."
         dirty={dirty && !urlInvalid}
         saving={saving}
         onReset={reset}
@@ -131,6 +133,79 @@ export function NotificationsSection({ settings, save, saving }: SectionProps) {
             {(id) => <SecretInput id={id} value={draft.webhookToken} onChange={(v) => set({ webhookToken: v })} />}
           </Field>
         </FormSection>
+        <FormSection
+          title="Telegram & ntfy"
+          description="Optional zusätzliche Push-Kanäle: ein Telegram-Bot oder ein ntfy.sh-kompatibler Server (z. B. selbst gehostet). Beide sind standardmäßig aus."
+        >
+          <SwitchRow
+            label="Telegram aktivieren"
+            checked={draft.telegram.enabled}
+            onChange={(v) => set({ telegram: { ...draft.telegram, enabled: v } })}
+          />
+          <div className={draft.telegram.enabled ? "" : "pointer-events-none opacity-50"}>
+            <Field label="Bot-Token" help="Von @BotFather, Form „123456:ABC-DEF…“.">
+              {(id) => (
+                <SecretInput
+                  id={id}
+                  value={draft.telegram.botToken}
+                  onChange={(v) => set({ telegram: { ...draft.telegram, botToken: v } })}
+                />
+              )}
+            </Field>
+            <Field label="Chat-ID" help="Ziel-Chat oder -Kanal, z. B. 123456789 oder @meinkanal.">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={draft.telegram.chatId}
+                  onChange={(e) => set({ telegram: { ...draft.telegram, chatId: e.target.value } })}
+                  placeholder="123456789"
+                />
+              )}
+            </Field>
+          </div>
+          <SwitchRow
+            label="ntfy aktivieren"
+            checked={draft.ntfy.enabled}
+            onChange={(v) => set({ ntfy: { ...draft.ntfy, enabled: v } })}
+          />
+          <div className={draft.ntfy.enabled ? "" : "pointer-events-none opacity-50"}>
+            <Field label="Server" help="z. B. https://ntfy.sh oder ein selbst gehosteter Server.">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={draft.ntfy.server}
+                  onChange={(e) => set({ ntfy: { ...draft.ntfy, server: e.target.value } })}
+                  placeholder="https://ntfy.sh"
+                />
+              )}
+            </Field>
+            <Field label="Thema (Topic)">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={draft.ntfy.topic}
+                  onChange={(e) => set({ ntfy: { ...draft.ntfy, topic: e.target.value } })}
+                  placeholder="postwerk-alerts"
+                />
+              )}
+            </Field>
+            <Field label="Token" help="Optional für private Themen („Authorization: Bearer …“).">
+              {(id) => <SecretInput id={id} value={draft.ntfy.token} onChange={(v) => set({ ntfy: { ...draft.ntfy, token: v } })} />}
+            </Field>
+            <Field label="Priorität (1–5)">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={draft.ntfy.priority}
+                  onChange={(e) => set({ ntfy: { ...draft.ntfy, priority: Number(e.target.value) || 0 } })}
+                />
+              )}
+            </Field>
+          </div>
+        </FormSection>
       </Shell>
       <NotificationTestCard dirty={dirty} />
     </>
@@ -177,6 +252,22 @@ function NotificationTestCard({ dirty }: { dirty: boolean }) {
                 </Notice>
               ) : (
                 <Notice tone="success" icon={CircleCheck} title="Webhook erfolgreich aufgerufen" />
+              ))}
+            {res.telegram &&
+              (res.telegramError ? (
+                <Notice tone="error" icon={CircleX} title="Telegram fehlgeschlagen">
+                  {res.telegramError}
+                </Notice>
+              ) : (
+                <Notice tone="success" icon={CircleCheck} title="Telegram-Nachricht gesendet" />
+              ))}
+            {res.ntfy &&
+              (res.ntfyError ? (
+                <Notice tone="error" icon={CircleX} title="ntfy fehlgeschlagen">
+                  {res.ntfyError}
+                </Notice>
+              ) : (
+                <Notice tone="success" icon={CircleCheck} title="ntfy-Benachrichtigung gesendet" />
               ))}
           </div>
         )}

@@ -101,6 +101,12 @@ func (m *Manager) Start(ctx context.Context, accountID, requestedBy int64, admin
 	if err != nil {
 		return nil, err
 	}
+	// Return a copy: the background run() keeps mutating e (status, progress),
+	// and the caller (API handler) serializes the result to JSON while run() is
+	// already writing. Sharing the pointer caused a data race under -race.
+	// The copy must be made before the goroutine starts, otherwise run() may
+	// already have started writing to e while Start() is still reading it.
+	copy := *e
 	m.running[accountID] = true
 	m.wg.Add(1)
 	go func() {
@@ -110,10 +116,6 @@ func (m *Manager) Start(ctx context.Context, accountID, requestedBy int64, admin
 		delete(m.running, accountID)
 		m.mu.Unlock()
 	}()
-	// Return a copy: the background run() keeps mutating e (status, progress),
-	// and the caller (API handler) serializes the result to JSON while run() is
-	// already writing. Sharing the pointer caused a data race under -race.
-	copy := *e
 	return &copy, nil
 }
 

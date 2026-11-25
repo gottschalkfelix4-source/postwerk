@@ -25,6 +25,9 @@ func (s *Server) quarantineList(w http.ResponseWriter, r *http.Request, u *store
 	if err != nil {
 		return nil, err
 	}
+	if items == nil {
+		items = []store.JunkMessage{}
+	}
 	return map[string]any{"items": items, "limit": limit}, nil
 }
 

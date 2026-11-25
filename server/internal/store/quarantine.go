@@ -18,9 +18,11 @@ type JunkMessage struct {
 // newest first, for the admin quarantine page. accountIDs maps message ids
 // to the owning account email (resolved in one batch query).
 func (s *Store) QuarantineList(ctx context.Context, limit int) ([]JunkMessage, map[int64]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+msgCols+` FROM messages m
-		JOIN mailboxes mb ON mb.id = m.mailbox_id AND mb.role = 'junk'
-		ORDER BY m.received_at DESC, m.id DESC LIMIT ?`, limit)
+	// No JOIN here: msgCols uses unqualified names (id) which would become
+	// ambiguous with mailboxes.id.
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+		WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE role = 'junk')
+		ORDER BY received_at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, nil, err
 	}

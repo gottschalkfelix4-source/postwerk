@@ -122,6 +122,15 @@ function ReaderContent({
   const toast = useToast();
   const qc = useQueryClient();
   const confirm = useConfirm();
+  // Hooks must run unconditionally, before any early return below.
+  const doUnsubscribe = useMutation({
+    mutationFn: (id: number) => mailApi.unsubscribe(id),
+    onSuccess: () => {
+      toast.success("Abgemeldet", "Der Absender wurde in „Newsletter“ einsortiert.");
+      void qc.invalidateQueries({ queryKey: qk.messages });
+    },
+    onError: (err) => toast.error(err, "Abmelden fehlgeschlagen"),
+  });
 
   if (detail.isLoading) {
     return (
@@ -151,15 +160,6 @@ function ReaderContent({
   const archive = mailboxes.find((b) => b.role === "archive");
   const inJunk = box?.role === "junk";
   const messages = thread.data && thread.data.length > 0 ? thread.data : [m];
-
-  const doUnsubscribe = useMutation({
-    mutationFn: (id: number) => mailApi.unsubscribe(id),
-    onSuccess: () => {
-      toast.success("Abgemeldet", "Der Absender wurde in „Newsletter“ einsortiert.");
-      void qc.invalidateQueries({ queryKey: qk.messages });
-    },
-    onError: (err) => toast.error(err, "Abmelden fehlgeschlagen"),
-  });
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -471,30 +471,56 @@ function MessageCard({
   );
 }
 
+// Mails are rendered at their original size: the visible frame grows to the
+// natural width and full height of the content and never shows its own
+// scrollbars. The visible frame is sandboxed with an opaque origin and a
+// strict CSP (no scripts at all), so its size cannot be read directly. A
+// hidden same-origin twin frame (sandbox without allow-scripts: the
+// sanitized content cannot execute anything) renders the identical document
+// and the parent reads its natural size from the DOM – no postMessage, no
+// race, and the strict CSP of the visible frame stays untouched.
+const MAX_MAIL_WIDTH = 20000;
+const MAX_MAIL_HEIGHT = 100000;
+
 function HtmlBody({ html }: { html: string }) {
   const [allowRemote, setAllowRemote] = useState(false);
   const { doc, blocked } = useMemo(() => sanitizeEmail(html, allowRemote), [html, allowRemote]);
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(240);
+  const measureRef = useRef<HTMLIFrameElement>(null);
+  // width null = fit the container (100%).
+  const [size, setSize] = useState<{ width: number | null; height: number }>({ width: null, height: 240 });
 
-  const observerRef = useRef<ResizeObserver | null>(null);
+  useEffect(() => {
+    let last = "";
+    let stable = 0;
+    let count = 0;
+    const read = () => {
+      const d = measureRef.current?.contentDocument;
+      if (!d || !d.body) return;
+      const w = Math.min(Math.max(d.documentElement.scrollWidth, d.body.scrollWidth), MAX_MAIL_WIDTH) || null;
+      const h = Math.min(Math.max(80, d.documentElement.scrollHeight, d.body.scrollHeight), MAX_MAIL_HEIGHT);
+      const key = w + "x" + h;
+      if (key !== last) {
+        last = key;
+        stable = 0;
+        setSize((s) => (s.width === w && s.height === h ? s : { width: w, height: h }));
+      } else if (++stable >= 4) {
+        window.clearInterval(interval);
+      }
+    };
+    // Poll while layout settles (fonts, late DOM); stop after ~10 s or once
+    // the size is stable for a few reads.
+    const interval = window.setInterval(() => {
+      if (++count > 40) window.clearInterval(interval);
+      read();
+    }, 250);
+    read();
+    return () => window.clearInterval(interval);
+  }, [doc]);
 
-  useEffect(() => () => observerRef.current?.disconnect(), []);
+  const frameWidth = size.width ? `max(100%, ${size.width}px)` : "100%";
 
-  const onLoad = () => {
-    const frame = frameRef.current;
-    const d = frame?.contentDocument;
-    if (!frame || !d?.documentElement) return;
-    const measure = () => setHeight(Math.max(80, Math.ceil(d.documentElement.scrollHeight)));
-    measure();
-    observerRef.current?.disconnect();
-    if ("ResizeObserver" in window && d.body) {
-      observerRef.current = new ResizeObserver(measure);
-      observerRef.current.observe(d.body);
-    }
-  };
   return (
-    <div>
+    <div className="relative overflow-x-auto">
       {blocked > 0 && !allowRemote && (
         <div className="flex flex-wrap items-center gap-3 border-b border-zinc-100 bg-zinc-50 px-4 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-400 sm:px-5">
           <ImageOff className="h-4 w-4 shrink-0" />
@@ -506,14 +532,22 @@ function HtmlBody({ html }: { html: string }) {
       )}
       <div className="bg-white">
         <iframe
-          ref={frameRef}
           title="Nachrichteninhalt"
           srcDoc={doc}
-          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
-          onLoad={onLoad}
-          className="block w-full border-0"
-          style={{ height }}
+          className="block border-0"
+          style={{ width: frameWidth, height: size.height, overflow: "hidden" }}
+        />
+        <iframe
+          ref={measureRef}
+          title="Größenmessung (versteckt)"
+          srcDoc={doc}
+          sandbox="allow-same-origin"
+          aria-hidden="true"
+          tabIndex={-1}
+          className="pointer-events-none absolute left-0 top-0 border-0"
+          style={{ width: frameWidth, height: 1, visibility: "hidden" }}
         />
       </div>
     </div>

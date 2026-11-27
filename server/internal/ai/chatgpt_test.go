@@ -467,8 +467,8 @@ func TestChatGPTUsageLimitPausesWorker(t *testing.T) {
 	if until := w.PausedUntil(); !until.Equal(reset) {
 		t.Errorf("paused until %v, want %v", until, reset)
 	}
-	if _, failed := w.failed.Load(m.ID); failed {
-		t.Error("message must not count as failed")
+	if state := mustAIState(t, st, m.ID); state.Attempts != 0 || state.NextAttemptAt != nil {
+		t.Errorf("message must not consume a retry attempt: %+v", state)
 	}
 	got, _ := st.GetMessageAny(ctx, m.ID)
 	if got.Category != nil {

@@ -478,7 +478,8 @@ func (s *Store) SetAIResult(ctx context.Context, id int64, r AIResult) error {
 	if r.Priority == "" {
 		r.Priority = "normal"
 	}
-	q := `UPDATE messages SET category = ?, priority = ?, tags_json = ?, ai_summary = ?, ai_reasons_json = ?, ai_events_json = ?, ai_tasks_json = ?, ai_done = 1, ai_suspicious = ?`
+	q := `UPDATE messages SET category = ?, priority = ?, tags_json = ?, ai_summary = ?, ai_reasons_json = ?, ai_events_json = ?, ai_tasks_json = ?, ai_done = 1, ai_suspicious = ?,
+		ai_attempts = 0, ai_next_attempt_at = NULL, ai_last_error = ''`
 	args := []any{toNull(r.Category), r.Priority, js(nonNil(r.Tags)), toNull(r.Summary), js(nonNil(r.Reasons)), js(r.Events), js(r.Tasks), r.Suspicious}
 	if r.SpamScore != nil {
 		q += `, spam_score = ?`
@@ -495,9 +496,11 @@ func (s *Store) SetAIEvents(ctx context.Context, id int64, ev []ExtractedEvent, 
 
 func (s *Store) PendingAIMessages(ctx context.Context, limit int) ([]int64, error) {
 	// Only incoming mail is analyzed; sent, drafts, junk and trash are skipped.
+	// Messages whose last attempt failed wait for their persisted retry time.
 	rows, err := s.DB.QueryContext(ctx, `SELECT m.id FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
 		WHERE m.ai_done = 0 AND m.draft = 0 AND (b.role IS NULL OR b.role IN ('inbox','archive'))
-		ORDER BY m.id DESC LIMIT ?`, limit)
+		AND (m.ai_next_attempt_at IS NULL OR m.ai_next_attempt_at <= ?)
+		ORDER BY m.id DESC LIMIT ?`, time.Now().Unix(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -509,6 +512,60 @@ func (s *Store) PendingAIMessages(ctx context.Context, limit int) ([]int64, erro
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// AIState is the persisted retry state of the AI analysis and embedding for
+// one message. Attempts and next attempts survive restarts.
+type AIState struct {
+	Attempts           int
+	NextAttemptAt      *time.Time
+	LastError          string
+	EmbedAttempts      int
+	EmbedNextAttemptAt *time.Time
+	EmbedLastError     string
+}
+
+// AIMessageState returns the persisted AI retry state of a message.
+func (s *Store) AIMessageState(ctx context.Context, id int64) (AIState, error) {
+	var st AIState
+	var next, embedNext sql.NullInt64
+	err := s.DB.QueryRowContext(ctx, `SELECT ai_attempts, ai_next_attempt_at, ai_last_error,
+		ai_embed_attempts, ai_embed_next_attempt_at, ai_embed_last_error FROM messages WHERE id = ?`, id).
+		Scan(&st.Attempts, &next, &st.LastError, &st.EmbedAttempts, &embedNext, &st.EmbedLastError)
+	if err != nil {
+		return st, err
+	}
+	st.NextAttemptAt = nullTime(next)
+	st.EmbedNextAttemptAt = nullTime(embedNext)
+	return st, nil
+}
+
+// AIMessageAttempts returns how often the analysis of a message failed.
+func (s *Store) AIMessageAttempts(ctx context.Context, id int64) (int, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT ai_attempts FROM messages WHERE id = ?`, id).Scan(&n)
+	return n, err
+}
+
+// SetAIFailure stores a failed analysis attempt and its next retry time.
+func (s *Store) SetAIFailure(ctx context.Context, id int64, attempts int, errMsg string, nextAt time.Time) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE messages SET ai_attempts = ?, ai_next_attempt_at = ?, ai_last_error = ? WHERE id = ?`,
+		attempts, nextAt.Unix(), errMsg, id)
+	return err
+}
+
+// EmbeddingAttempts returns how often the embedding of a message failed.
+func (s *Store) EmbeddingAttempts(ctx context.Context, id int64) (int, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT ai_embed_attempts FROM messages WHERE id = ?`, id).Scan(&n)
+	return n, err
+}
+
+// SetEmbeddingFailure stores a failed embedding attempt and its next retry time.
+func (s *Store) SetEmbeddingFailure(ctx context.Context, id int64, attempts int, errMsg string, nextAt time.Time) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE messages SET ai_embed_attempts = ?, ai_embed_next_attempt_at = ?, ai_embed_last_error = ? WHERE id = ?`,
+		attempts, nextAt.Unix(), errMsg, id)
+	return err
 }
 
 func nonNil(s []string) []string {
@@ -647,8 +704,11 @@ func decodeVec(b []byte) []float32 {
 }
 
 func (s *Store) SaveEmbedding(ctx context.Context, messageID, accountID int64, v []float32) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO embeddings(message_id, account_id, vector) VALUES (?,?,?)
-		ON CONFLICT(message_id) DO UPDATE SET vector = excluded.vector`, messageID, accountID, encodeVec(normalizeVec(v)))
+	if _, err := s.DB.ExecContext(ctx, `INSERT INTO embeddings(message_id, account_id, vector) VALUES (?,?,?)
+		ON CONFLICT(message_id) DO UPDATE SET vector = excluded.vector`, messageID, accountID, encodeVec(normalizeVec(v))); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE messages SET ai_embed_attempts = 0, ai_embed_next_attempt_at = NULL, ai_embed_last_error = '' WHERE id = ?`, messageID)
 	return err
 }
 
@@ -707,7 +767,9 @@ func (s *Store) SimilarMessages(ctx context.Context, accountID int64, query []fl
 
 func (s *Store) MessagesWithoutEmbedding(ctx context.Context, limit int) ([]int64, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT m.id FROM messages m LEFT JOIN embeddings e ON e.message_id = m.id
-		WHERE e.message_id IS NULL AND m.draft = 0 ORDER BY m.id DESC LIMIT ?`, limit)
+		WHERE e.message_id IS NULL AND m.draft = 0
+		AND (m.ai_embed_next_attempt_at IS NULL OR m.ai_embed_next_attempt_at <= ?)
+		ORDER BY m.id DESC LIMIT ?`, time.Now().Unix(), limit)
 	if err != nil {
 		return nil, err
 	}

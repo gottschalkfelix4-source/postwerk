@@ -577,6 +577,16 @@ var migrations = []string{
 		created_at INTEGER NOT NULL,
 		UNIQUE(account_id, sender)
 	);`,
+	// Persistent AI retry state: a failed analysis or embedding backs off per
+	// message instead of dropping the message after three in-memory attempts.
+	`ALTER TABLE messages ADD COLUMN ai_attempts INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE messages ADD COLUMN ai_next_attempt_at INTEGER;
+	ALTER TABLE messages ADD COLUMN ai_last_error TEXT NOT NULL DEFAULT '';
+	ALTER TABLE messages ADD COLUMN ai_embed_attempts INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE messages ADD COLUMN ai_embed_next_attempt_at INTEGER;
+	ALTER TABLE messages ADD COLUMN ai_embed_last_error TEXT NOT NULL DEFAULT '';
+	CREATE INDEX messages_ai_pending ON messages(ai_done, ai_next_attempt_at);
+	CREATE INDEX messages_ai_embed_pending ON messages(ai_embed_next_attempt_at);`,
 }
 
 // SchemaVersion is the database schema version this build creates and

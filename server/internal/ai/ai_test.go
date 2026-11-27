@@ -166,7 +166,9 @@ func TestAutoFileExistingFolders(t *testing.T) {
 			Messages []struct{ Content string } `json:"messages"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-		prompt = req.Messages[0].Content
+		if len(req.Messages) > 0 {
+			prompt = req.Messages[0].Content
+		}
 		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant",
 			"content": `{"category":null,"priority":"normal","spam_probability":0,"phishing":false,"reasons":[],"summary":"x","tags":[],"folder":"nebenkosten","events":[],"tasks":[]}`}}}})
 	}))

@@ -92,6 +92,10 @@ func RetryAt(err error) time.Time {
 	if errors.As(err, &le) {
 		return le.RetryAt
 	}
+	var ae *apiError
+	if errors.As(err, &ae) && ae.RetryAfter > 0 {
+		return time.Now().Add(ae.RetryAfter)
+	}
 	return time.Time{}
 }
 

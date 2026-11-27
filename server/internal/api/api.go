@@ -639,6 +639,8 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/admin/settings", s.admin(s.getSettings))
 	m.HandleFunc("PUT /api/admin/settings", s.admin(s.putSettings))
 	m.HandleFunc("POST /api/admin/settings/ai/test", s.admin(s.testAI))
+	m.HandleFunc("GET /api/admin/ai/status", s.admin(s.aiWorkerStatus))
+	m.HandleFunc("POST /api/admin/ai/retry", s.admin(s.aiRetry))
 	m.HandleFunc("GET /api/admin/ai/chatgpt", s.admin(s.chatgptStatus))
 	m.HandleFunc("POST /api/admin/ai/chatgpt/login", s.admin(s.chatgptLogin))
 	m.HandleFunc("GET /api/admin/ai/chatgpt/login/{id}", s.admin(s.chatgptLoginStatus))

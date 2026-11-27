@@ -231,3 +231,42 @@ func (s *Server) dmsForward(w http.ResponseWriter, r *http.Request, u *store.Acc
 	s.Log.Info("attachment forwarded to paperless", "component", "dms", "user", u.Email, "file", a.Filename)
 	return ok(), nil
 }
+
+// aiWorkerStatus shows the state of the background analysis: pause, queue,
+// failed messages and why analyzed messages stayed in the inbox.
+func (s *Server) aiWorkerStatus(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	cfg := s.Settings.Get().AI
+	queue, err := s.Store.AIQueueStats(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	failures, err := s.Store.AIFailures(r.Context(), 20)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"enabled":  cfg.Enabled,
+		"autoFile": cfg.AutoFile.Enabled,
+		"mode":     cfg.AutoFile.Mode,
+		"queue":    queue,
+		"failures": failures,
+	}
+	if s.AIWorker != nil {
+		out["worker"] = s.AIWorker.Status()
+	}
+	return out, nil
+}
+
+// aiRetry makes all failed messages due again and ends a pause.
+func (s *Server) aiRetry(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	n, err := s.Store.ResetAIRetries(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	if s.AIWorker != nil {
+		s.AIWorker.Resume()
+		s.AIWorker.Notify()
+	}
+	s.Log.Info("ai analysis retry requested", "component", "ai", "by", u.Email, "messages", n)
+	return map[string]any{"reset": n}, nil
+}

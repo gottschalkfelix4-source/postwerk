@@ -351,6 +351,103 @@ type Worker struct {
 
 	pauseMu     sync.Mutex
 	pausedUntil time.Time // set while a usage limit is exhausted
+	pauseReason string
+
+	statsMu sync.Mutex
+	stats   workerStats
+}
+
+// Reasons why an analyzed message stayed where it was (WorkerStatus.Kept).
+const (
+	KeepAutoFileOff = "autoFileOff" // auto-filing is switched off
+	KeepSuspicious  = "suspicious"  // suspected prompt injection
+	KeepImportant   = "important"   // high priority with "keep important"
+	KeepNoTarget    = "noTarget"    // no category folder or no folder chosen
+	KeepNotInInbox  = "notInInbox"  // the message had left the inbox meanwhile
+	KeepNoFolder    = "folderMissing"
+	KeepMoveFailed  = "moveFailed"
+)
+
+type workerStats struct {
+	since          time.Time
+	analyzed       int64
+	filed          int64
+	junk           int64
+	failed         int64
+	kept           map[string]int64
+	lastAnalyzedAt time.Time
+	lastError      string
+	lastErrorAt    time.Time
+}
+
+// WorkerStatus reports what the background analysis did since the start.
+type WorkerStatus struct {
+	Since          time.Time        `json:"since"`
+	PausedUntil    *time.Time       `json:"pausedUntil"`
+	PauseReason    string           `json:"pauseReason"`
+	Analyzed       int64            `json:"analyzed"`
+	Filed          int64            `json:"filed"`
+	Junk           int64            `json:"junk"`
+	Failed         int64            `json:"failed"`
+	Kept           map[string]int64 `json:"kept"`
+	LastAnalyzedAt *time.Time       `json:"lastAnalyzedAt"`
+	LastError      string           `json:"lastError"`
+	LastErrorAt    *time.Time       `json:"lastErrorAt"`
+}
+
+// Status returns the counters since the start and the current pause.
+func (w *Worker) Status() WorkerStatus {
+	w.statsMu.Lock()
+	s := w.stats
+	kept := make(map[string]int64, len(s.kept))
+	for k, v := range s.kept {
+		kept[k] = v
+	}
+	w.statsMu.Unlock()
+	out := WorkerStatus{Since: s.since, Analyzed: s.analyzed, Filed: s.filed, Junk: s.junk, Failed: s.failed,
+		Kept: kept, LastError: s.lastError}
+	if !s.lastAnalyzedAt.IsZero() {
+		t := s.lastAnalyzedAt
+		out.LastAnalyzedAt = &t
+	}
+	if !s.lastErrorAt.IsZero() {
+		t := s.lastErrorAt
+		out.LastErrorAt = &t
+	}
+	w.pauseMu.Lock()
+	if time.Now().Before(w.pausedUntil) {
+		t := w.pausedUntil
+		out.PausedUntil = &t
+		out.PauseReason = w.pauseReason
+	}
+	w.pauseMu.Unlock()
+	return out
+}
+
+func (w *Worker) noteError(err error) {
+	w.statsMu.Lock()
+	w.stats.failed++
+	w.stats.lastError = truncate(err.Error(), 500)
+	w.stats.lastErrorAt = time.Now()
+	w.statsMu.Unlock()
+}
+
+func (w *Worker) noteAnalyzed(junk bool, filed, kept string) {
+	w.statsMu.Lock()
+	defer w.statsMu.Unlock()
+	w.stats.analyzed++
+	w.stats.lastAnalyzedAt = time.Now()
+	switch {
+	case junk:
+		w.stats.junk++
+	case filed != "":
+		w.stats.filed++
+	case kept != "":
+		if w.stats.kept == nil {
+			w.stats.kept = map[string]int64{}
+		}
+		w.stats.kept[kept]++
+	}
 }
 
 // Pause and backoff of the analysis loop. Errors that do not concern the
@@ -368,6 +465,7 @@ const (
 func (w *Worker) Resume() {
 	w.pauseMu.Lock()
 	w.pausedUntil = time.Time{}
+	w.pauseReason = ""
 	w.pauseMu.Unlock()
 }
 
@@ -410,13 +508,16 @@ func (w *Worker) backoff(err error) bool {
 	}
 	w.pauseMu.Lock()
 	w.pausedUntil = until
+	w.pauseReason = truncate(err.Error(), 500)
 	w.pauseMu.Unlock()
+	w.noteError(err)
 	w.Log.Warn("analysis paused", "until", until.Format(time.RFC3339), "err", err)
 	return true
 }
 
 func NewWorker(c *Client, st *store.Store, log *slog.Logger) *Worker {
-	return &Worker{Client: c, Store: st, Log: log.With("component", "ai"), wake: make(chan struct{}, 1)}
+	return &Worker{Client: c, Store: st, Log: log.With("component", "ai"), wake: make(chan struct{}, 1),
+		stats: workerStats{since: time.Now(), kept: map[string]int64{}}}
 }
 
 // Notify schedules processing of newly stored messages.
@@ -467,6 +568,7 @@ func (w *Worker) recordFailure(ctx context.Context, id int64, cause error) bool 
 		return false
 	}
 	attempts++
+	w.noteError(cause)
 	next := time.Now().Add(messageRetryDelay(attempts))
 	if err := w.Store.SetAIFailure(ctx, id, attempts, truncate(cause.Error(), 500), next); err != nil {
 		w.Log.Error("storing analysis failure failed", "message", id, "err", err)
@@ -635,12 +737,17 @@ func (w *Worker) Apply(ctx context.Context, m *store.Message, a *Analysis, start
 			}
 		}
 	}
-	filed := ""
-	if !moveToJunk && !a.Suspicious {
-		filed = w.autoFile(ctx, cfg.AI.AutoFile, m, a)
+	filed, kept := "", ""
+	switch {
+	case moveToJunk:
+	case a.Suspicious:
+		kept = KeepSuspicious
+	default:
+		filed, kept = w.autoFile(ctx, cfg.AI.AutoFile, m, a)
 	}
+	w.noteAnalyzed(moveToJunk, filed, kept)
 	w.Log.Info("message analyzed", "message", m.ID, "category", a.Category, "priority", a.Priority,
-		"spam", fmt.Sprintf("%.2f", a.SpamProbability), "folder", filed, "ms", time.Since(start).Milliseconds())
+		"spam", fmt.Sprintf("%.2f", a.SpamProbability), "folder", filed, "kept", kept, "ms", time.Since(start).Milliseconds())
 	if w.Hooks.OnAnalyzed != nil {
 		w.Hooks.OnAnalyzed(ctx, m, a)
 	}
@@ -721,13 +828,16 @@ func (w *Worker) FolderChoices(ctx context.Context, m *store.Message) []string {
 }
 
 // autoFile moves a message from the inbox into the folder chosen by the
-// analysis and returns the folder name ("" when it stays).
-func (w *Worker) autoFile(ctx context.Context, cfg store.AIAutoFile, m *store.Message, a *Analysis) string {
-	if !cfg.Enabled || a.Suspicious {
-		return ""
+// analysis and returns the folder name, or "" and the reason it stays.
+func (w *Worker) autoFile(ctx context.Context, cfg store.AIAutoFile, m *store.Message, a *Analysis) (string, string) {
+	if !cfg.Enabled {
+		return "", KeepAutoFileOff
+	}
+	if a.Suspicious {
+		return "", KeepSuspicious
 	}
 	if cfg.KeepImportant && a.Priority == "high" {
-		return ""
+		return "", KeepImportant
 	}
 	target := ""
 	switch cfg.Mode {
@@ -740,21 +850,21 @@ func (w *Worker) autoFile(ctx context.Context, cfg store.AIAutoFile, m *store.Me
 	}
 	target = strings.Trim(target, "/ ")
 	if target == "" {
-		return ""
+		return "", KeepNoTarget
 	}
 	inbox, err := w.Store.MailboxByRole(ctx, m.AccountID, "inbox")
 	if err != nil {
-		return ""
+		return "", KeepMoveFailed
 	}
 	// Only file messages that are still in the inbox (the user may have
 	// moved it meanwhile).
 	cur, err := w.Store.GetMessageAny(ctx, m.ID)
 	if err != nil || cur.MailboxID != inbox {
-		return ""
+		return "", KeepNotInInbox
 	}
 	boxes, err := w.Store.ListMailboxes(ctx, m.AccountID)
 	if err != nil {
-		return ""
+		return "", KeepMoveFailed
 	}
 	var dest int64
 	for _, b := range boxes {
@@ -766,23 +876,23 @@ func (w *Worker) autoFile(ctx context.Context, cfg store.AIAutoFile, m *store.Me
 	}
 	if dest == 0 {
 		if cfg.Mode == "folders" {
-			return "" // never invent folders in this mode
+			return "", KeepNoFolder // never invent folders in this mode
 		}
 		mb, err := w.Store.CreateMailbox(ctx, m.AccountID, target)
 		if err != nil {
 			w.Log.Warn("auto-file: create folder failed", "folder", target, "err", err)
-			return ""
+			return "", KeepMoveFailed
 		}
 		dest = mb.ID
 	}
 	if dest == inbox {
-		return ""
+		return "", KeepNoTarget
 	}
 	if err := w.Store.UpdateMessage(ctx, m.AccountID, m.ID, store.MessagePatch{MailboxID: &dest}); err != nil {
 		w.Log.Warn("auto-file: move failed", "message", m.ID, "folder", target, "err", err)
-		return ""
+		return "", KeepMoveFailed
 	}
-	return target
+	return target, ""
 }
 
 // matchFolder maps the model's answer onto one of the offered folders.

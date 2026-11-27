@@ -24,6 +24,7 @@ import {
 import { MailAuthCard } from "./MailAuthCard";
 import { MtaStsCard } from "./MtaStsCard";
 import { CleanupCard } from "./CleanupCard";
+import { AiStatusCard } from "@/pages/admin/ai/AiStatusCard";
 import { LimitsSection } from "./LimitsSection";
 import { NotificationsSection } from "./NotificationsSection";
 
@@ -142,7 +143,10 @@ export default function SettingsPage() {
           ) : id === "antivirus" ? (
             <AntivirusSection key={id} {...props} />
           ) : id === "ai" ? (
-            <AiSection key={id} {...props} />
+            <>
+              <AiStatusCard />
+              <AiSection key={id} {...props} />
+            </>
           ) : id === "dms" ? (
             <DmsSection key={id} {...props} />
           ) : id === "ldap" ? (

@@ -810,3 +810,42 @@ export interface SieveAction {
 }
 export interface SieveTestRequest { content?: string; messageId?: number; raw?: string; }
 export interface SieveTestResult { actions: SieveAction[]; implicitKeep: boolean; script: string; error?: string; }
+
+/** Background AI analysis: queue, pause and why analyzed mail stayed in the inbox. */
+export interface AiWorkerStatus {
+  enabled: boolean;
+  autoFile: boolean;
+  mode: "categories" | "folders" | string;
+  queue: {
+    due: number;
+    waiting: number;
+    analyzed: number;
+    analyzed24h: number;
+    received24h: number;
+  };
+  failures: AiFailure[];
+  worker?: {
+    since: string;
+    pausedUntil: string | null;
+    pauseReason: string;
+    analyzed: number;
+    filed: number;
+    junk: number;
+    failed: number;
+    kept: Record<string, number>;
+    lastAnalyzedAt: string | null;
+    lastError: string;
+    lastErrorAt: string | null;
+  };
+}
+
+export interface AiFailure {
+  id: number;
+  account: string;
+  subject: string;
+  from: string;
+  receivedAt: string;
+  attempts: number;
+  lastError: string;
+  nextAttemptAt: string | null;
+}

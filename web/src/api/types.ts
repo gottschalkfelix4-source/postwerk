@@ -849,3 +849,11 @@ export interface AiFailure {
   lastError: string;
   nextAttemptAt: string | null;
 }
+
+/** Outcome of sorting one message with the AI on request. */
+export interface AiSortResult {
+  folder?: string;
+  junk?: boolean;
+  /** Reason code when the message stayed (see lib/aiKeep). */
+  kept?: string;
+}

@@ -4,6 +4,7 @@ import type {
   AiStatus,
   AiTestResult,
   AiWorkerStatus,
+  AiSortResult,
   ChatGptLogin,
   ChatGptStatus,
   Alias,
@@ -309,6 +310,7 @@ export const aiApi = {
     http.get<{ items: ScoredMessage[] }>("/api/ai/search", { query: { q, limit }, signal }),
   extract: (messageId: number) => http.post<ExtractResult>("/api/ai/extract", { messageId }),
   reclassify: (messageId: number) => http.post<MessageSummary>("/api/ai/reclassify", { messageId }),
+  sort: (messageId: number) => http.post<AiSortResult>("/api/ai/sort", { messageId }),
 };
 
 export const calendarApi = {

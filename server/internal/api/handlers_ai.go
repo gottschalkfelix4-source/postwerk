@@ -200,6 +200,30 @@ func (s *Server) aiReclassify(w http.ResponseWriter, r *http.Request, u *store.A
 	return s.Store.GetMessage(r.Context(), u.ID, m.ID)
 }
 
+// aiSort analyzes one of the user's inbox messages on request and files it
+// into the folder the AI picks, even when automatic filing is switched off.
+func (s *Server) aiSort(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {
+	if err := s.requireFeature(true); err != nil {
+		return nil, err
+	}
+	var req struct {
+		MessageID int64 `json:"messageId"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	m, err := s.Store.GetMessage(r.Context(), u.ID, req.MessageID)
+	if err != nil {
+		return nil, err
+	}
+	p, _ := s.parsed(m)
+	res, err := s.AIWorker.Sort(r.Context(), m, p)
+	if err := aiErr("sort", err); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
 // ---- DMS ----
 
 func (s *Server) dmsForward(w http.ResponseWriter, r *http.Request, u *store.Account) (any, error) {

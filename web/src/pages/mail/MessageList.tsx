@@ -63,6 +63,9 @@ export interface MessageListProps {
   aiSummaries: boolean;
   categories: string[];
   semantic: boolean;
+  /** Sorts the given messages with the AI; undefined hides the button. */
+  onAiSort?: (ids: number[]) => void;
+  aiSorting?: boolean;
 }
 
 export const MessageList = forwardRef<HTMLInputElement, MessageListProps>(function MessageList(props, searchRef) {
@@ -91,6 +94,8 @@ export const MessageList = forwardRef<HTMLInputElement, MessageListProps>(functi
     aiSummaries,
     categories,
     semantic,
+    onAiSort,
+    aiSorting,
   } = props;
 
   const [search, setSearch] = useState(params.q);
@@ -271,6 +276,17 @@ export const MessageList = forwardRef<HTMLInputElement, MessageListProps>(functi
                 <Button size="icon-sm" variant="ghost" icon={Archive} title="Archivieren" aria-label="Archivieren" onClick={() => onAction(selectedIds, "move", archive.id)} />
               )}
               <MoveMenu mailboxes={mailboxes} currentId={currentBox?.id} onMove={(id) => onAction(selectedIds, "move", id)} />
+              {onAiSort && currentBox?.role === "inbox" && (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  icon={Sparkles}
+                  loading={aiSorting}
+                  title="Mit KI einsortieren"
+                  aria-label="Mit KI einsortieren"
+                  onClick={() => onAiSort(selectedIds)}
+                />
+              )}
               {inJunk ? (
                 <Button size="icon-sm" variant="ghost" icon={ShieldCheck} title="Kein Spam" aria-label="Kein Spam" onClick={() => onAction(selectedIds, "notspam")} />
               ) : (

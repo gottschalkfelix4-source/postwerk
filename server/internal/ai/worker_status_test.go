@@ -69,3 +69,43 @@ func TestWorkerStatusCountsWhyMessagesStay(t *testing.T) {
 	}
 }
 
+
+func TestSortFilesOnRequestEvenWhenAutoFileIsOff(t *testing.T) {
+	// High priority and auto-filing off: the automatic run would keep the
+	// message, an explicit sort files it anyway.
+	srv := fakeEndpoint(t, `{"category":"Rechnung","priority":"high","spam_probability":0,"phishing":false,"reasons":[],"summary":"x","tags":[],"events":[],"tasks":[]}`)
+	t.Cleanup(srv.Close)
+	st, w, m := setup(t, srv.URL)
+	ctx := context.Background()
+	cfg := w.Client.Settings.Get()
+	cfg.AI.Categories = []string{"Rechnung"}
+	cfg.AI.AutoFile.Enabled = false
+	cfg.AI.AutoFile.KeepImportant = true
+	cfg.AI.AutoFile.Mode = "categories"
+	cfg.AI.AutoFile.CategoryFolders = map[string]string{"Rechnung": "Rechnungen"}
+	if err := w.Client.Settings.Save(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := w.Sort(ctx, m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Folder != "Rechnungen" || res.Kept != "" {
+		t.Fatalf("result = %+v, want filed into Rechnungen", res)
+	}
+	got, err := st.GetMessageAny(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, _ := st.MailboxByRole(ctx, m.AccountID, "inbox")
+	if got.MailboxID == inbox {
+		t.Fatal("message is still in the inbox")
+	}
+
+	// Outside the inbox the message stays and the model is not asked.
+	res, err = w.Sort(ctx, got, nil)
+	if err != nil || res.Kept != KeepNotInInbox {
+		t.Fatalf("second sort = %+v, %v; want kept notInInbox", res, err)
+	}
+}

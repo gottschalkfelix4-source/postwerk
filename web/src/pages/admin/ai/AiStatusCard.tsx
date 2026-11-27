@@ -3,33 +3,11 @@ import { Activity, CirclePause, RefreshCw, RotateCcw, TriangleAlert } from "luci
 import { adminApi } from "@/api/endpoints";
 import { errorMessage } from "@/api/client";
 import type { AiWorkerStatus } from "@/api/types";
+import { keptLabel } from "@/lib/aiKeep";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { Badge, Button, Card, CardBody, CardHeader, Notice, Spinner, useToast } from "@/components/ui";
 
 const STATUS_KEY = ["admin", "ai", "status"] as const;
-
-function keptLabel(reason: string, mode: string): string {
-  switch (reason) {
-    case "autoFileOff":
-      return "Einsortieren ist ausgeschaltet";
-    case "suspicious":
-      return "Verdacht auf Manipulation der KI (wird nie verschoben)";
-    case "important":
-      return "Als wichtig erkannt („Wichtige Nachrichten im Posteingang lassen“)";
-    case "noTarget":
-      return mode === "folders"
-        ? "KI hat keinen passenden eigenen Ordner gewählt"
-        : "Keine Kategorie oder Kategorie ohne Zielordner";
-    case "notInInbox":
-      return "Lag nicht mehr im Posteingang (z. B. Archiv oder bereits verschoben)";
-    case "folderMissing":
-      return "Von der KI gewählter Ordner existiert nicht";
-    case "moveFailed":
-      return "Verschieben fehlgeschlagen (siehe Protokoll)";
-    default:
-      return reason;
-  }
-}
 
 function Stat({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (

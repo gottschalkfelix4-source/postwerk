@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { aiApi, mailApi } from "@/api/endpoints";
-import type { BulkAction, BulkRequest, MessageDetail, MessageSummary, Paged } from "@/api/types";
+import type { AiSortResult, BulkAction, BulkRequest, MessageDetail, MessageSummary, Paged } from "@/api/types";
+import { keptLabel } from "@/lib/aiKeep";
 import { useMe } from "@/lib/auth";
 import { qk, useAiStatus, useMailboxes } from "@/lib/queries";
 import { cn, isTypingTarget } from "@/lib/utils";
@@ -189,6 +190,59 @@ export default function MailPage() {
     [bulk, items, p.msg, update],
   );
 
+  // --- sort with AI on request ---------------------------------------------
+
+  const [aiSorting, setAiSorting] = useState(false);
+  const aiSort = useCallback(
+    async (ids: number[]) => {
+      if (ids.length === 0 || aiSorting) return;
+      setAiSorting(true);
+      const results: AiSortResult[] = [];
+      let failure: unknown = null;
+      // One request per message: keeps each request short with slow models
+      // and stops early when the AI is unavailable.
+      for (const id of ids) {
+        try {
+          results.push(await aiApi.sort(id));
+        } catch (err) {
+          failure = err;
+          break;
+        }
+      }
+      setAiSorting(false);
+      const moved = ids.filter((_, i) => results[i]?.folder || results[i]?.junk);
+      if (moved.length > 0) {
+        setSelected((s) => new Set([...s].filter((id) => !moved.includes(id))));
+        if (p.msg !== null && moved.includes(p.msg)) update({ msg: null }, true);
+        moved.forEach((id) => qc.removeQueries({ queryKey: qk.message(id) }));
+      }
+      refreshAll();
+
+      const folders = new Map<string, number>();
+      const kept = new Map<string, number>();
+      let junk = 0;
+      for (const r of results) {
+        if (r.folder) folders.set(r.folder, (folders.get(r.folder) ?? 0) + 1);
+        else if (r.junk) junk++;
+        else if (r.kept) kept.set(r.kept, (kept.get(r.kept) ?? 0) + 1);
+      }
+      const parts: string[] = [];
+      if (folders.size) parts.push([...folders].map(([f, n]) => `${f}: ${n}`).join(", "));
+      if (junk) parts.push(`Spam: ${junk}`);
+      const keptN = [...kept.values()].reduce((a, b) => a + b, 0);
+      if (keptN) parts.push(`${keptN} im Posteingang geblieben – ${[...kept].map(([k, n]) => `${keptLabel(k)} (${n})`).join(", ")}`);
+      const summary = parts.join(" · ") || undefined;
+      if (failure) {
+        toast.error(failure, `KI-Einsortieren nach ${results.length} von ${ids.length} Nachrichten abgebrochen${summary ? ` (${summary})` : ""}`);
+      } else if (moved.length > 0) {
+        toast.success(`${moved.length} von ${ids.length} ${ids.length === 1 ? "Nachricht" : "Nachrichten"} einsortiert`, summary);
+      } else {
+        toast.info(ids.length === 1 ? "Nachricht bleibt im Posteingang" : "Keine Nachricht verschoben", summary);
+      }
+    },
+    [aiSorting, p.msg, qc, refreshAll, toast, update],
+  );
+
   const toggleFlag = useCallback(
     (m: MessageSummary) => {
       patchCached([m.id], { flagged: !m.flagged });
@@ -333,6 +387,8 @@ export default function MailPage() {
           aiSummaries={ai.enabled && ai.features.summarize}
           categories={aiCategories}
           semantic={semantic}
+          onAiSort={ai.enabled ? aiSort : undefined}
+          aiSorting={aiSorting}
         />
       </section>
       <section className={cn("min-w-0 flex-1 bg-zinc-50 dark:bg-zinc-950", p.msg === null ? "hidden md:flex" : "flex")}>

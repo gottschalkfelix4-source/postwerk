@@ -687,6 +687,38 @@ func (w *Worker) analyze(ctx context.Context, id int64) error {
 
 // Apply stores analysis results and moves obvious spam/phishing to junk.
 func (w *Worker) Apply(ctx context.Context, m *store.Message, a *Analysis, start time.Time) error {
+	_, err := w.apply(ctx, m, a, start, false)
+	return err
+}
+
+// SortResult tells what a manual sort did with a message.
+type SortResult struct {
+	Folder string `json:"folder,omitempty"` // folder the message was moved to
+	Junk   bool   `json:"junk,omitempty"`   // moved to junk as spam/phishing
+	Kept   string `json:"kept,omitempty"`   // reason it stayed (Keep* constants)
+}
+
+// Sort analyzes a message on the user's request and files it like the
+// automatic filing would, even when automatic filing is switched off and
+// without keeping important messages back. Messages outside the inbox are
+// left alone without asking the model.
+func (w *Worker) Sort(ctx context.Context, m *store.Message, p *message.Parsed) (SortResult, error) {
+	inbox, err := w.Store.MailboxByRole(ctx, m.AccountID, "inbox")
+	if err != nil {
+		return SortResult{}, err
+	}
+	if m.MailboxID != inbox {
+		return SortResult{Kept: KeepNotInInbox}, nil
+	}
+	start := time.Now()
+	a, err := w.Client.Analyze(ctx, m, p, w.folderChoices(ctx, m, true))
+	if err != nil {
+		return SortResult{}, err
+	}
+	return w.apply(ctx, m, a, start, true)
+}
+
+func (w *Worker) apply(ctx context.Context, m *store.Message, a *Analysis, start time.Time, manual bool) (SortResult, error) {
 	cfg := w.Client.Settings.Get()
 	if a.Suspicious {
 		restrictSuspicious(a)
@@ -724,7 +756,7 @@ func (w *Worker) Apply(ctx context.Context, m *store.Message, a *Analysis, start
 		moveToJunk = score >= cfg.Spam.JunkThreshold
 	}
 	if err := w.Store.SetAIResult(ctx, m.ID, res); err != nil {
-		return err
+		return SortResult{}, err
 	}
 	if a.Suspicious {
 		w.Log.Warn("possible prompt injection", "message", m.ID, "signals", strings.Join(a.Signals, "; "))
@@ -743,7 +775,12 @@ func (w *Worker) Apply(ctx context.Context, m *store.Message, a *Analysis, start
 	case a.Suspicious:
 		kept = KeepSuspicious
 	default:
-		filed, kept = w.autoFile(ctx, cfg.AI.AutoFile, m, a)
+		fileCfg := cfg.AI.AutoFile
+		if manual {
+			// An explicit request overrides the switches, not the target rules.
+			fileCfg.Enabled, fileCfg.KeepImportant = true, false
+		}
+		filed, kept = w.autoFile(ctx, fileCfg, m, a)
 	}
 	w.noteAnalyzed(moveToJunk, filed, kept)
 	w.Log.Info("message analyzed", "message", m.ID, "category", a.Category, "priority", a.Priority,
@@ -751,7 +788,7 @@ func (w *Worker) Apply(ctx context.Context, m *store.Message, a *Analysis, start
 	if w.Hooks.OnAnalyzed != nil {
 		w.Hooks.OnAnalyzed(ctx, m, a)
 	}
-	return nil
+	return SortResult{Folder: filed, Junk: moveToJunk, Kept: kept}, nil
 }
 
 func (w *Worker) embed(ctx context.Context, id int64) error {
@@ -810,8 +847,13 @@ func jsonList(l []string) string {
 // FolderChoices returns the account's own folders when auto-filing lets the
 // AI pick among them, otherwise nil.
 func (w *Worker) FolderChoices(ctx context.Context, m *store.Message) []string {
+	return w.folderChoices(ctx, m, false)
+}
+
+// folderChoices ignores the auto-filing switch when manual is set.
+func (w *Worker) folderChoices(ctx context.Context, m *store.Message, manual bool) []string {
 	cfg := w.Client.Settings.Get().AI.AutoFile
-	if !cfg.Enabled || cfg.Mode != "folders" {
+	if (!cfg.Enabled && !manual) || cfg.Mode != "folders" {
 		return nil
 	}
 	boxes, err := w.Store.ListMailboxes(ctx, m.AccountID)

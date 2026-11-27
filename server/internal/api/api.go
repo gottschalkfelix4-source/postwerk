@@ -673,6 +673,7 @@ func (s *Server) routes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/ai/search", s.user(s.aiSearch))
 	m.HandleFunc("POST /api/ai/extract", s.user(s.aiExtract))
 	m.HandleFunc("POST /api/ai/reclassify", s.user(s.aiReclassify))
+	m.HandleFunc("POST /api/ai/sort", s.user(s.aiSort))
 
 	// calendar, tasks, dms
 	m.HandleFunc("GET /api/calendar/events", s.user(s.listEvents))

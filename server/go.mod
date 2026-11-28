@@ -12,7 +12,7 @@ require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
 	github.com/emersion/go-msgauth v0.7.0
-	github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff
+	github.com/emersion/go-vcard v0.1.0
 	github.com/emersion/go-webdav v0.8.0
 	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/go-ldap/ldap/v3 v3.4.15
@@ -22,9 +22,9 @@ require (
 	github.com/teambition/rrule-go v1.8.2
 	golang.org/x/crypto v0.59.0
 	golang.org/x/net v0.63.0
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (
